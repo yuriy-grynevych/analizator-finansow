@@ -10,20 +10,68 @@ from sqlalchemy import text
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- POPRAWIONY KOD DO UKRYCIA STOPKI ---
-# Usunęliśmy '#MainMenu {visibility: hidden;}' aby menu wróciło
+# --- KOD DO UKRYCIA STOPKI I MENU ---
 hide_streamlit_style = """
             <style>
             footer {visibility: hidden;}
             </style>
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True) 
-# -----------------------------------------
 
 # --- PARAMETRY TABELI ---
 NAZWA_TABELI = "transactions"
 NAZWA_SCHEMATU = "public"
 NAZWA_POLACZENIA_DB = "db" 
+
+# --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
+# Na podstawie Twojego logu
+ETYKIETY_PRZYCHODOW = [
+    'Faktura VAT sprzedaży',
+    'Korekta faktury VAT zakupu', # Korekta kosztu to przychód
+    'Przychód wewnętrzny'
+]
+
+ETYKIETY_KOSZTOW_INNYCH = [
+    'Faktura VAT zakupu',
+    'Korekta faktury VAT sprzedaży', # Korekta przychodu to koszt
+    'Art. biurowe',
+    'Art. chemiczne',
+    'Art. spożywcze',
+    'Badanie lekarskie',
+    'Delegacja',
+    'Giełda',
+    'Księgowość',
+    'Leasing',
+    'Mandaty',
+    'Obsługa prawna',
+    'Ogłoszenie',
+    'Poczta Polska',
+    'Program',
+    'Prowizje',
+    'Rozliczanie kierowców',
+    'Rozliczenie VAT EUR',
+    'Serwis',
+    'Szkolenia BHP',
+    'Tachograf',
+    'USŁ. HOTELOWA',
+    'Usługi telekomunikacyjne',
+    'Wykup auta',
+    'Wysyłka kurierska',
+    'Zak. do auta',
+    'Zakup auta'
+]
+
+# Te koszty będziemy ignorować, bo bierzemy je z bazy Eurowag/E100
+ETYKIETY_IGNOROWANE = [
+    'Opłata drogowa',
+    'Opłata drogowa DK',
+    'Tankowanie',
+    'Suma końcowa',
+    'Nr pojazdu',
+    'Zamówienie od klienta', # To nie jest jeszcze przychód
+    'Wydanie zewnętrzne' # To nie jest jeszcze koszt
+]
+
 
 # --- FUNKCJE NBP (BEZ ZMIAN) ---
 @st.cache_data
@@ -155,12 +203,77 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- FUNKCJA main() (BEZ ZMIAN) ---
+# --- NOWA FUNKCJA DO PARSOWANIA PLIKU 'analiza.xlsx' ---
+@st.cache_data # Cache'ujemy, żeby nie czytać pliku przy każdej zmianie
+def przetworz_plik_analizy(przeslany_plik):
+    st.write("Przetwarzanie pliku `analiza.xlsx`...")
+    try:
+        df = pd.read_excel(przeslany_plik, 
+                           sheet_name='pojazdy', 
+                           engine='openpyxl', 
+                           header=7) # Pomijamy 7 wierszy
+    except Exception as e:
+        st.error(f"Nie udało się wczytać arkusza 'pojazdy' z pliku `analiza.xlsx`. Błąd: {e}")
+        return None
+
+    # Czyszczenie - usuwamy wiersze, gdzie 'Etykiety wierszy' są puste
+    df = df.dropna(subset=['Etykiety wierszy'])
+    
+    wyniki = []
+    aktualny_pojazd = None
+    
+    for index, row in df.iterrows():
+        etykieta = row['Etykiety wierszy']
+        kwota = row['euro'] # Bierzemy tylko kwoty w euro, zgodnie z logiem
+
+        # Sprawdzamy, czy to jest wiersz z identyfikatorem pojazdu
+        # Na podstawie logu: to są wiersze, gdzie kwota jest pusta (NaN)
+        if pd.isna(kwota):
+            aktualny_pojazd = str(etykieta).strip()
+        
+        # Jeśli to wiersz z kwotą i mamy już pojazd
+        elif aktualny_pojazd is not None:
+            
+            if etykieta in ETYKIETY_PRZYCHODOW:
+                wyniki.append({
+                    'pojazd': aktualny_pojazd,
+                    'przychody': kwota,
+                    'koszty_inne': 0
+                })
+            elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
+                 wyniki.append({
+                    'pojazd': aktualny_pojazd,
+                    'przychody': 0,
+                    'koszty_inne': kwota # Zakładamy, że koszty są liczbami dodatnimi
+                })
+            # Wiersze z ETYKIETY_IGNOROWANE są pomijane
+            
+    if not wyniki:
+        st.error("Nie znaleziono żadnych danych o przychodach/kosztach w pliku `analiza.xlsx`.")
+        return None
+
+    # Sumowanie danych
+    df_wyniki = pd.DataFrame(wyniki)
+    df_agregacja = df_wyniki.groupby('pojazd').sum()
+    
+    # Czyszczenie identyfikatorów (np. 'PTU4761G+PTU9367F' -> 'PTU4761G')
+    df_agregacja['pojazd_clean'] = df_agregacja.index.str.extract(r'([A-Z0-9]{4,})')
+    
+    st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
+    return df_agregacja
+
+
+# --- FUNKCJA main() (DODANA NOWA ZAKŁADKA) ---
 def main_app():
     
-    st.title("Analizator Wydatków Floty (Eurowag + E100)")
+    st.title("Analizator Wydatków Floty") # Skrócony tytuł
     
-    tab_raport, tab_admin = st.tabs(["📊 Raport Główny", "⚙️ Panel Admina"])
+    # --- TRZY ZAKŁADKI ---
+    tab_raport, tab_rentownosc, tab_admin = st.tabs([
+        "📊 Raport Paliwowy", 
+        "💰 Rentowność (Zysk/Strata)", 
+        "⚙️ Panel Admina"
+    ])
 
     try:
         conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
@@ -168,8 +281,9 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
     with tab_raport:
-        st.header("Raport Wydatków")
+        st.header("Szczegółowy Raport Paliw i Opłat")
         
         try:
             min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
@@ -183,14 +297,14 @@ def main_app():
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    data_start = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop)
+                    data_start_rap = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop, key="rap_start")
                 with col2:
-                    data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
+                    data_stop_rap = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop, key="rap_stop")
 
-                dane_z_bazy = pobierz_dane_z_bazy(conn, data_start, data_stop)
+                dane_z_bazy = pobierz_dane_z_bazy(conn, data_start_rap, data_stop_rap)
                 
                 if dane_z_bazy.empty:
-                    st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
+                    st.warning(f"Brak danych paliwowych w wybranym zakresie dat ({data_start_rap} - {data_stop_rap}).")
                 else:
                     kurs_eur = pobierz_kurs_eur_pln()
                     if kurs_eur:
@@ -198,7 +312,6 @@ def main_app():
                         mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                         
                         dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
-                        
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
                         dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
@@ -212,7 +325,7 @@ def main_app():
                         df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
                         
                         suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
-                        st.metric(label="SUMA ŁĄCZNA", value=f"{suma_laczna:,.2f} EUR")
+                        st.metric(label="SUMA ŁĄCZNA (Paliwo/Opłaty)", value=f"{suma_laczna:,.2f} EUR")
                         st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
                         
                         st.divider() 
@@ -251,6 +364,108 @@ def main_app():
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
+    # --- NOWA ZAKŁADKA: RENTOWNOŚĆ ---
+    with tab_rentownosc:
+        st.header("Raport Rentowności (Zysk/Strata)")
+        
+        # 1. Filtry dat
+        try:
+            min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
+            min_max_date = conn.query(min_max_date_query)
+            
+            if min_max_date.empty or min_max_date.iloc[0, 0] is None:
+                st.info("Baza danych paliwowych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
+                st.stop()
+            
+            domyslny_start_rent = min_max_date.iloc[0, 0]
+            domyslny_stop_rent = min_max_date.iloc[0, 1]
+        except Exception:
+            st.info("Baza danych paliwowych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
+            st.stop()
+            
+        col1_rent, col2_rent = st.columns(2)
+        with col1_rent:
+            data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_start")
+        with col2_rent:
+            data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
+
+        # 2. Przycisk do wgrania pliku 'analiza.xlsx'
+        plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
+        
+        # 3. Przycisk do generowania
+        if st.button("Generuj raport rentowności", type="primary"):
+            if plik_analizy is None:
+                st.warning("Proszę, prześlij plik `analiza.xlsx`.")
+            else:
+                with st.spinner("Pracuję..."):
+                    # KROK A: Pobierz koszty paliwa z bazy
+                    dane_z_bazy = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent)
+                    
+                    if dane_z_bazy.empty:
+                        st.error("Brak danych paliwowych w wybranym okresie.")
+                        st.stop()
+                        
+                    kurs_eur = pobierz_kurs_eur_pln()
+                    if not kurs_eur: st.stop()
+                    
+                    unikalne_waluty = dane_z_bazy['waluta'].unique()
+                    mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
+                    
+                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
+                    dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
+                    dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
+                    dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
+                    
+                    # Sumujemy koszty paliwa per pojazd
+                    df_koszty_paliwa = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa/Opłat (z Bazy)')
+
+                    # KROK B: Przetwórz plik 'analiza.xlsx'
+                    df_analiza = przetworz_plik_analizy(plik_analizy)
+                    
+                    if df_analiza is not None:
+                        # KROK C: Połącz oba źródła danych
+                        # Łączymy po 'pojazd_clean' z 'analiza.xlsx' i indeksie z 'df_koszty_paliwa'
+                        df_rentownosc = df_analiza.merge(
+                            df_koszty_paliwa, 
+                            left_on='pojazd_clean', 
+                            right_index=True, 
+                            how='outer' # 'outer' znaczy, że bierzemy wszystkie pojazdy z obu źródeł
+                        )
+                        
+                        # Wypełnij puste wartości zerami
+                        df_rentownosc = df_rentownosc.fillna(0)
+                        
+                        # KROK D: Oblicz zysk
+                        # Pamiętaj: koszty_inne są już dodatnie w Excelu
+                        df_rentownosc['ZYSK / STRATA (EUR)'] = (
+                            df_rentownosc['przychody'] - 
+                            df_rentownosc['koszty_inne'] - 
+                            df_rentownosc['Koszty Paliwa/Opłat (z Bazy)']
+                        )
+                        
+                        # Formatowanie finalnej tabeli
+                        df_rentownosc_display = df_rentownosc[[
+                            'przychody', 
+                            'koszty_inne', 
+                            'Koszty Paliwa/Opłat (z Bazy)',
+                            'ZYSK / STRATA (EUR)'
+                        ]].rename(columns={
+                            'przychody': 'Przychód (z Subiekta)',
+                            'koszty_inne': 'Koszty Inne (z Subiekta)'
+                        }).sort_values(by='ZYSK / STRATA (EUR)', ascending=False)
+                        
+                        # Suma łączna
+                        zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
+                        st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
+                        
+                        # Wyświetl tabelę
+                        st.dataframe(
+                            df_rentownosc_display.style.format("{:,.2f} EUR"),
+                            use_container_width=True
+                        )
+
+    # --- ZAKŁADKA 3: PANEL ADMINA (BEZ ZMIAN) ---
     with tab_admin:
         st.header("Panel Administracyjny")
         
@@ -261,7 +476,7 @@ def main_app():
                 setup_database(conn)
             st.success("Tabela 'transactions' jest gotowa.")
 
-        st.subheader("Wgrywanie nowych plików")
+        st.subheader("Wgrywanie nowych plików (Paliwo/Opłaty)")
         przeslane_pliki = st.file_uploader(
             "Wybierz pliki Eurowag i E100 do dodania do bazy",
             accept_multiple_files=True,
