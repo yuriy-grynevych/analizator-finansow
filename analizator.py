@@ -172,27 +172,27 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
+# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
-    Czyści klucze i przelicza waluty. Odbywa się to poza głównym blokiem,
-    żeby uniknąć błędu .str.
+    Czyści klucze i przelicza waluty.
     """
     if dane_z_bazy.empty:
         return dane_z_bazy
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (NAPRAWA) ---
-    # Musimy operować tylko na stringach, by uniknąć błędu
-    
-    # 1. Konwertuj na string
-    identyfikatory = dane_z_bazy['identyfikator'].astype(str)
-    
-    # 2. Wyciągnij klucz (np. PO2TG45 z 'TL PO2TG45')
-    # Używamy prostszego regexu, a następnie konwersji na upper/strip, która jest teraz bezpieczna
-    dane_z_bazy['identyfikator_clean'] = identyfikatory.str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
-    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA) ---
+    # Konwersja na string, ekstrakcja klucza, a następnie czyszczenie
+    dane_z_bazy['identyfikator_clean'] = (
+        dane_z_bazy['identyfikator']
+        .astype(str)
+        .str.extract(r'([A-Z0-9]{4,})')
+        .fillna('')  # Wypełnij puste miejsca pustym ciągiem
+        .str.upper()
+        .str.strip()
+    )
+    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].replace('', 'Brak Identyfikatora')
     
     # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
     kurs_eur = pobierz_kurs_eur_pln()
@@ -211,7 +211,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
     try:
-        df = pd.read_excel(przeslany_plik, 
+        df = pd.read_excel(przeslanym_plik, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
                            header=7) 
@@ -275,7 +275,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
