@@ -182,13 +182,14 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA) ---
-    # Konwersja na string, ekstrakcja klucza, a następnie czyszczenie
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (NOWA LOGIKA) ---
+    # 1. Konwersja na string
+    identyfikatory = dane_z_bazy['identyfikator'].astype(str)
+    
+    # 2. Ekstrakcja klucza, a następnie czyszczenie
     dane_z_bazy['identyfikator_clean'] = (
-        dane_z_bazy['identyfikator']
-        .astype(str)
-        .str.extract(r'([A-Z0-9]{4,})')
-        .fillna('')  # Wypełnij puste miejsca pustym ciągiem
+        identyfikatory.str.extract(r'([A-Z0-9]{4,})')
+        .fillna('') 
         .str.upper()
         .str.strip()
     )
@@ -211,7 +212,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
     try:
-        df = pd.read_excel(przeslanym_plik, 
+        df = pd.read_excel(przeslany_plik, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
                            header=7) 
