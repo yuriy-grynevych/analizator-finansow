@@ -172,7 +172,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
+# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (POPRAWIONA) ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
     Czyści klucze i przelicza waluty.
@@ -183,16 +183,12 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
     # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA) ---
-    
-    # 1. Musimy operować tylko na stringach
     identyfikatory = dane_z_bazy['identyfikator'].astype(str)
     
-    # 2. Funkcja do czyszczenia pojedynczego klucza
     def clean_key(key):
         if key == 'nan' or not key: 
             return 'Brak Identyfikatora'
         
-        # Ekstrakcja klucza (np. PO2TG45 z 'TL PO2TG45')
         match = re.search(r'([A-Z0-9]{4,})', key)
         if match:
             return match.group(1).upper().strip()
@@ -212,7 +208,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (BEZ ZMIAN) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (OSTATECZNA POPRAWKA BŁĘDU .STR) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -258,9 +254,12 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # Używamy tej samej funkcji apply dla bezpieczeństwa
-    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].apply(lambda x: re.search(r'([A-Z0-9]{4,})', str(x).upper()).group(1).strip() if re.search(r'([A-Z0-9]{4,})', str(x).upper()) else 'Brak Identyfikatora')
-    
+    # 1. Stosujemy tę samą logikę czyszczenia klucza co dla danych paliwowych
+    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).apply(
+        lambda x: re.search(r'([A-Z0-9]{4,})', x.upper()).group(1).strip() 
+        if re.search(r'([A-Z0-9]{4,})', x.upper()) else 'Brak Identyfikatora'
+    )
+
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
@@ -406,24 +405,8 @@ def main_app():
                     
                     df_koszty_paliwa = dane_przygotowane.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa/Opłat (z Bazy)')
 
-                   # --- TYMCZASOWA FUNKCJA DIAGNOSTYCZNA (DO USUNIĘCIA PO ODCZYCIE) ---
-@st.cache_data 
-def przetworz_plik_analizy(przeslany_plik):
-    try:
-        df = pd.read_excel(przeslany_plik, 
-                           sheet_name='pojazdy', 
-                           engine='openpyxl', 
-                           header=7) 
-        
-        # Wypisz kolumny
-        st.error("DIAGNOSTYKA: Poniżej znajdują się nagłówki kolumn z Twojego pliku 'analiza.xlsx'.")
-        st.write(df.columns.tolist())
-        st.stop()
-        
-    except Exception as e:
-        st.error(f"Błąd podczas wczytywania diagnostycznego: {e}")
-        return None
-# --- KONIEC TYMCZASOWEJ FUNKCJI ---
+                    # KROK B: Przetwórz plik 'analiza.xlsx'
+                    df_analiza = przetworz_plik_analizy(plik_analizy)
                     
                     if df_analiza is not None:
                         # KROK C: Połącz oba źródła danych
