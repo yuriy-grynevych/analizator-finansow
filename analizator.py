@@ -14,6 +14,7 @@ st.subheader("Baza danych zasilana przez Neon PostgreSQL 🐘")
 
 # --- PARAMETRY TABELI ---
 NAZWA_TABELI = "transactions"
+NAZWA_SCHEMATU = "public" # <-- JAWNIE OKREŚLAMY SCHEMAT
 NAZWA_POLACZENIA_DB = "db" 
 
 # --- FUNKCJE NBP (BEZ ZMIAN) ---
@@ -105,11 +106,12 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (Z POPRAWKĄ) ---
+# --- FUNKCJE BAZY DANYCH (Z POPRAWKĄ SCHEMATU) ---
 def setup_database(conn):
     with conn.session as s:
+        # JAWNIE DODAJEMY NAZWĘ SCHEMATU
         s.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {NAZWA_TABELI} (
+            CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
                 id SERIAL PRIMARY KEY,
                 data_transakcji TIMESTAMP,
                 identyfikator VARCHAR(255),
@@ -123,11 +125,12 @@ def setup_database(conn):
 def wyczysc_duplikaty(conn):
     st.write("Czyszczenie duplikatów...")
     with conn.session as s:
+        # JAWNIE DODAJEMY NAZWĘ SCHEMATU
         s.execute(text(f"""
-        DELETE FROM {NAZWA_TABELI} a
+        DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} a
         WHERE a.ctid <> (
             SELECT min(b.ctid)
-            FROM {NAZWA_TABELI} b
+            FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} b
             WHERE a.data_transakcji = b.data_transakcji
               AND a.identyfikator = b.identyfikator
               AND a.kwota_brutto = b.kwota_brutto
@@ -137,17 +140,13 @@ def wyczysc_duplikaty(conn):
         s.commit()
 
 def pobierz_dane_z_bazy(conn, data_start, data_stop):
-    """Pobiera dane z bazy w wybranym zakresie dat."""
-    
-    # --- POPRAWKA LOGIKI ---
-    # Konwertujemy daty z kalendarza (które są typu date) na datetime
-    # aby poprawnie objąć cały zakres.
     start_datetime = pd.to_datetime(data_start)
     stop_datetime = pd.to_datetime(data_stop) + pd.Timedelta(days=1)
     
+    # JAWNIE DODAJEMY NAZWĘ SCHEMATU
     query = f"""
         SELECT data_transakcji, identyfikator, kwota_brutto, waluta 
-        FROM {NAZWA_TABELI}
+        FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}
         WHERE data_transakcji >= :data_start AND data_transakcji < :data_stop
     """
     
@@ -169,7 +168,7 @@ with tab_raport:
     st.header("Raport Wydatków")
     
     try:
-        min_max_date = conn.query(f"SELECT MIN(data_transakcji), MAX(data_transakcji) FROM {NAZWA_TABELI}")
+        min_max_date = conn.query(f"SELECT MIN(data_transakcji), MAX(data_transakcji) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
         
         if min_max_date.empty or min_max_date.iloc[0, 0] is None:
             st.info("Baza danych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
@@ -215,7 +214,7 @@ with tab_raport:
              st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
 
-# --- ZAKŁADKA 2: PANEL ADMINA (BEZ ZMIAN) ---
+# --- ZAKŁADKA 2: PANEL ADMINA (Z POPRAWKĄ SCHEMATU) ---
 with tab_admin:
     st.header("Panel Administracyjny")
     
@@ -254,7 +253,14 @@ with tab_admin:
                     
                     with st.spinner("Zapisywanie danych w bazie..."):
                         try:
-                            dane_do_wgrania.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False)
+                            # JAWNIE DODAJEMY NAZWĘ SCHEMATU
+                            dane_do_wgrania.to_sql(
+                                NAZWA_TABELI, 
+                                conn.engine, 
+                                if_exists='append', 
+                                index=False, 
+                                schema=NAZWA_SCHEMATU
+                            )
                         except Exception as e:
                             st.error(f"Błąd podczas zapisu do bazy: {e}")
                             st.info("WSKAZÓWKA: Czy na pewno kliknąłeś 'Stwórz tabelę w bazie danych'?")
