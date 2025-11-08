@@ -5,7 +5,7 @@ import re
 import streamlit as st
 import time
 from datetime import date
-from sqlalchemy import text # Kluczowy import
+from sqlalchemy import text 
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
@@ -105,7 +105,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (BEZ ZMIAN) ---
+# --- FUNKCJE BAZY DANYCH (Z POPRAWKĄ) ---
 def setup_database(conn):
     with conn.session as s:
         s.execute(text(f"""
@@ -137,13 +137,21 @@ def wyczysc_duplikaty(conn):
         s.commit()
 
 def pobierz_dane_z_bazy(conn, data_start, data_stop):
+    """Pobiera dane z bazy w wybranym zakresie dat."""
+    
+    # --- POPRAWKA LOGIKI ---
+    # Konwertujemy daty z kalendarza (które są typu date) na datetime
+    # aby poprawnie objąć cały zakres.
+    start_datetime = pd.to_datetime(data_start)
+    stop_datetime = pd.to_datetime(data_stop) + pd.Timedelta(days=1)
+    
     query = f"""
         SELECT data_transakcji, identyfikator, kwota_brutto, waluta 
         FROM {NAZWA_TABELI}
-        WHERE data_transakcji >= :data_start AND data_transakcji < :data_stop_plus_jeden
+        WHERE data_transakcji >= :data_start AND data_transakcji < :data_stop
     """
-    data_stop_plus_jeden = pd.to_datetime(data_stop) + pd.Timedelta(days=1)
-    df = conn.query(query, params={"data_start": data_start, "data_stop_plus_jeden": data_stop_plus_jeden})
+    
+    df = conn.query(query, params={"data_start": start_datetime, "data_stop": stop_datetime})
     return df
 
 # --- DEFINICJA ZAKŁADEK APLIKACJI ---
@@ -154,21 +162,18 @@ try:
     conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
 except Exception as e:
     st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
-    st.stop() # Zatrzymaj aplikację, jeśli nie ma połączenia
+    st.stop() 
 
-# --- ZAKŁADKA 1: RAPORT GŁÓWNY (ZE ZMIANĄ) ---
+# --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
 with tab_raport:
     st.header("Raport Wydatków")
     
-    # Uproszczona logika: spróbuj pobrać dane. Jeśli się nie uda (bo tabela nie istnieje),
-    # pokaż ostrzeżenie i pozwól reszcie aplikacji (Panelowi Admina) działać.
     try:
         min_max_date = conn.query(f"SELECT MIN(data_transakcji), MAX(data_transakcji) FROM {NAZWA_TABELI}")
         
         if min_max_date.empty or min_max_date.iloc[0, 0] is None:
             st.info("Baza danych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
         else:
-            # Tabela istnieje I ma dane, więc kontynuujemy
             domyslny_start = min_max_date.iloc[0, 0].date()
             domyslny_stop = min_max_date.iloc[0, 1].date()
 
@@ -183,7 +188,6 @@ with tab_raport:
             if dane_z_bazy.empty:
                 st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
             else:
-                # Reszta logiki raportu (bez zmian)
                 kurs_eur = pobierz_kurs_eur_pln()
                 if kurs_eur:
                     unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -205,7 +209,6 @@ with tab_raport:
                     st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
 
     except Exception as e:
-        # Jeśli 'try' się nie uda (bo tabela nie istnieje), złapiemy błąd tutaj
         if "does not exist" in str(e):
              st.warning("Baza danych jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
         else:
