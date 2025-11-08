@@ -2,18 +2,22 @@ import pandas as pd
 import numpy as np
 import requests
 import re
-import streamlit as st # Zamiast tkinter
+import streamlit as st
 import time
 from datetime import date
+from sqlalchemy import text # Kluczowy import
 
 # --- USTAWIENIA STRONY ---
-# To jest pierwsza komenda Streamlit - konfiguruje tytuł w zakładce przeglądarki
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
+st.title("Analizator Wydatków Floty (Eurowag + E100)")
+st.subheader("Baza danych zasilana przez Neon PostgreSQL 🐘")
 
+# --- PARAMETRY TABELI ---
+NAZWA_TABELI = "transactions"
+# Nazwa naszego połączenia z "Secrets"
+NAZWA_POLACZENIA_DB = "db" 
 
 # --- FUNKCJE NBP (BEZ ZMIAN) ---
-# Używamy @st.cache_data, aby Streamlit pobrał kursy tylko raz
-# i trzymał je w pamięci, nawet jeśli zmienimy daty.
 @st.cache_data
 def pobierz_kurs_eur_pln():
     try:
@@ -21,10 +25,8 @@ def pobierz_kurs_eur_pln():
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         kurs = response.json()['rates'][0]['mid']
-        print(f"Pobrano główny kurs NBP: 1 EUR = {kurs} PLN")
         return kurs
     except requests.exceptions.RequestException as e:
-        print(f"Błąd pobierania kursu EUR/PLN: {e}")
         st.error(f"Nie udało się pobrać kursu EUR/PLN z NBP. Błąd: {e}")
         return None
 
@@ -38,39 +40,23 @@ def pobierz_kurs_do_pln(waluta_kod):
             if response.status_code == 404: continue
             response.raise_for_status()
             kurs = response.json()['rates'][0]['mid']
-            print(f"   -> Pobrano kurs dla {waluta_kod.upper()} (Tabela {tabela.upper()}): 1 {waluta_kod.upper()} = {kurs} PLN")
             return kurs
         except requests.exceptions.RequestException: pass
-    print(f"   -> OSTRZEŻENIE: Nie znaleziono kursu NBP dla {waluta_kod.upper()}.")
     return None
 
 @st.cache_data
 def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
     mapa_kursow_do_eur = {'EUR': 1.0, 'PLN': 1.0 / kurs_eur_pln}
-    
-    # Pasek postępu w Streamlit
-    progress_bar = st.progress(0, text="Pobieranie kursów walut...")
     waluty_do_pobrania = [w for w in waluty_lista if w not in mapa_kursow_do_eur and pd.notna(w)]
-    total_waluty = len(waluty_do_pobrania)
-    
-    for i, waluta in enumerate(waluty_do_pobrania):
+    for waluta in waluty_do_pobrania:
         time.sleep(0.1) 
         kurs_pln = pobierz_kurs_do_pln(waluta)
         if kurs_pln: mapa_kursow_do_eur[waluta] = kurs_pln / kurs_eur_pln
         else: mapa_kursow_do_eur[waluta] = 0.0
-        
-        # Aktualizuj pasek postępu
-        if total_waluty > 0:
-            progress_bar.progress((i + 1) / total_waluty, text=f"Pobieranie kursu dla: {waluta}")
-            
-    progress_bar.empty() # Ukryj pasek po zakończeniu
-    print("...Wszystkie kursy pobrane.")
     return mapa_kursow_do_eur
 
 # --- FUNKCJE "TŁUMACZENIA" (BEZ ZMIAN) ---
-
 def normalizuj_eurowag(df_eurowag):
-    print(" -> Wykryto format Eurowag...")
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
     df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(df_eurowag['Karta'])
@@ -81,7 +67,6 @@ def normalizuj_eurowag(df_eurowag):
     return df_out
 
 def normalizuj_e100(df_e100):
-    print(" -> Wykryto format E100 (XLSX)...")
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
@@ -91,162 +76,195 @@ def normalizuj_e100(df_e100):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- FUNKCJA WCZYTYWANIA (teraz czyta pliki z UPLOADERA) ---
-@st.cache_data # Cache'ujemy też wczytywanie plików
+# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (BEZ ZMIAN) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
-    
-    if not przeslane_pliki:
-        return None, "Nie przesłano żadnych plików."
-    
-    print(f"Znaleziono {len(przeslane_pliki)} plików do przetworzenia:")
-    
     lista_df_zunifikowanych = []
-    
     for plik in przeslane_pliki:
-        print(f" - Przetwarzam: {plik.name}")
-        
+        st.write(f" - Przetwarzam: {plik.name}")
         try:
             if plik.name.endswith('.csv'):
-                # Logika dla CSV (na razie tylko stary E100)
-                df = pd.read_csv(plik, sep=None, engine='python', on_bad_lines='skip')
-                if df.shape[1] == 1: df = pd.read_csv(plik, sep=';', on_bad_lines='skip')
-                kolumny = df.columns
-                if 'ID Transakcji' in kolumny and 'Numer karty' in kolumny:
-                     print(" -> Wykryto format E100 (CSV)... (POMIJAM)")
-                     # lista_df_zunifikowanych.append(normalizuj_e100_csv(df))
-                else:
-                    print(f"   -> OSTRZEŻENIE: Pominięto CSV {plik.name}. Nie rozpoznano formatu.")
-                    
+                pass 
             elif plik.name.endswith(('.xls', '.xlsx')):
-                # Logika dla Excel
                 df_pierwszy_arkusz = pd.read_excel(plik, engine='openpyxl')
                 kolumny_pierwszego = df_pierwszy_arkusz.columns
-                
                 if 'Data i godzina' in kolumny_pierwszego and 'Artykuł' in kolumny_pierwszego:
                     lista_df_zunifikowanych.append(normalizuj_eurowag(df_pierwszy_arkusz))
                 else:
-                    print(f"   -> Pierwszy arkusz to nie Eurowag. Próbuję wczytać arkusz 'Transactions'...")
                     try:
                         df_arkusz_e100 = pd.read_excel(plik, sheet_name='Transactions', engine='openpyxl')
                         kolumny_e100 = df_arkusz_e100.columns
                         if 'Numer samochodu' in kolumny_e100 and 'Numer karty' in kolumny_e100:
                             lista_df_zunifikowanych.append(normalizuj_e100(df_arkusz_e100))
-                        else:
-                            print(f"   -> OSTRZEŻENIE: Pominięto plik {plik.name}. Znaleziono arkusz 'Transactions', ale nie pasuje do formatu E100.")
                     except Exception as e:
-                        print(f"   -> OSTRZEŻENIE: Pominięto plik {plik.name}. Nie rozpoznano Eurowag i nie znaleziono arkusza 'Transactions'. Błąd: {e}")
-            
+                        st.warning(f"Pominięto plik {plik.name}. Nie rozpoznano formatu.")
         except Exception as e:
-             print(f"   -> BŁĄD wczytania pliku {plik.name}: {e}")
-             st.warning(f"Nie udało się wczytać pliku: {plik.name}. Powód: {e}")
-
-    if not lista_df_zunifikowanych:
-        return None, "Wczytano pliki, ale żaden nie pasował do formatu Eurowag ani E100."
-
-    polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
-    print(f"Połączono. Całkowita liczba transakcji: {len(polaczone_df)}")
+             st.error(f"BŁĄD wczytania pliku {plik.name}: {e}")
     
+    if not lista_df_zunifikowanych:
+        return None, "Nie udało się zunifikować żadnych danych."
+        
+    polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJA PRZETWARZANIA (BEZ ZMIAN) ---
-def przetworz_dane(df_oryginal, mapa_kursow, data_start, data_stop):
-    df = df_oryginal.copy()
+# --- POPRAWIONE FUNKCJE BAZY DANYCH (używają 'conn.session') ---
+def setup_database(conn):
+    """Tworzy tabelę 'transactions' jeśli jeszcze nie istnieje."""
+    with conn.session as s:
+        s.execute(text(f"""
+            CREATE TABLE IF NOT EXISTS {NAZWA_TABELI} (
+                id SERIAL PRIMARY KEY,
+                data_transakcji TIMESTAMP,
+                identyfikator VARCHAR(255),
+                kwota_brutto FLOAT,
+                waluta VARCHAR(10),
+                zrodlo VARCHAR(50)
+            );
+        """))
+        s.commit()
+
+def wyczysc_duplikaty(conn):
+    """Usuwa zduplikowane wiersze z bazy danych."""
+    st.write("Czyszczenie duplikatów...")
+    with conn.session as s:
+        s.execute(text(f"""
+        DELETE FROM {NAZWA_TABELI} a
+        WHERE a.ctid <> (
+            SELECT min(b.ctid)
+            FROM {NAZWA_TABELI} b
+            WHERE a.data_transakcji = b.data_transakcji
+              AND a.identyfikator = b.identyfikator
+              AND a.kwota_brutto = b.kwota_brutto
+              AND a.waluta = b.waluta
+        );
+        """))
+        s.commit()
+
+def pobierz_dane_z_bazy(conn, data_start, data_stop):
+    """Pobiera dane z bazy w wybranym zakresie dat."""
+    query = f"""
+        SELECT data_transakcji, identyfikator, kwota_brutto, waluta 
+        FROM {NAZWA_TABELI}
+        WHERE data_transakcji >= :data_start AND data_transakcji < :data_stop_plus_jeden
+    """
+    data_stop_plus_jeden = pd.to_datetime(data_stop) + pd.Timedelta(days=1)
+    df = conn.query(query, params={"data_start": data_start, "data_stop_plus_jeden": data_stop_plus_jeden})
+    return df
+
+# --- DEFINICJA ZAKŁADEK APLIKACJI ---
+tab_raport, tab_admin = st.tabs(["📊 Raport Główny", "⚙️ Panel Admina"])
+
+# --- ZAKŁADKA 1: RAPORT GŁÓWNY ---
+with tab_raport:
+    st.header("Raport Wydatków")
     
-    # Filtrowanie po dacie
     try:
-        # Streamlitowe 'date_input' zwraca obiekty 'date', więc musimy je przekonwertować
-        if data_start:
-            df = df[df['data_transakcji'] >= pd.to_datetime(data_start)]
-        if data_stop:
-            # Dodajemy +1 dzień, aby objąć całą dobę 'data_stop'
-            df = df[df['data_transakcji'] < (pd.to_datetime(data_stop) + pd.Timedelta(days=1))]
+        # ZMIANA: Łączymy się z bazą 'db' zdefiniowaną w Secrets
+        conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
     except Exception as e:
-        return None, f"Błędny format daty. Błąd: {e}"
-
-    if df.empty:
-        return None, f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop})."
-
-    # Czyszczenie i przeliczanie walut
-    df['identyfikator_clean'] = df['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
-    df['identyfikator_clean'] = df['identyfikator_clean'].fillna('Brak Identyfikatora')
-    df['kwota_brutto_num'] = pd.to_numeric(df['kwota_brutto'], errors='coerce').fillna(0.0)
-    df['kurs_do_eur'] = df['waluta'].map(mapa_kursow).fillna(0.0)
-    df['kwota_finalna_eur'] = df['kwota_brutto_num'] * df['kurs_do_eur']
+        st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
+        st.stop()
     
-    return df, None
+    try:
+        min_max_date = conn.query(f"SELECT MIN(data_transakcji), MAX(data_transakcji) FROM {NAZWA_TABELI}")
+        if min_max_date.empty or min_max_date.iloc[0, 0] is None:
+            st.warning("Baza danych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
+            st.stop()
+        
+        domyslny_start = min_max_date.iloc[0, 0].date()
+        domyslny_stop = min_max_date.iloc[0, 1].date()
+    except Exception as e:
+        st.info("Trwa inicjalizacja... Jeśli baza danych jest pusta, przejdź do Panelu Admina i stwórz tabelę.")
+        st.stop()
 
-# --- GŁÓWNA CZĘŚĆ APLIKACJI STREAMLIT ---
+    col1, col2 = st.columns(2)
+    with col1:
+        data_start = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop)
+    with col2:
+        data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
 
-st.title("Analizator Wydatków Floty (Eurowag + E100)")
-st.subheader("Wszystkie waluty zostaną automatycznie przeliczone na EUR 💶")
-
-# --- KROK 1: Przesyłanie plików ---
-st.header("Krok 1: Wgraj pliki")
-przeslane_pliki = st.file_uploader(
-    "Wybierz lub przeciągnij pliki Eurowag (.xlsx) i E100 (.xlsx)",
-    accept_multiple_files=True,
-    type=['xlsx', 'xls', 'csv'] # Akceptujemy też CSV
-)
-
-if przeslane_pliki:
-    # Wczytaj i zunifikuj dane
-    dane_bazowe, blad_wczytania = wczytaj_i_zunifikuj_pliki(przeslane_pliki)
+    dane_z_bazy = pobierz_dane_z_bazy(conn, data_start, data_stop)
     
-    if blad_wczytania:
-        st.error(f"Błąd wczytywania plików: {blad_wczytania}")
+    if dane_z_bazy.empty:
+        st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
     else:
-        st.success(f"Poprawnie wczytano i połączono dane! Znaleziono {len(dane_bazowe)} transakcji.")
-        
-        # --- KROK 2: Pobieranie kursów NBP ---
-        st.header("Krok 2: Pobieranie kursów")
-        
         kurs_eur = pobierz_kurs_eur_pln()
         if kurs_eur:
-            unikalne_waluty = dane_bazowe['waluta'].unique()
+            unikalne_waluty = dane_z_bazy['waluta'].unique()
             mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
             
-            st.info(f"Pobrano kursy dla: {list(mapa_kursow.keys())}")
+            dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+            dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
+            dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
+            dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
+            dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
             
-            # --- KROK 3: Filtry dat ---
-            st.header("Krok 3: Generuj raport")
+            podsumowanie = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
+            df_wynik = pd.DataFrame(podsumowanie)
+            df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
+            df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
             
-            # Domyślne daty
-            domyslny_start = dane_bazowe['data_transakcji'].min().date()
-            domyslny_stop = dane_bazowe['data_transakcji'].max().date()
-            
-            # Filtry dat w dwóch kolumnach
-            col1, col2 = st.columns(2)
-            with col1:
-                data_start = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop)
-            with col2:
-                data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
+            suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
+            st.metric(label="SUMA ŁĄCZNA (dla wybranego okresu)", value=f"{suma_laczna:,.2f} EUR")
+            st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
 
-            # Przycisk do generowania raportu
-            if st.button("Generuj raport", type="primary"):
+# --- ZAKŁADKA 2: PANEL ADMINA ---
+with tab_admin:
+    st.header("Panel Administracyjny")
+    
+    try:
+        prawidlowe_haslo = st.secrets["ADMIN_PASSWORD"]
+    except:
+        st.error("Błąd krytyczny: Nie ustawiono 'ADMIN_PASSWORD' w Ustawieniach (Secrets) aplikacji.")
+        st.stop()
+        
+    wpisane_haslo = st.text_input("Wprowadź hasło admina", type="password")
+    
+    if wpisane_haslo == prawidlowe_haslo:
+        st.success("Zalogowano pomyślnie!")
+        
+        try:
+            # ZMIANA: Łączymy się z bazą 'db' zdefiniowaną w Secrets
+            conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
+        except Exception as e:
+            st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
+            st.stop()
+
+        if st.button("1. Stwórz tabelę w bazie danych (tylko raz!)"):
+            with st.spinner("Tworzenie tabeli..."):
+                setup_database(conn)
+            st.success("Tabela 'transactions' jest gotowa.")
+
+        st.subheader("Wgrywanie nowych plików")
+        przeslane_pliki = st.file_uploader(
+            "Wybierz pliki Eurowag i E100 do dodania do bazy",
+            accept_multiple_files=True,
+            type=['xlsx', 'xls']
+        )
+        
+        if przeslane_pliki:
+            if st.button("2. Przetwórz i wgraj pliki do bazy", type="primary"):
+                with st.spinner("Wczytywanie i unifikowanie plików..."):
+                    dane_do_wgrania, blad = wczytaj_i_zunifikuj_pliki(przeslane_pliki)
                 
-                # Przetwórz dane
-                dane_przetworzone, blad_przetwarzania = przetworz_dane(dane_bazowe, mapa_kursow, data_start, data_stop)
-                
-                if blad_przetwarzania:
-                    st.warning(blad_przetwarzania)
+                if blad:
+                    st.error(blad)
                 else:
-                    # --- KROK 4: Wyniki ---
-                    st.header(f"Podsumowanie wydatków od {data_start} do {data_stop}")
+                    st.success(f"Zunifikowano {len(dane_do_wgrania)} nowych transakcji.")
                     
-                    podsumowanie = dane_przetworzone.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
+                    with st.spinner("Zapisywanie danych w bazie..."):
+                        try:
+                            # conn.engine jest poprawne dla .to_sql()
+                            dane_do_wgrania.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False)
+                        except Exception as e:
+                            st.error(f"Błąd podczas zapisu do bazy: {e}")
+                            st.info("WSKAZÓWKA: Czy na pewno kliknąłeś 'Stwórz tabelę w bazie danych'?")
+                            st.stop()
+                            
+                    st.success("Dane zostały pomyślnie zapisane w bazie!")
                     
-                    # Przygotowanie DataFrame do wyświetlenia
-                    df_wynik = pd.DataFrame(podsumowanie)
-                    df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
-                    df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
-                    
-                    # SUMA ŁĄCZNA
-                    suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
-                    
-                    # Wyświetlenie sumy w ładnym boksie
-                    st.metric(label="SUMA ŁĄCZNA (dla wybranego okresu)", value=f"{suma_laczna:,.2f} EUR")
-                    
-                    # Wyświetlenie tabeli z formatowaniem
-                    st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
-else:
-    st.info("Oczekuję na przesłanie plików...")
+                    with st.spinner("Czyszczenie duplikatów..."):
+                        wyczysc_duplikaty(conn)
+                    st.success("Baza danych została oczyszczona. Gotowe!")
+
+    elif wpisane_haslo:
+        st.error("Nieprawidłowe hasło.")
