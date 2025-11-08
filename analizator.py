@@ -406,8 +406,24 @@ def main_app():
                     
                     df_koszty_paliwa = dane_przygotowane.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa/Opłat (z Bazy)')
 
-                    # KROK B: Przetwórz plik 'analiza.xlsx'
-                    df_analiza = przetworz_plik_analizy(plik_analizy)
+                   # --- TYMCZASOWA FUNKCJA DIAGNOSTYCZNA (DO USUNIĘCIA PO ODCZYCIE) ---
+@st.cache_data 
+def przetworz_plik_analizy(przeslany_plik):
+    try:
+        df = pd.read_excel(przeslany_plik, 
+                           sheet_name='pojazdy', 
+                           engine='openpyxl', 
+                           header=7) 
+        
+        # Wypisz kolumny
+        st.error("DIAGNOSTYKA: Poniżej znajdują się nagłówki kolumn z Twojego pliku 'analiza.xlsx'.")
+        st.write(df.columns.tolist())
+        st.stop()
+        
+    except Exception as e:
+        st.error(f"Błąd podczas wczytywania diagnostycznego: {e}")
+        return None
+# --- KONIEC TYMCZASOWEJ FUNKCJI ---
                     
                     if df_analiza is not None:
                         # KROK C: Połącz oba źródła danych
