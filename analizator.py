@@ -172,7 +172,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (POPRAWIONA) ---
+# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
     Czyści klucze i przelicza waluty.
@@ -182,7 +182,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA) ---
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA ---
     identyfikatory = dane_z_bazy['identyfikator'].astype(str)
     
     def clean_key(key):
@@ -208,7 +208,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (OSTATECZNA POPRAWKA BŁĘDU .STR) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -228,7 +228,20 @@ def przetworz_plik_analizy(przeslany_plik):
     
     for index, row in df.iterrows():
         etykieta = str(row['Etykiety wierszy']).strip()
-        kwota_euro = row['euro'] 
+        
+        # --- ZMIANA: Obsługa potencjalnych spacji w nazwie kolumny 'euro' ---
+        # Sprawdzamy, czy kolumna 'euro' istnieje (jest to najbardziej prawdopodobne)
+        if 'euro' in df.columns:
+            kwota_euro = row['euro']
+        elif 'EUR' in df.columns:
+            kwota_euro = row['EUR']
+        else:
+            # Awaryjnie
+            kwota_euro = row.get('euro') or row.get('EUR')
+            if kwota_euro is None:
+                st.error("Błąd parsowania: Nie znaleziono kolumny 'euro' ani 'EUR' w pliku analiza.xlsx.")
+                return None
+        # --- KONIEC ZMIANY ---
 
         if etykieta not in WSZYSTKIE_ZNANE_ETYKIETY:
             aktualny_pojazd_oryg = etykieta
@@ -254,10 +267,10 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # 1. Stosujemy tę samą logikę czyszczenia klucza co dla danych paliwowych
+    # Używamy tej samej bezpiecznej metody .apply()
     df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).apply(
-        lambda x: re.search(r'([A-Z0-9]{4,})', x.upper()).group(1).strip() 
-        if re.search(r'([A-Z0-9]{4,})', x.upper()) else 'Brak Identyfikatora'
+        lambda x: re.search(r'([A-Z0-9]{4,})', str(x).upper()).group(1).strip() 
+        if re.search(r'([A-Z0-9]{4,})', str(x).upper()) else 'Brak Identyfikatora'
     )
 
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
