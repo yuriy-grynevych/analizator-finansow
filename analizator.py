@@ -36,6 +36,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Tachograf', 'USŁ. HOTELOWA', 'Usługi telekomunikacyjne', 'Wykup auta', 
     'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta'
 ]
+# Wszystkie znane etykiety nie-będące pojazdami
 ETYKIETY_IGNOROWANE = [
     'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końcowa', 'Nr pojazdu',
     'Zamówienie od klienta', 'Wydanie zewnętrzne'
@@ -172,42 +173,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
-def przygotuj_dane_paliwowe(dane_z_bazy):
-    """
-    Czyści klucze i przelicza waluty.
-    """
-    if dane_z_bazy.empty:
-        return dane_z_bazy
-        
-    dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
-    
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (NOWA LOGIKA) ---
-    # 1. Konwersja na string
-    identyfikatory = dane_z_bazy['identyfikator'].astype(str)
-    
-    # 2. Ekstrakcja klucza, a następnie czyszczenie
-    dane_z_bazy['identyfikator_clean'] = (
-        identyfikatory.str.extract(r'([A-Z0-9]{4,})')
-        .fillna('') 
-        .str.upper()
-        .str.strip()
-    )
-    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].replace('', 'Brak Identyfikatora')
-    
-    # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
-    kurs_eur = pobierz_kurs_eur_pln()
-    if not kurs_eur: return None 
-    unikalne_waluty = dane_z_bazy['waluta'].unique()
-    mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
-    
-    dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
-    dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
-    dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
-    
-    return dane_z_bazy
-
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (BEZ ZMIAN) ---
+# --- NOWA FUNKCJA DO PARSOWANIA PLIKU 'analiza.xlsx' (POPRAWIONA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -215,7 +181,7 @@ def przetworz_plik_analizy(przeslany_plik):
         df = pd.read_excel(przeslany_plik, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
-                           header=7) 
+                           header=7) # Pomijamy 7 wierszy
     except Exception as e:
         st.error(f"Nie udało się wczytać arkusza 'pojazdy' z pliku `analiza.xlsx`. Błąd: {e}")
         return None
@@ -226,13 +192,19 @@ def przetworz_plik_analizy(przeslany_plik):
     aktualny_pojazd_oryg = None
     
     for index, row in df.iterrows():
+        # Upewniamy się, że etykieta to string i usuwamy białe znaki
         etykieta = str(row['Etykiety wierszy']).strip()
         kwota_euro = row['euro'] 
 
+        # --- NOWA, SOLIDNA LOGIKA ---
+        # 1. Sprawdź, czy etykieta jest POJAZDEM
+        # Pojazd to etykieta, której NIE ma na liście znanych typów kosztów/przychodu
         if etykieta not in WSZYSTKIE_ZNANE_ETYKIETY:
             aktualny_pojazd_oryg = etykieta
-            continue 
+            continue # Znaleźliśmy nowy pojazd, przechodzimy do następnego wiersza
 
+        # 2. Jeśli to nie jest pojazd, to musi to być pozycja finansowa
+        # Musimy mieć już "aktywny" pojazd, żeby wiedzieć, do kogo ją przypisać
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
                 wyniki.append({
@@ -252,14 +224,18 @@ def przetworz_plik_analizy(przeslany_plik):
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
-    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
+    
+    # 1. Stwórz 'pojazd_clean' z 'pojazd_oryg'
+    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+    
+    # 2. Zgrupuj po 'pojazd_clean' aby skonsolidować dane
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
     return df_agregacja
 
 
-# --- FUNKCJA main() (BEZ ZMIAN) ---
+# --- FUNKCJA main() (ZAKTUALIZOWANA ZAKŁADKA RENTOWNOŚĆ) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
@@ -301,49 +277,57 @@ def main_app():
                 if dane_z_bazy.empty:
                     st.warning(f"Brak danych paliwowych w wybranym zakresie dat ({data_start_rap} - {data_stop_rap}).")
                 else:
-                    dane_przygotowane = przygotuj_dane_paliwowe(dane_z_bazy.copy())
-                    
-                    if dane_przygotowane is None: st.stop()
-                    
-                    st.subheader("Podsumowanie dla wybranego okresu")
-                    podsumowanie = dane_przygotowane.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
-                    df_wynik = pd.DataFrame(podsumowanie)
-                    df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
-                    df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
-                    
-                    suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
-                    st.metric(label="SUMA ŁĄCZNA (Paliwo/Opłaty)", value=f"{suma_laczna:,.2f} EUR")
-                    st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
-                    
-                    st.divider() 
-                    st.subheader("Szczegóły transakcji (Drill-down)")
-                    
-                    lista_pojazdow = ["--- Wybierz pojazd z listy ---"] + list(podsumowanie.index)
-                    wybrany_pojazd = st.selectbox("Wybierz identyfikator, aby zobaczyć szczegóły:", lista_pojazdow)
-                    
-                    if wybrany_pojazd != "--- Wybierz pojazd z listy ---":
-                        df_szczegoly = dane_przygotowane[dane_przygotowane['identyfikator_clean'] == wybrany_pojazd]
-                        df_szczegoly = df_szczegoly.sort_values(by='data_transakcji_dt', ascending=False)
+                    kurs_eur = pobierz_kurs_eur_pln()
+                    if kurs_eur:
+                        unikalne_waluty = dane_z_bazy['waluta'].unique()
+                        mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                         
-                        df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'kwota_finalna_eur', 'kwota_brutto', 'waluta', 'zrodlo']]
-                        df_szczegoly_display = df_szczegoly_display.rename(columns={
-                            'data_transakcji_dt': 'Data transakcji',
-                            'kwota_finalna_eur': 'Kwota (EUR)',
-                            'kwota_brutto': 'Kwota oryginalna',
-                            'waluta': 'Waluta',
-                            'zrodlo': 'System'
-                        })
+                        dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
+                        dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+                        dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
+                        dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
+                        dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
+                        dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
                         
-                        st.dataframe(
-                            df_szczegoly_display,
-                            use_container_width=True,
-                            hide_index=True, 
-                            column_config={
-                                "Data transakcji": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
-                                "Kwota (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),
-                                "Kwota oryginalna": st.column_config.NumberColumn(format="%.2f"),
-                            }
-                        )
+                        st.subheader("Podsumowanie dla wybranego okresu")
+                        podsumowanie = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
+                        df_wynik = pd.DataFrame(podsumowanie)
+                        df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
+                        df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
+                        
+                        suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
+                        st.metric(label="SUMA ŁĄCZNA (Paliwo/Opłaty)", value=f"{suma_laczna:,.2f} EUR")
+                        st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
+                        
+                        st.divider() 
+                        st.subheader("Szczegóły transakcji (Drill-down)")
+                        
+                        lista_pojazdow = ["--- Wybierz pojazd z listy ---"] + list(podsumowanie.index)
+                        wybrany_pojazd = st.selectbox("Wybierz identyfikator, aby zobaczyć szczegóły:", lista_pojazdow)
+                        
+                        if wybrany_pojazd != "--- Wybierz pojazd z listy ---":
+                            df_szczegoly = dane_z_bazy[dane_z_bazy['identyfikator_clean'] == wybrany_pojazd]
+                            df_szczegoly = df_szczegoly.sort_values(by='data_transakcji_dt', ascending=False)
+                            
+                            df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'kwota_finalna_eur', 'kwota_brutto', 'waluta', 'zrodlo']]
+                            df_szczegoly_display = df_szczegoly_display.rename(columns={
+                                'data_transakcji_dt': 'Data transakcji',
+                                'kwota_finalna_eur': 'Kwota (EUR)',
+                                'kwota_brutto': 'Kwota oryginalna',
+                                'waluta': 'Waluta',
+                                'zrodlo': 'System'
+                            })
+                            
+                            st.dataframe(
+                                df_szczegoly_display,
+                                use_container_width=True,
+                                hide_index=True, 
+                                column_config={
+                                    "Data transakcji": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
+                                    "Kwota (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),
+                                    "Kwota oryginalna": st.column_config.NumberColumn(format="%.2f"),
+                                }
+                            )
 
         except Exception as e:
             if "does not exist" in str(e):
@@ -351,7 +335,7 @@ def main_app():
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
-    # --- ZAKŁADKA 2: RENTOWNOŚĆ (BEZ ZMIAN) ---
+    # --- ZAKŁADKA 2: RENTOWNOŚĆ (POPRAWIONA) ---
     with tab_rentownosc:
         st.header("Raport Rentowności (Zysk/Strata)")
         
@@ -375,13 +359,14 @@ def main_app():
 
         plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
         
+        # Inicjalizuj 'raport_gotowy' w pamięci sesji
         if 'raport_gotowy' not in st.session_state:
             st.session_state['raport_gotowy'] = False
 
         if st.button("Generuj raport rentowności", type="primary"):
             if plik_analizy is None:
                 st.warning("Proszę, prześlij plik `analiza.xlsx`.")
-                st.session_state['raport_gotowy'] = False 
+                st.session_state['raport_gotowy'] = False # Resetuj raport
             else:
                 with st.spinner("Pracuję..."):
                     # KROK A: Pobierz koszty paliwa z bazy
@@ -392,11 +377,18 @@ def main_app():
                         st.session_state['raport_gotowy'] = False
                         st.stop()
                         
-                    dane_przygotowane = przygotuj_dane_paliwowe(dane_z_bazy.copy())
+                    kurs_eur = pobierz_kurs_eur_pln()
+                    if not kurs_eur: st.session_state['raport_gotowy'] = False; st.stop()
                     
-                    if dane_przygotowane is None: st.session_state['raport_gotowy'] = False; st.stop()
+                    unikalne_waluty = dane_z_bazy['waluta'].unique()
+                    mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                     
-                    df_koszty_paliwa = dane_przygotowane.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa/Opłat (z Bazy)')
+                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+                    dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
+                    dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
+                    dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
+                    
+                    df_koszty_paliwa = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa/Opłat (z Bazy)')
 
                     # KROK B: Przetwórz plik 'analiza.xlsx'
                     df_analiza = przetworz_plik_analizy(plik_analizy)
@@ -405,8 +397,8 @@ def main_app():
                         # KROK C: Połącz oba źródła danych
                         df_rentownosc = df_analiza.merge(
                             df_koszty_paliwa, 
-                            left_index=True, 
-                            right_index=True, 
+                            left_index=True, # Łącz po indeksie 'pojazd_clean'
+                            right_index=True, # Łącz po indeksie 'identyfikator_clean'
                             how='outer'
                         )
                         
@@ -419,25 +411,24 @@ def main_app():
                             df_rentownosc['Koszty Paliwa/Opłat (z Bazy)']
                         )
                         
+                        # --- ZAPISZ WYNIKI DO PAMIĘCI SESJI ---
                         st.session_state['raport_gotowy'] = True
                         st.session_state['df_rentownosc'] = df_rentownosc
-                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
                         
-        # --- BLOK WYŚWIETLANIA (BEZ ZMIAN) ---
+        # --- BLOK WYŚWIETLANIA (Uruchamia się, jeśli raport jest gotowy) ---
         if st.session_state.get('raport_gotowy', False):
             
             st.subheader("Wyniki dla wybranego okresu")
             
+            # Pobierz zapisany raport z pamięci sesji
             df_rentownosc = st.session_state['df_rentownosc']
+            
+            # Sortujemy, aby znaleźć najbardziej dochodowe/stratne
             df_rentownosc = df_rentownosc.sort_values(by='ZYSK / STRATA (EUR)', ascending=False)
             
             lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc.index.unique())
             
-            wybrany_pojazd_rent = st.selectbox(
-                "Wybierz pojazd do analizy:", 
-                lista_pojazdow_rent,
-                key='wybrany_pojazd_rent'
-            )
+            wybrany_pojazd_rent = st.selectbox("Wybierz pojazd do analizy:", lista_pojazdow_rent)
             
             if wybrany_pojazd_rent != "--- Wybierz pojazd ---":
                 try:
@@ -448,8 +439,10 @@ def main_app():
                     koszty_paliwa = dane_pojazdu['Koszty Paliwa/Opłat (z Bazy)']
                     zysk = dane_pojazdu['ZYSK / STRATA (EUR)']
                     
+                    # Kolorowanie zysku/straty
                     delta_color = "normal"
-                    if zysk < 0: delta_color = "inverse"
+                    if zysk < 0:
+                        delta_color = "inverse"
                     
                     st.metric(label="ZYSK / STRATA (EUR)", value=f"{zysk:,.2f} EUR", delta_color=delta_color)
                     
@@ -461,10 +454,12 @@ def main_app():
                 except KeyError:
                     st.error("Nie znaleziono danych dla tego pojazdu.")
             
+            # Suma łączna
             st.divider()
             zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
             st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
             
+            # Formatowanie finalnej tabeli
             df_rentownosc_display = df_rentownosc[[
                 'przychody', 
                 'koszty_inne', 
@@ -528,7 +523,7 @@ def main_app():
                         wyczysc_duplikaty(conn)
                     st.success("Baza danych została oczyszczona. Gotowe!")
 
-# --- LOGIKA LOGOWANIA (BEZ ZMIAN) ---
+# --- LOGIKA LOGOWANIA (Z DODANIEM PAMIĘCI SESJI) ---
 def check_password():
     try:
         prawidlowe_haslo = st.secrets["ADMIN_PASSWORD"]
@@ -536,10 +531,9 @@ def check_password():
         st.error("Błąd krytyczny: Nie ustawiono 'ADMIN_PASSWORD' w Ustawieniach (Secrets) aplikacji.")
         st.stop()
 
+    # Inicjalizuj 'raport_gotowy' przy starcie sesji, jeśli nie istnieje
     if 'raport_gotowy' not in st.session_state:
         st.session_state['raport_gotowy'] = False
-    if 'wybrany_pojazd_rent' not in st.session_state:
-        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
         
     if st.session_state.get("password_correct", False):
         return True
