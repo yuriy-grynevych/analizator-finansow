@@ -172,7 +172,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
+# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (OSTATECZNA NAPRAWA) ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
     Czyści klucze i przelicza waluty.
@@ -182,22 +182,23 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA BŁĘDU .STR) ---
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (NOWA, ODPORNA LOGIKA) ---
     
-    # 1. Konwersja na string
+    # Musimy operować tylko na stringach, by uniknąć błędu .str
     identyfikatory = dane_z_bazy['identyfikator'].astype(str)
     
-    # 2. Ekstrakcja klucza (np. PO2TG45 z 'TL PO2TG45')
-    klucze_ekstrahowane = identyfikatory.str.extract(r'([A-Z0-9]{4,})')
-    
-    # 3. Zapewnienie, że kolumna jest stringiem przed manipulacją
-    dane_z_bazy['identyfikator_clean'] = (
-        klucze_ekstrahowane[0].fillna('')
-        .str.upper()
-        .str.strip()
-    )
-    
-    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].replace('', 'Brak Identyfikatora')
+    # Funkcja do czyszczenia pojedynczego klucza
+    def clean_key(key):
+        if not key or key == 'nan': # Odrzucenie pustych/niepoprawnych
+            return 'Brak Identyfikatora'
+        
+        # Ekstrakcja 4+ znaków alfanumerycznych (np. PO2TG45 z 'TL PO2TG45')
+        match = re.search(r'([A-Z0-9]{4,})', key)
+        if match:
+            return match.group(1).upper().strip()
+        return 'Brak Identyfikatora' # Zwróć jako błąd jeśli nie znaleziono klucza
+        
+    dane_z_bazy['identyfikator_clean'] = identyfikatory.apply(clean_key)
     
     # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
     kurs_eur = pobierz_kurs_eur_pln()
