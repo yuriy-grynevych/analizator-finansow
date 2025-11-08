@@ -241,7 +241,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (POPRAWIONA) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
@@ -272,7 +272,11 @@ def main_app():
                         mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                         
                         dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
+                        
+                        # --- POPRAWKA BYŁA POTRZEBNA TUTAJ ---
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
+                        # --- KONIEC POPRAWKI ---
+
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
                         dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
                         dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
@@ -371,8 +375,7 @@ def main_app():
                     unikalne_waluty = dane_z_bazy['waluta'].unique()
                     mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                     
-                    # --- POPRAWKA TUTAJ ---
-                    # Upewniamy się, że .str jest na kolumnie ['identyfikator'], a nie na całej ramce danych
+                    # --- POPRAWKA BYŁA POTRZEBNA TUTAJ ---
                     dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
                     # --- KONIEC POPRAWKI ---
                     
@@ -535,7 +538,7 @@ def check_password():
         submitted = st.form_submit_button("Zaloguj")
 
         if submitted:
-            if wpisane_haslo == prawidlowe_haslo:
+            if wpisane_haswlo == prawidlowe_haslo:
                 st.session_state["password_correct"] = True
                 st.rerun() 
             else:
