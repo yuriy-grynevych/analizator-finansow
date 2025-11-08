@@ -183,10 +183,18 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (TUTAJ BYŁ OSTATNI BŁĄD) ---
-    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (NAPRAWA) ---
+    # Musimy operować tylko na stringach, by uniknąć błędu
+    
+    # 1. Konwertuj na string
+    identyfikatory = dane_z_bazy['identyfikator'].astype(str)
+    
+    # 2. Wyciągnij klucz (np. PO2TG45 z 'TL PO2TG45')
+    # Używamy prostszego regexu, a następnie konwersji na upper/strip, która jest teraz bezpieczna
+    dane_z_bazy['identyfikator_clean'] = identyfikatory.str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
     dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
     
+    # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
     kurs_eur = pobierz_kurs_eur_pln()
     if not kurs_eur: return None 
     unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -267,7 +275,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
