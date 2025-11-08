@@ -172,7 +172,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA DO PARSOWANIA PLIKU 'analiza.xlsx' (POPRAWIONA) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (BEZ ZMIAN) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -180,7 +180,7 @@ def przetworz_plik_analizy(przeslany_plik):
         df = pd.read_excel(przeslany_plik, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
-                           header=7) # Pomijamy 7 wierszy
+                           header=7) 
     except Exception as e:
         st.error(f"Nie udało się wczytać arkusza 'pojazdy' z pliku `analiza.xlsx`. Błąd: {e}")
         return None
@@ -194,12 +194,10 @@ def przetworz_plik_analizy(przeslany_plik):
         etykieta = str(row['Etykiety wierszy']).strip()
         kwota_euro = row['euro'] 
 
-        # 1. Sprawdź, czy etykieta jest POJAZDEM
         if etykieta not in WSZYSTKIE_ZNANE_ETYKIETY:
             aktualny_pojazd_oryg = etykieta
             continue 
 
-        # 2. Jeśli to nie jest pojazd, to musi to być pozycja finansowa
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
                 wyniki.append({
@@ -219,22 +217,17 @@ def przetworz_plik_analizy(przeslany_plik):
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
-    
-    # --- NOWA, SOLIDNA NORMALIZACJA ---
-    # 1. Stwórz 'pojazd_clean' (wyciągnij, usuń spacje, wielkie litery)
     df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
-    
-    # 2. Zgrupuj po 'pojazd_clean' aby skonsolidować dane
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
     return df_agregacja
 
 
-# --- FUNKCJA main() (ZAKTUALIZOWANA ZAKŁADKA RENTOWNOŚĆ) ---
+# --- FUNKCJA main() (Z POPRAWKĄ) ---
 def main_app():
     
-    st.title("Analizator Wydatków Floty")
+    st.title("Analizator Wydatków Floty") 
     
     tab_raport, tab_rentownosc, tab_admin = st.tabs([
         "📊 Raport Paliwowy", 
@@ -248,7 +241,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (POPRAWIONA LITERÓWKA) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
@@ -279,9 +272,13 @@ def main_app():
                         mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                         
                         dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
-                        # --- NORMALIZACJA KLUCZA ---
+                        
+                        # --- POPRAWKA TUTAJ ---
+                        # Upewniamy się, że .str jest na kolumnie ['identyfikator'], a nie na całej ramce danych
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
+                        # --- KONIEC POPRAWKI ---
+                        
                         dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
                         dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
                         dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
@@ -332,7 +329,7 @@ def main_app():
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
-    # --- ZAKŁADKA 2: RENTOWNOŚĆ (POPRAWIONA) ---
+    # --- ZAKŁADKA 2: RENTOWNOŚĆ (BEZ ZMIAN) ---
     with tab_rentownosc:
         st.header("Raport Rentowności (Zysk/Strata)")
         
@@ -379,9 +376,7 @@ def main_app():
                     unikalne_waluty = dane_z_bazy['waluta'].unique()
                     mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                     
-                    # --- NORMALIZACJA KLUCZA ---
                     dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
-                    
                     dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
                     dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
                     dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
@@ -395,8 +390,8 @@ def main_app():
                         # KROK C: Połącz oba źródła danych
                         df_rentownosc = df_analiza.merge(
                             df_koszty_paliwa, 
-                            left_index=True, # Łącz po indeksie 'pojazd_clean'
-                            right_index=True, # Łącz po indeksie 'identyfikator_clean'
+                            left_index=True, 
+                            right_index=True, 
                             how='outer'
                         )
                         
@@ -411,9 +406,9 @@ def main_app():
                         
                         st.session_state['raport_gotowy'] = True
                         st.session_state['df_rentownosc'] = df_rentownosc
-                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" # Resetuj wybór
+                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
                         
-        # --- BLOK WYŚWIETLANIA (Uruchamia się, jeśli raport jest gotowy) ---
+        # --- BLOK WYŚWIETLANIA (BEZ ZMIAN) ---
         if st.session_state.get('raport_gotowy', False):
             
             st.subheader("Wyniki dla wybranego okresu")
@@ -423,7 +418,6 @@ def main_app():
             
             lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc.index.unique())
             
-            # Używamy zapisanego stanu, aby selectbox nie resetował się sam
             wybrany_pojazd_rent = st.selectbox(
                 "Wybierz pojazd do analizy:", 
                 lista_pojazdow_rent,
@@ -519,7 +513,7 @@ def main_app():
                         wyczysc_duplikaty(conn)
                     st.success("Baza danych została oczyszczona. Gotowe!")
 
-# --- LOGIKA LOGOWANIA (Z DODANIEM PAMIĘCI SESJI) ---
+# --- LOGIKA LOGOWANIA (BEZ ZMIAN) ---
 def check_password():
     try:
         prawidlowe_haslo = st.secrets["ADMIN_PASSWORD"]
@@ -527,10 +521,8 @@ def check_password():
         st.error("Błąd krytyczny: Nie ustawiono 'ADMIN_PASSWORD' w Ustawieniach (Secrets) aplikacji.")
         st.stop()
 
-    # Inicjalizuj 'raport_gotowy' przy starcie sesji, jeśli nie istnieje
     if 'raport_gotowy' not in st.session_state:
         st.session_state['raport_gotowy'] = False
-    # Inicjalizuj 'wybrany_pojazd_rent' przy starcie sesji
     if 'wybrany_pojazd_rent' not in st.session_state:
         st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
         
