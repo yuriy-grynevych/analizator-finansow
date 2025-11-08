@@ -5,7 +5,7 @@ import re
 import streamlit as st
 import time
 from datetime import date
-from sqlalchemy import text, inspect # Importujemy 'inspect'
+from sqlalchemy import text # Kluczowy import
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
@@ -146,18 +146,6 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop_plus_jeden": data_stop_plus_jeden})
     return df
 
-# --- NOWA FUNKCJA DO SPRAWDZANIA TABELI ---
-def sprawdz_czy_tabela_istnieje(conn):
-    """Sprawdza, czy tabela 'transactions' istnieje w bazie."""
-    try:
-        # Używamy inspektora SQLAlchemy, aby sprawdzić, czy tabela istnieje
-        # conn.engine to surowe połączenie
-        ins = inspect(conn.engine)
-        return ins.has_table(NAZWA_TABELI)
-    except Exception as e:
-        st.error(f"Błąd podczas sprawdzania tabeli: {e}")
-        return False
-
 # --- DEFINICJA ZAKŁADEK APLIKACJI ---
 tab_raport, tab_admin = st.tabs(["📊 Raport Główny", "⚙️ Panel Admina"])
 
@@ -166,58 +154,62 @@ try:
     conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
 except Exception as e:
     st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
-    st.stop()
+    st.stop() # Zatrzymaj aplikację, jeśli nie ma połączenia
 
 # --- ZAKŁADKA 1: RAPORT GŁÓWNY (ZE ZMIANĄ) ---
 with tab_raport:
     st.header("Raport Wydatków")
     
-    # --- NOWA LOGIKA SPRAWDZAJĄCA ---
-    if not sprawdz_czy_tabela_istnieje(conn):
-        st.warning("Baza danych jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
-    else:
-        # Tabela istnieje, kontynuujemy jak wcześniej
-        try:
-            min_max_date = conn.query(f"SELECT MIN(data_transakcji), MAX(data_transakcji) FROM {NAZWA_TABELI}")
-            if min_max_date.empty or min_max_date.iloc[0, 0] is None:
-                st.info("Baza danych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
+    # Uproszczona logika: spróbuj pobrać dane. Jeśli się nie uda (bo tabela nie istnieje),
+    # pokaż ostrzeżenie i pozwól reszcie aplikacji (Panelowi Admina) działać.
+    try:
+        min_max_date = conn.query(f"SELECT MIN(data_transakcji), MAX(data_transakcji) FROM {NAZWA_TABELI}")
+        
+        if min_max_date.empty or min_max_date.iloc[0, 0] is None:
+            st.info("Baza danych jest pusta. Przejdź do Panelu Admina, aby wgrać pliki.")
+        else:
+            # Tabela istnieje I ma dane, więc kontynuujemy
+            domyslny_start = min_max_date.iloc[0, 0].date()
+            domyslny_stop = min_max_date.iloc[0, 1].date()
+
+            col1, col2 = st.columns(2)
+            with col1:
+                data_start = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop)
+            with col2:
+                data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
+
+            dane_z_bazy = pobierz_dane_z_bazy(conn, data_start, data_stop)
+            
+            if dane_z_bazy.empty:
+                st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
             else:
-                domyslny_start = min_max_date.iloc[0, 0].date()
-                domyslny_stop = min_max_date.iloc[0, 1].date()
+                # Reszta logiki raportu (bez zmian)
+                kurs_eur = pobierz_kurs_eur_pln()
+                if kurs_eur:
+                    unikalne_waluty = dane_z_bazy['waluta'].unique()
+                    mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
+                    
+                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
+                    dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
+                    dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
+                    dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
+                    
+                    podsumowanie = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
+                    df_wynik = pd.DataFrame(podsumowanie)
+                    df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
+                    df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
+                    
+                    suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
+                    st.metric(label="SUMA ŁĄCZNA (dla wybranego okresu)", value=f"{suma_laczna:,.2f} EUR")
+                    st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    data_start = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop)
-                with col2:
-                    data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
-
-                dane_z_bazy = pobierz_dane_z_bazy(conn, data_start, data_stop)
-                
-                if dane_z_bazy.empty:
-                    st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
-                else:
-                    kurs_eur = pobierz_kurs_eur_pln()
-                    if kurs_eur:
-                        unikalne_waluty = dane_z_bazy['waluta'].unique()
-                        mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
-                        
-                        dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
-                        dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
-                        dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
-                        dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
-                        dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
-                        
-                        podsumowanie = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
-                        df_wynik = pd.DataFrame(podsumowanie)
-                        df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
-                        df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
-                        
-                        suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
-                        st.metric(label="SUMA ŁĄCZNA (dla wybranego okresu)", value=f"{suma_laczna:,.2f} EUR")
-                        st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
+    except Exception as e:
+        # Jeśli 'try' się nie uda (bo tabela nie istnieje), złapiemy błąd tutaj
+        if "does not exist" in str(e):
+             st.warning("Baza danych jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
+        else:
+             st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
 
 # --- ZAKŁADKA 2: PANEL ADMINA (BEZ ZMIAN) ---
