@@ -62,14 +62,14 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
 
-# --- FUNKCJE "TŁUMACZENIA" (BEZ ZMIAN) ---
+# --- FUNKCJE "TŁUMACZENIA" (Z DODANIEM 'zrodlo') ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
     df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(df_eurowag['Karta'])
     df_out['kwota_brutto'] = pd.to_numeric(df_eurowag['Kwota brutto'], errors='coerce')
     df_out['waluta'] = df_eurowag['Waluta']
-    df_out['zrodlo'] = 'Eurowag'
+    df_out['zrodlo'] = 'Eurowag' # <-- DODALIŚMY ŹRÓDŁO
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
@@ -79,7 +79,7 @@ def normalizuj_e100(df_e100):
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
     df_out['kwota_brutto'] = pd.to_numeric(df_e100['Kwota'], errors='coerce')
     df_out['waluta'] = df_e100['Waluta']
-    df_out['zrodlo'] = 'E100'
+    df_out['zrodlo'] = 'E100' # <-- DODALIŚMY ŹRÓDŁO
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
@@ -113,8 +113,9 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (BEZ ZMIAN) ---
+# --- FUNKCJE BAZY DANYCH (Z AKTUALIZACJĄ TABELI) ---
 def setup_database(conn):
+    """Tworzy tabelę 'transactions' z nową kolumną 'zrodlo'."""
     with conn.session as s:
         s.execute(text(f"""
             CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
@@ -123,7 +124,7 @@ def setup_database(conn):
                 identyfikator VARCHAR(255),
                 kwota_brutto FLOAT,
                 waluta VARCHAR(10),
-                zrodlo VARCHAR(50)
+                zrodlo VARCHAR(50) 
             );
         """))
         s.commit()
@@ -145,11 +146,12 @@ def wyczysc_duplikaty(conn):
         s.commit()
 
 def pobierz_dane_z_bazy(conn, data_start, data_stop):
+    """Pobiera dane z bazy, teraz także z kolumną 'zrodlo'."""
     start_datetime = pd.to_datetime(data_start)
     stop_datetime = pd.to_datetime(data_stop) + pd.Timedelta(days=1)
     
     query = f"""
-        SELECT data_transakcji, identyfikator, kwota_brutto, waluta 
+        SELECT data_transakcji, identyfikator, kwota_brutto, waluta, zrodlo 
         FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}
         WHERE data_transakcji >= :data_start AND data_transakcji < :data_stop
     """
@@ -157,11 +159,10 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": start_datetime, "data_stop": stop_datetime})
     return df
 
-# --- FUNKCJA main() (Z USUNIĘTYM SUBHEADEREM) ---
+# --- FUNKCJA main() (ZAKTUALIZOWANA O FILTROWANIE) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty (Eurowag + E100)")
-    # Usunięta linijka st.subheader(...)
     
     tab_raport, tab_admin = st.tabs(["📊 Raport Główny", "⚙️ Panel Admina"])
 
@@ -189,11 +190,13 @@ def main_app():
                 with col2:
                     data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
 
+                # 1. Pobierz wszystkie dane z wybranego okresu
                 dane_z_bazy = pobierz_dane_z_bazy(conn, data_start, data_stop)
                 
                 if dane_z_bazy.empty:
                     st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
                 else:
+                    # 2. Przetwórz dane (NBP, czyszczenie ID)
                     kurs_eur = pobierz_kurs_eur_pln()
                     if kurs_eur:
                         unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -205,14 +208,53 @@ def main_app():
                         dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
                         dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
                         
+                        # --- 3. SEKCJA PODSUMOWANIA (BEZ ZMIAN) ---
+                        st.subheader("Podsumowanie dla wybranego okresu")
                         podsumowanie = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
                         df_wynik = pd.DataFrame(podsumowanie)
                         df_wynik.rename(columns={'kwota_finalna_eur': 'Łączne wydatki (EUR)'}, inplace=True)
                         df_wynik.index.name = 'Identyfikator (Pojazd / Karta)'
                         
                         suma_laczna = df_wynik['Łączne wydatki (EUR)'].sum()
-                        st.metric(label="SUMA ŁĄCZNA (dla wybranego okresu)", value=f"{suma_laczna:,.2f} EUR")
+                        st.metric(label="SUMA ŁĄCZNA", value=f"{suma_laczna:,.2f} EUR")
                         st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
+                        
+                        # --- 4. NOWA SEKCJA FILTROWANIA SZCZEGÓŁÓW ---
+                        st.divider() # Linia oddzielająca
+                        st.subheader("Szczegóły transakcji (Drill-down)")
+                        
+                        # Tworzymy listę pojazdów z podsumowania + opcję "wszystkie"
+                        lista_pojazdow = ["--- Wybierz pojazd z listy ---"] + list(podsumowanie.index)
+                        wybrany_pojazd = st.selectbox("Wybierz identyfikator, aby zobaczyć szczegóły:", lista_pojazdow)
+                        
+                        # Jeśli użytkownik coś wybrał
+                        if wybrany_pojazd != "--- Wybierz pojazd z listy ---":
+                            # Filtrujemy dane, które już mamy w pamięci
+                            df_szczegoly = dane_z_bazy[dane_z_bazy['identyfikator_clean'] == wybrany_pojazd]
+                            
+                            # Sortujemy od najnowszych
+                            df_szczegoly = df_szczegoly.sort_values(by='data_transakcji', ascending=False)
+                            
+                            # Wybieramy i nazywamy kolumny do wyświetlenia
+                            df_szczegoly_display = df_szczegoly[['data_transakcji', 'kwota_finalna_eur', 'kwota_brutto', 'waluta', 'zrodlo']]
+                            df_szczegoly_display = df_szczegoly_display.rename(columns={
+                                'data_transakcji': 'Data transakcji',
+                                'kwota_finalna_eur': 'Kwota (EUR)',
+                                'kwota_brutto': 'Kwota oryginalna',
+                                'waluta': 'Waluta',
+                                'zrodlo': 'System'
+                            })
+                            
+                            # Wyświetlamy szczegółową tabelę
+                            st.dataframe(
+                                df_szczegoly_display,
+                                use_container_width=True,
+                                hide_index=True, # Ukrywamy niepotrzebny indeks
+                                column_config={ # Dodatkowe formatowanie dla kwot
+                                    "Kwota (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),
+                                    "Kwota oryginalna": st.column_config.NumberColumn(format="%.2f"),
+                                }
+                            )
 
         except Exception as e:
             if "does not exist" in str(e):
