@@ -10,14 +10,15 @@ from sqlalchemy import text
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- KOD DO UKRYCIA STOPKI I MENU ---
+# --- POPRAWIONY KOD DO UKRYCIA STOPKI ---
+# Usunęliśmy '#MainMenu {visibility: hidden;}' aby menu wróciło
 hide_streamlit_style = """
             <style>
-            #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
             </style>
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True) 
+# -----------------------------------------
 
 # --- PARAMETRY TABELI ---
 NAZWA_TABELI = "transactions"
@@ -113,7 +114,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (Z POPRAWKĄ NA DATY) ---
+# --- FUNKCJE BAZY DANYCH (BEZ ZMIAN) ---
 def setup_database(conn):
     with conn.session as s:
         s.execute(text(f"""
@@ -145,21 +146,16 @@ def wyczysc_duplikaty(conn):
         s.commit()
 
 def pobierz_dane_z_bazy(conn, data_start, data_stop):
-    """Pobiera dane z bazy, używając rzutowania na DATE dla pewności."""
-    
-    # data_start i data_stop to obiekty datetime.date z kalendarza
-    
     query = f"""
         SELECT data_transakcji, identyfikator, kwota_brutto, waluta, zrodlo 
         FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}
         WHERE (data_transakcji::date) >= :data_start 
           AND (data_transakcji::date) <= :data_stop
     """
-    
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- FUNKCJA main() (ZAKTUALIZOWANA O FILTROWANIE) ---
+# --- FUNKCJA main() (BEZ ZMIAN) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty (Eurowag + E100)")
@@ -176,7 +172,6 @@ def main_app():
         st.header("Raport Wydatków")
         
         try:
-            # Używamy rzutowania na DATE dla pewności
             min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
             min_max_date = conn.query(min_max_date_query)
             
@@ -192,19 +187,16 @@ def main_app():
                 with col2:
                     data_stop = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop)
 
-                # 1. Pobierz wszystkie dane z wybranego okresu
                 dane_z_bazy = pobierz_dane_z_bazy(conn, data_start, data_stop)
                 
                 if dane_z_bazy.empty:
                     st.warning(f"Brak danych w wybranym zakresie dat ({data_start} - {data_stop}).")
                 else:
-                    # 2. Przetwórz dane (NBP, czyszczenie ID)
                     kurs_eur = pobierz_kurs_eur_pln()
                     if kurs_eur:
                         unikalne_waluty = dane_z_bazy['waluta'].unique()
                         mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                         
-                        # Musimy też przekonwertować datę pobraną z bazy
                         dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
                         
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
@@ -213,7 +205,6 @@ def main_app():
                         dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
                         dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
                         
-                        # --- 3. SEKCJA PODSUMOWANIA (BEZ ZMIAN) ---
                         st.subheader("Podsumowanie dla wybranego okresu")
                         podsumowanie = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().sort_values(ascending=False)
                         df_wynik = pd.DataFrame(podsumowanie)
@@ -224,7 +215,6 @@ def main_app():
                         st.metric(label="SUMA ŁĄCZNA", value=f"{suma_laczna:,.2f} EUR")
                         st.dataframe(df_wynik.style.format("{:,.2f} EUR", subset=['Łączne wydatki (EUR)']), use_container_width=True)
                         
-                        # --- 4. NOWA SEKCJA FILTROWANIA SZCZEGÓŁÓW ---
                         st.divider() 
                         st.subheader("Szczegóły transakcji (Drill-down)")
                         
@@ -249,7 +239,7 @@ def main_app():
                                 use_container_width=True,
                                 hide_index=True, 
                                 column_config={
-                                    "Data transakcji": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), # Lepsze formatowanie daty
+                                    "Data transakcji": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
                                     "Kwota (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),
                                     "Kwota oryginalna": st.column_config.NumberColumn(format="%.2f"),
                                 }
