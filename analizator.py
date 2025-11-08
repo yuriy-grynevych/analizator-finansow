@@ -200,13 +200,13 @@ def przetworz_plik_analizy(przeslany_plik):
 
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
-                wyniki.append({
+                wyniki.pushed({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': kwota_euro,
                     'koszty_inne': 0
                 })
             elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
-                 wyniki.append({
+                 wyniki.pushed({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': 0,
                     'koszty_inne': kwota_euro 
@@ -224,7 +224,7 @@ def przetworz_plik_analizy(przeslany_plik):
     return df_agregacja
 
 
-# --- FUNKCJA main() (BEZ ZMIAN) ---
+# --- FUNKCJA main() (Z POPRAWKĄ) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
@@ -324,7 +324,7 @@ def main_app():
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
-    # --- ZAKŁADKA 2: RENTOWNOŚĆ (POPRAWIONA) ---
+    # --- ZAKŁADKA 2: RENTOWNOŚĆ (BEZ ZMIAN) ---
     with tab_rentownosc:
         st.header("Raport Rentowności (Zysk/Strata)")
         
@@ -371,7 +371,7 @@ def main_app():
                     unikalne_waluty = dane_z_bazy['waluta'].unique()
                     mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                     
-                    # --- NORMALIZACJA KLUCZA (TUTAJ BYŁ PROBLEM) ---
+                    # --- NORMALIZACJA KLUCZA (W TRAKCIE GENEROWANIA) ---
                     dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
                     # --- KONIEC POPRAWKI ---
                     
@@ -511,7 +511,7 @@ def main_app():
                         wyczysc_duplikaty(conn)
                     st.success("Baza danych została oczyszczona. Gotowe!")
 
-# --- LOGIKA LOGOWANIA (Z POPRAWKĄ LITERÓWKI) ---
+# --- LOGIKA LOGOWANIA (BEZ ZMIAN) ---
 def check_password():
     try:
         prawidlowe_haslo = st.secrets["ADMIN_PASSWORD"]
@@ -534,7 +534,6 @@ def check_password():
         submitted = st.form_submit_button("Zaloguj")
 
         if submitted:
-            # --- POPRAWIONA LITERÓWKA TUTAJ ---
             if wpisane_haslo == prawidlowe_haslo:
                 st.session_state["password_correct"] = True
                 st.rerun() 
