@@ -172,7 +172,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (OSTATECZNA NAPRAWA) ---
+# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
     Czyści klucze i przelicza waluty.
@@ -182,21 +182,21 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (NOWA, ODPORNA LOGIKA) ---
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA) ---
     
-    # Musimy operować tylko na stringach, by uniknąć błędu .str
+    # 1. Musimy operować tylko na stringach
     identyfikatory = dane_z_bazy['identyfikator'].astype(str)
     
-    # Funkcja do czyszczenia pojedynczego klucza
+    # 2. Funkcja do czyszczenia pojedynczego klucza
     def clean_key(key):
-        if not key or key == 'nan': # Odrzucenie pustych/niepoprawnych
+        if key == 'nan' or not key: 
             return 'Brak Identyfikatora'
         
-        # Ekstrakcja 4+ znaków alfanumerycznych (np. PO2TG45 z 'TL PO2TG45')
+        # Ekstrakcja klucza (np. PO2TG45 z 'TL PO2TG45')
         match = re.search(r'([A-Z0-9]{4,})', key)
         if match:
             return match.group(1).upper().strip()
-        return 'Brak Identyfikatora' # Zwróć jako błąd jeśli nie znaleziono klucza
+        return 'Brak Identyfikatora'
         
     dane_z_bazy['identyfikator_clean'] = identyfikatory.apply(clean_key)
     
@@ -257,7 +257,10 @@ def przetworz_plik_analizy(przeslany_plik):
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
-    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
+    
+    # Używamy tej samej funkcji apply dla bezpieczeństwa
+    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].apply(lambda x: re.search(r'([A-Z0-9]{4,})', str(x).upper()).group(1).strip() if re.search(r'([A-Z0-9]{4,})', str(x).upper()) else 'Brak Identyfikatora')
+    
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
