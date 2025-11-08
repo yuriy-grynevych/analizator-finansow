@@ -36,7 +36,6 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Tachograf', 'USŁ. HOTELOWA', 'Usługi telekomunikacyjne', 'Wykup auta', 
     'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta'
 ]
-# Wszystkie znane etykiety nie-będące pojazdami
 ETYKIETY_IGNOROWANE = [
     'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końcowa', 'Nr pojazdu',
     'Zamówienie od klienta', 'Wydanie zewnętrzne'
@@ -192,19 +191,15 @@ def przetworz_plik_analizy(przeslany_plik):
     aktualny_pojazd_oryg = None
     
     for index, row in df.iterrows():
-        # Upewniamy się, że etykieta to string i usuwamy białe znaki
         etykieta = str(row['Etykiety wierszy']).strip()
         kwota_euro = row['euro'] 
 
-        # --- NOWA, SOLIDNA LOGIKA ---
         # 1. Sprawdź, czy etykieta jest POJAZDEM
-        # Pojazd to etykieta, której NIE ma na liście znanych typów kosztów/przychodu
         if etykieta not in WSZYSTKIE_ZNANE_ETYKIETY:
             aktualny_pojazd_oryg = etykieta
-            continue # Znaleźliśmy nowy pojazd, przechodzimy do następnego wiersza
+            continue 
 
         # 2. Jeśli to nie jest pojazd, to musi to być pozycja finansowa
-        # Musimy mieć już "aktywny" pojazd, żeby wiedzieć, do kogo ją przypisać
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
                 wyniki.append({
@@ -225,8 +220,9 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # 1. Stwórz 'pojazd_clean' z 'pojazd_oryg'
-    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+    # --- NOWA, SOLIDNA NORMALIZACJA ---
+    # 1. Stwórz 'pojazd_clean' (wyciągnij, usuń spacje, wielkie litery)
+    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
     
     # 2. Zgrupuj po 'pojazd_clean' aby skonsolidować dane
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
@@ -238,7 +234,7 @@ def przetworz_plik_analizy(przeslany_plik):
 # --- FUNKCJA main() (ZAKTUALIZOWANA ZAKŁADKA RENTOWNOŚĆ) ---
 def main_app():
     
-    st.title("Analizator Wydatków Floty") 
+    st.title("Analizator Wydatków Floty")
     
     tab_raport, tab_rentownosc, tab_admin = st.tabs([
         "📊 Raport Paliwowy", 
@@ -283,7 +279,8 @@ def main_app():
                         mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                         
                         dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
-                        dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+                        # --- NORMALIZACJA KLUCZA ---
+                        dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
                         dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
                         dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
                         dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
@@ -359,14 +356,13 @@ def main_app():
 
         plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
         
-        # Inicjalizuj 'raport_gotowy' w pamięci sesji
         if 'raport_gotowy' not in st.session_state:
             st.session_state['raport_gotowy'] = False
 
         if st.button("Generuj raport rentowności", type="primary"):
             if plik_analizy is None:
                 st.warning("Proszę, prześlij plik `analiza.xlsx`.")
-                st.session_state['raport_gotowy'] = False # Resetuj raport
+                st.session_state['raport_gotowy'] = False 
             else:
                 with st.spinner("Pracuję..."):
                     # KROK A: Pobierz koszty paliwa z bazy
@@ -383,7 +379,9 @@ def main_app():
                     unikalne_waluty = dane_z_bazy['waluta'].unique()
                     mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
                     
-                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+                    # --- NORMALIZACJA KLUCZA ---
+                    dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
+                    
                     dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
                     dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
                     dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
@@ -411,24 +409,26 @@ def main_app():
                             df_rentownosc['Koszty Paliwa/Opłat (z Bazy)']
                         )
                         
-                        # --- ZAPISZ WYNIKI DO PAMIĘCI SESJI ---
                         st.session_state['raport_gotowy'] = True
                         st.session_state['df_rentownosc'] = df_rentownosc
+                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" # Resetuj wybór
                         
         # --- BLOK WYŚWIETLANIA (Uruchamia się, jeśli raport jest gotowy) ---
         if st.session_state.get('raport_gotowy', False):
             
             st.subheader("Wyniki dla wybranego okresu")
             
-            # Pobierz zapisany raport z pamięci sesji
             df_rentownosc = st.session_state['df_rentownosc']
-            
-            # Sortujemy, aby znaleźć najbardziej dochodowe/stratne
             df_rentownosc = df_rentownosc.sort_values(by='ZYSK / STRATA (EUR)', ascending=False)
             
             lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc.index.unique())
             
-            wybrany_pojazd_rent = st.selectbox("Wybierz pojazd do analizy:", lista_pojazdow_rent)
+            # Używamy zapisanego stanu, aby selectbox nie resetował się sam
+            wybrany_pojazd_rent = st.selectbox(
+                "Wybierz pojazd do analizy:", 
+                lista_pojazdow_rent,
+                key='wybrany_pojazd_rent'
+            )
             
             if wybrany_pojazd_rent != "--- Wybierz pojazd ---":
                 try:
@@ -439,10 +439,8 @@ def main_app():
                     koszty_paliwa = dane_pojazdu['Koszty Paliwa/Opłat (z Bazy)']
                     zysk = dane_pojazdu['ZYSK / STRATA (EUR)']
                     
-                    # Kolorowanie zysku/straty
                     delta_color = "normal"
-                    if zysk < 0:
-                        delta_color = "inverse"
+                    if zysk < 0: delta_color = "inverse"
                     
                     st.metric(label="ZYSK / STRATA (EUR)", value=f"{zysk:,.2f} EUR", delta_color=delta_color)
                     
@@ -454,12 +452,10 @@ def main_app():
                 except KeyError:
                     st.error("Nie znaleziono danych dla tego pojazdu.")
             
-            # Suma łączna
             st.divider()
             zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
             st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
             
-            # Formatowanie finalnej tabeli
             df_rentownosc_display = df_rentownosc[[
                 'przychody', 
                 'koszty_inne', 
@@ -534,6 +530,9 @@ def check_password():
     # Inicjalizuj 'raport_gotowy' przy starcie sesji, jeśli nie istnieje
     if 'raport_gotowy' not in st.session_state:
         st.session_state['raport_gotowy'] = False
+    # Inicjalizuj 'wybrany_pojazd_rent' przy starcie sesji
+    if 'wybrany_pojazd_rent' not in st.session_state:
+        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
         
     if st.session_state.get("password_correct", False):
         return True
