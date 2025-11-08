@@ -24,54 +24,24 @@ NAZWA_SCHEMATU = "public"
 NAZWA_POLACZENIA_DB = "db" 
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
-# Na podstawie Twojego logu
 ETYKIETY_PRZYCHODOW = [
     'Faktura VAT sprzedaży',
-    'Korekta faktury VAT zakupu', # Korekta kosztu to przychód
+    'Korekta faktury VAT zakupu', 
     'Przychód wewnętrzny'
 ]
-
 ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu',
-    'Korekta faktury VAT sprzedaży', # Korekta przychodu to koszt
-    'Art. biurowe',
-    'Art. chemiczne',
-    'Art. spożywcze',
-    'Badanie lekarskie',
-    'Delegacja',
-    'Giełda',
-    'Księgowość',
-    'Leasing',
-    'Mandaty',
-    'Obsługa prawna',
-    'Ogłoszenie',
-    'Poczta Polska',
-    'Program',
-    'Prowizje',
-    'Rozliczanie kierowców',
-    'Rozliczenie VAT EUR',
-    'Serwis',
-    'Szkolenia BHP',
-    'Tachograf',
-    'USŁ. HOTELOWA',
-    'Usługi telekomunikacyjne',
-    'Wykup auta',
-    'Wysyłka kurierska',
-    'Zak. do auta',
-    'Zakup auta'
+    'Korekta faktury VAT sprzedaży', 
+    'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie',
+    'Delegacja', 'Giełda', 'Księgowość', 'Leasing', 'Mandaty', 'Obsługa prawna',
+    'Ogłoszenie', 'Poczta Polska', 'Program', 'Prowizje', 'Rozliczanie kierowców',
+    'Rozliczenie VAT EUR', 'Serwis', 'Szkolenia BHP', 'Tachograf', 'USŁ. HOTELOWA',
+    'Usługi telekomunikacyjne', 'Wykup auta', 'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta'
 ]
-
-# Te koszty będziemy ignorować, bo bierzemy je z bazy Eurowag/E100
 ETYKIETY_IGNOROWANE = [
-    'Opłata drogowa',
-    'Opłata drogowa DK',
-    'Tankowanie',
-    'Suma końcowa',
-    'Nr pojazdu',
-    'Zamówienie od klienta', # To nie jest jeszcze przychód
-    'Wydanie zewnętrzne' # To nie jest jeszcze koszt
+    'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końcowa', 'Nr pojazdu',
+    'Zamówienie od klienta', 'Wydanie zewnętrzne'
 ]
-
 
 # --- FUNKCJE NBP (BEZ ZMIAN) ---
 @st.cache_data
@@ -203,7 +173,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop):
     df = conn.query(query, params={"data_start": data_start, "data_stop": data_stop})
     return df
 
-# --- NOWA FUNKCJA DO PARSOWANIA PLIKU 'analiza.xlsx' ---
+# --- NOWA FUNKCJA DO PARSOWANIA PLIKU 'analiza.xlsx' (POPRAWIONA) ---
 @st.cache_data # Cache'ujemy, żeby nie czytać pliku przy każdej zmianie
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -216,59 +186,56 @@ def przetworz_plik_analizy(przeslany_plik):
         st.error(f"Nie udało się wczytać arkusza 'pojazdy' z pliku `analiza.xlsx`. Błąd: {e}")
         return None
 
-    # Czyszczenie - usuwamy wiersze, gdzie 'Etykiety wierszy' są puste
     df = df.dropna(subset=['Etykiety wierszy'])
     
     wyniki = []
-    aktualny_pojazd = None
+    aktualny_pojazd_oryg = None
     
     for index, row in df.iterrows():
         etykieta = row['Etykiety wierszy']
-        kwota = row['euro'] # Bierzemy tylko kwoty w euro, zgodnie z logiem
+        kwota_euro = row['euro'] # Bierzemy tylko kwoty w euro
 
-        # Sprawdzamy, czy to jest wiersz z identyfikatorem pojazdu
-        # Na podstawie logu: to są wiersze, gdzie kwota jest pusta (NaN)
-        if pd.isna(kwota):
-            aktualny_pojazd = str(etykieta).strip()
+        if pd.isna(kwota_euro):
+            aktualny_pojazd_oryg = str(etykieta).strip()
         
-        # Jeśli to wiersz z kwotą i mamy już pojazd
-        elif aktualny_pojazd is not None:
-            
+        elif aktualny_pojazd_oryg is not None:
             if etykieta in ETYKIETY_PRZYCHODOW:
                 wyniki.append({
-                    'pojazd': aktualny_pojazd,
-                    'przychody': kwota,
+                    'pojazd_oryg': aktualny_pojazd_oryg,
+                    'przychody': kwota_euro,
                     'koszty_inne': 0
                 })
             elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
                  wyniki.append({
-                    'pojazd': aktualny_pojazd,
+                    'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': 0,
-                    'koszty_inne': kwota # Zakładamy, że koszty są liczbami dodatnimi
+                    'koszty_inne': kwota_euro 
                 })
-            # Wiersze z ETYKIETY_IGNOROWANE są pomijane
             
     if not wyniki:
         st.error("Nie znaleziono żadnych danych o przychodach/kosztach w pliku `analiza.xlsx`.")
         return None
 
-    # Sumowanie danych
+    # --- POPRAWIONA LOGIKA AGREGACJI ---
     df_wyniki = pd.DataFrame(wyniki)
-    df_agregacja = df_wyniki.groupby('pojazd').sum()
     
-    # Czyszczenie identyfikatorów (np. 'PTU4761G+PTU9367F' -> 'PTU4761G')
-    df_agregacja['pojazd_clean'] = df_agregacja.index.str.extract(r'([A-Z0-9]{4,})')
+    # 1. Stwórz 'pojazd_clean' z 'pojazd_oryg'
+    # To wyciągnie 'PTU4761G' z 'PTU4761G+PTU9367F'
+    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).str.extract(r'([A-Z0-9]{4,})')
+    
+    # 2. Zgrupuj po 'pojazd_clean' aby skonsolidować dane
+    df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
+    # Zwracamy tabelę z 'pojazd_clean' jako indeksem
     return df_agregacja
 
 
-# --- FUNKCJA main() (DODANA NOWA ZAKŁADKA) ---
+# --- FUNKCJA main() (ZAKTUALIZOWANA ZAKŁADKA RENTOWNOŚĆ) ---
 def main_app():
     
-    st.title("Analizator Wydatków Floty") # Skrócony tytuł
+    st.title("Analizator Wydatków Floty")
     
-    # --- TRZY ZAKŁADKI ---
     tab_raport, tab_rentownosc, tab_admin = st.tabs([
         "📊 Raport Paliwowy", 
         "💰 Rentowność (Zysk/Strata)", 
@@ -364,7 +331,7 @@ def main_app():
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
-    # --- NOWA ZAKŁADKA: RENTOWNOŚĆ ---
+    # --- NOWA ZAKŁADKA: RENTOWNOŚĆ (POPRAWIONA) ---
     with tab_rentownosc:
         st.header("Raport Rentowności (Zysk/Strata)")
         
@@ -417,7 +384,6 @@ def main_app():
                     dane_z_bazy['kurs_do_eur'] = dane_z_bazy['waluta'].map(mapa_kursow).fillna(0.0)
                     dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_num'] * dane_z_bazy['kurs_do_eur']
                     
-                    # Sumujemy koszty paliwa per pojazd
                     df_koszty_paliwa = dane_z_bazy.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa/Opłat (z Bazy)')
 
                     # KROK B: Przetwórz plik 'analiza.xlsx'
@@ -425,24 +391,55 @@ def main_app():
                     
                     if df_analiza is not None:
                         # KROK C: Połącz oba źródła danych
-                        # Łączymy po 'pojazd_clean' z 'analiza.xlsx' i indeksie z 'df_koszty_paliwa'
                         df_rentownosc = df_analiza.merge(
                             df_koszty_paliwa, 
-                            left_on='pojazd_clean', 
-                            right_index=True, 
-                            how='outer' # 'outer' znaczy, że bierzemy wszystkie pojazdy z obu źródeł
+                            left_index=True, # <-- POPRAWKA: Łączymy po indeksie 'pojazd_clean'
+                            right_index=True, # <-- POPRAWKA: Łączymy po indeksie 'identyfikator_clean'
+                            how='outer'
                         )
                         
-                        # Wypełnij puste wartości zerami
                         df_rentownosc = df_rentownosc.fillna(0)
                         
                         # KROK D: Oblicz zysk
-                        # Pamiętaj: koszty_inne są już dodatnie w Excelu
                         df_rentownosc['ZYSK / STRATA (EUR)'] = (
                             df_rentownosc['przychody'] - 
                             df_rentownosc['koszty_inne'] - 
                             df_rentownosc['Koszty Paliwa/Opłat (z Bazy)']
                         )
+                        
+                        # KROK E: NOWY INTERFEJS (Selectbox)
+                        st.subheader("Wyniki dla wybranego okresu")
+                        
+                        # Sortujemy, aby znaleźć najbardziej dochodowe/stratne
+                        df_rentownosc = df_rentownosc.sort_values(by='ZYSK / STRATA (EUR)', ascending=False)
+                        
+                        lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc.index.unique())
+                        
+                        wybrany_pojazd_rent = st.selectbox("Wybierz pojazd do analizy:", lista_pojazdow_rent)
+                        
+                        if wybrany_pojazd_rent != "--- Wybierz pojazd ---":
+                            try:
+                                dane_pojazdu = df_rentownosc.loc[wybrany_pojazd_rent]
+                                
+                                przychody = dane_pojazdu['przychody']
+                                koszty_inne = dane_pojazdu['koszty_inne']
+                                koszty_paliwa = dane_pojazdu['Koszty Paliwa/Opłat (z Bazy)']
+                                zysk = dane_pojazdu['ZYSK / STRATA (EUR)']
+                                
+                                st.metric(label="ZYSK / STRATA (EUR)", value=f"{zysk:,.2f} EUR")
+                                
+                                col1, col2, col3 = st.columns(3)
+                                col1.metric("Przychód (z Subiekta)", f"{przychody:,.2f} EUR")
+                                col2.metric("Koszty Inne (z Subiekta)", f"{-koszty_inne:,.2f} EUR")
+                                col3.metric("Koszty Paliwa (z Bazy)", f"{-koszty_paliwa:,.2f} EUR")
+                            
+                            except KeyError:
+                                st.error("Nie znaleziono danych dla tego pojazdu.")
+                        
+                        # Suma łączna
+                        st.divider()
+                        zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
+                        st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
                         
                         # Formatowanie finalnej tabeli
                         df_rentownosc_display = df_rentownosc[[
@@ -451,15 +448,10 @@ def main_app():
                             'Koszty Paliwa/Opłat (z Bazy)',
                             'ZYSK / STRATA (EUR)'
                         ]].rename(columns={
-                            'przychody': 'Przychód (z Subiekta)',
-                            'koszty_inne': 'Koszty Inne (z Subiekta)'
-                        }).sort_values(by='ZYSK / STRATA (EUR)', ascending=False)
+                            'przychody': 'Przychód (Subiekt)',
+                            'koszty_inne': 'Koszty Inne (Subiekt)'
+                        })
                         
-                        # Suma łączna
-                        zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
-                        st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
-                        
-                        # Wyświetl tabelę
                         st.dataframe(
                             df_rentownosc_display.style.format("{:,.2f} EUR"),
                             use_container_width=True
