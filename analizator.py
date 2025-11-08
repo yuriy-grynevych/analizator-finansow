@@ -183,8 +183,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA ---
-    # To jest miejsce, gdzie był błąd - upewniamy się, że kolumna jest typu string
+    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (TUTAJ BYŁ OSTATNI BŁĄD) ---
     dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator'].astype(str).str.extract(r'([A-Z0-9]{4,})').str.upper().str.strip()
     dane_z_bazy['identyfikator_clean'] = dane_z_bazy['identyfikator_clean'].fillna('Brak Identyfikatora')
     
@@ -251,7 +250,7 @@ def przetworz_plik_analizy(przeslany_plik):
     return df_agregacja
 
 
-# --- FUNKCJA main() (POPRAWIONE MIEJSCA WYWOŁANIA) ---
+# --- FUNKCJA main() (BEZ ZMIAN) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
@@ -268,7 +267,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
@@ -343,7 +342,7 @@ def main_app():
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
 
-    # --- ZAKŁADKA 2: RENTOWNOŚĆ (POPRAWIONA) ---
+    # --- ZAKŁADKA 2: RENTOWNOŚĆ (BEZ ZMIAN) ---
     with tab_rentownosc:
         st.header("Raport Rentowności (Zysk/Strata)")
         
