@@ -10,7 +10,7 @@ from sqlalchemy import text
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- KOD DO UKRYCIA STOPKI I MENU (MENU JEST WIDOCZNE) ---
+# --- KOD DO UKRYCIA STOPKI I MENU ---
 hide_streamlit_style = """
             <style>
             footer {visibility: hidden;}
@@ -22,6 +22,21 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 NAZWA_TABELI = "transactions"
 NAZWA_SCHEMATU = "public"
 NAZWA_POLACZENIA_DB = "db" 
+
+# --- NOWY SŁOWNIK VAT ---
+# Dodaj więcej krajów i stawek według potrzeb
+VAT_RATES = {
+    "PL": 0.23, # Polska
+    "DE": 0.19, # Niemcy
+    "CZ": 0.21, # Czechy
+    "AT": 0.20, # Austria
+    "FR": 0.20, # Francja
+    "DK": 0.25, # Dania
+    "NL": 0.21, # Holandia
+    "BE": 0.21, # Belgia
+    "ES": 0.21, # Hiszpania
+    "IT": 0.22, # Włochy
+}
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
 ETYKIETY_PRZYCHODOW = [
@@ -80,7 +95,7 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
 
-# --- KATEGORYZACJA TRANSAKCJI (PRZENIESIONA WYŻEJ) ---
+# --- KATEGORYZACJA TRANSAKCJI (Z POPRAWKĄ DLA E100_EN) ---
 def kategoryzuj_transakcje(row, zrodlo):
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
@@ -94,11 +109,11 @@ def kategoryzuj_transakcje(row, zrodlo):
             return 'PALIWO', 'AdBlue'
         if 'OPENLOOP' in usluga or 'VISA' in usluga:
             return 'INNE', 'Płatność kartą'
-        return 'INNE', artykul # Inne
+        return 'INNE', artykul
         
-    elif zrodlo == 'E100':
+    elif zrodlo == 'E100_PL': # Kategoria dla E100 po Polsku
         usluga = str(row.get('Usługa', '')).upper()
-        kategoria = str(row.get('Kategoria', '')).upper() # Używamy kolumny 'Kategoria' z nowego pliku
+        kategoria = str(row.get('Kategoria', '')).upper()
         
         if 'TOLL' in usluga or 'OPŁATA DROGOWA' in usluga:
             return 'OPŁATA', 'Opłata drogowa'
@@ -106,7 +121,19 @@ def kategoryzuj_transakcje(row, zrodlo):
             return 'PALIWO', 'Diesel'
         if 'ADBLUE' in usluga or 'ADBLUE' in kategoria:
             return 'PALIWO', 'AdBlue'
-        return 'INNE', usluga # Inne
+        return 'INNE', usluga
+        
+    elif zrodlo == 'E100_EN': # Kategoria dla E100 po Angielsku
+        service = str(row.get('Service', '')).upper()
+        category = str(row.get('Category', '')).upper()
+        
+        if 'TOLL' in service:
+            return 'OPŁATA', 'Opłata drogowa'
+        if 'DIESEL' in service or 'DIESEL' in category:
+            return 'PALIWO', 'Diesel'
+        if 'ADBLUE' in service or 'ADBLUE' in category:
+            return 'PALIWO', 'AdBlue'
+        return 'INNE', service
         
     return 'INNE', 'Nieznane'
     
@@ -121,7 +148,6 @@ def normalizuj_eurowag(df_eurowag):
     df_out['ilosc'] = pd.to_numeric(df_eurowag['Ilość'], errors='coerce')
     df_out['zrodlo'] = 'Eurowag'
     
-    # Kategoryzacja
     kategorie = df_eurowag.apply(lambda row: kategoryzuj_transakcje(row, 'Eurowag'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -129,22 +155,46 @@ def normalizuj_eurowag(df_eurowag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-def normalizuj_e100(df_e100): # Zaktualizowany dla formatu z Twojego logu
+# Tłumacz dla pliku E100 po POLSKU
+def normalizuj_e100_PL(df_e100):
     df_out = pd.DataFrame()
-    # Używamy formatu DD.MM.YYYY i kolumny 'Czas'
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
     
-    # Plik z logu nie miał Netto, więc zakładamy 0
-    df_out['kwota_netto'] = 0.0 
-    # Używamy kolumny 'Kwota' jako brutto
-    df_out['kwota_brutto'] = pd.to_numeric(df_e100['Kwota'], errors='coerce')
+    kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
+    # NOWA LOGIKA VAT: Oblicz netto na podstawie kraju
+    vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) # 0% VAT dla nieznanych
+    df_out['kwota_netto'] = kwota_brutto / (1 + vat_rate)
+    df_out['kwota_brutto'] = kwota_brutto
+    
     df_out['waluta'] = df_e100['Waluta']
     df_out['ilosc'] = pd.to_numeric(df_e100['Ilość'], errors='coerce')
-    df_out['zrodlo'] = 'E100'
+    df_out['zrodlo'] = 'E100_PL'
     
-    # Kategoryzacja
-    kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100'), axis=1)
+    kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_PL'), axis=1)
+    df_out['typ'] = [kat[0] for kat in kategorie]
+    df_out['produkt'] = [kat[1] for kat in kategorie]
+    
+    df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
+    return df_out
+
+# Tłumacz dla pliku E100 po ANGIELSKU
+def normalizuj_e100_EN(df_e100):
+    df_out = pd.DataFrame()
+    df_out['data_transakcji'] = pd.to_datetime(df_e100['Date'] + ' ' + df_e100['Time'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
+    df_out['identyfikator'] = df_e100['Car registration number'].fillna(df_e100['Card number'])
+    
+    kwota_brutto = pd.to_numeric(df_e100['Sum'], errors='coerce')
+    # NOWA LOGIKA VAT: Oblicz netto na podstawie kraju
+    vat_rate = df_e100['Country'].map(VAT_RATES).fillna(0.0) # 0% VAT dla nieznanych
+    df_out['kwota_netto'] = kwota_brutto / (1 + vat_rate)
+    df_out['kwota_brutto'] = kwota_brutto
+    
+    df_out['waluta'] = df_e100['Currency']
+    df_out['ilosc'] = pd.to_numeric(df_e100['Quantity'], errors='coerce')
+    df_out['zrodlo'] = 'E100_EN'
+    
+    kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_EN'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
     
@@ -162,24 +212,29 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                 pass 
             
             elif nazwa_pliku_base.endswith(('.xls', '.xlsx')):
-                # Wczytujemy plik RAZ
                 xls = pd.ExcelFile(plik, engine='openpyxl')
                 
-                # --- NOWY DETEKTOR E100 ---
                 if 'Transactions' in xls.sheet_names:
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                     kolumny_e100 = df_e100.columns
-                    # Detektor dla formatu, który mi wysłałeś (ma 'Numer samochodu' i 'Kwota')
+                    
+                    # Detektor dla formatu PL (ma 'Numer samochodu' i 'Kwota')
                     if 'Numer samochodu' in kolumny_e100 and 'Kwota' in kolumny_e100:
-                        lista_df_zunifikowanych.append(normalizuj_e100(df_e100))
+                        st.write("   -> Wykryto format E100 (Polski)")
+                        lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100))
+                    # Detektor dla formatu EN (ma 'Car registration number' i 'Sum')
+                    elif 'Car registration number' in kolumny_e100 and 'Sum' in kolumny_e100:
+                        st.write("   -> Wykryto format E100 (Angielski)")
+                        lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100))
                     else:
-                        st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn (brak 'Numer samochodu' lub 'Kwota').")
+                        st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
                 
                 # Detektor Eurowag
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_eurowag = pd.read_excel(xls, sheet_name=0) 
                     kolumny_eurowag = df_eurowag.columns
                     if 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
+                        st.write("   -> Wykryto format Eurowag")
                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
                     else:
                          st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu Eurowag.")
@@ -319,14 +374,12 @@ def przetworz_plik_analizy(przeslany_plik):
 
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
-                # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                 wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': kwota_euro,
                     'koszty_inne': 0
                 })
             elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
-                 # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                  wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': 0,
