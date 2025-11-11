@@ -87,14 +87,14 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
 
-# --- KATEGORYZACJA TRANSAKCJI (ZMIANA W 'OPŁATA') ---
+# --- KATEGORYZACJA TRANSAKCJI (BEZ ZMIAN) ---
 def kategoryzuj_transakcje(row, zrodlo):
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
         artykul = str(row.get('Artykuł', '')).strip() # Zostawiamy oryginalny opis
         
         if 'TOLL' in usluga.upper() or 'OPŁATA DROGOWA' in usluga.upper():
-            return 'OPŁATA', artykul # <-- ZMIANA: Zwraca prawdziwy opis
+            return 'OPŁATA', artykul # Zwraca prawdziwy opis
         if 'DIESEL' in artykul.upper() or 'ON' in artykul.upper():
             return 'PALIWO', 'Diesel'
         if 'ADBLUE' in artykul.upper():
@@ -104,11 +104,11 @@ def kategoryzuj_transakcje(row, zrodlo):
         return 'INNE', artykul
         
     elif zrodlo == 'E100_PL':
-        usluga = str(row.get('Usługa', '')).strip() # Zostawiamy oryginalny opis
+        usluga = str(row.get('Usługa', '')).strip() 
         kategoria = str(row.get('Kategoria', '')).upper()
         
         if 'TOLL' in usluga.upper() or 'OPŁATA DROGOWA' in usluga.upper():
-            return 'OPŁATA', usluga # <-- ZMIANA: Zwraca prawdziwy opis
+            return 'OPŁATA', usluga 
         if 'ON' in usluga.upper() or 'DIESEL' in kategoria:
             return 'PALIWO', 'Diesel'
         if 'ADBLUE' in usluga.upper() or 'ADBLUE' in kategoria:
@@ -116,11 +116,11 @@ def kategoryzuj_transakcje(row, zrodlo):
         return 'INNE', usluga
         
     elif zrodlo == 'E100_EN':
-        service = str(row.get('Service', '')).strip() # Zostawiamy oryginalny opis
+        service = str(row.get('Service', '')).strip() 
         category = str(row.get('Category', '')).upper()
         
         if 'TOLL' in service.upper():
-            return 'OPŁATA', service # <-- ZMIANA: Zwraca prawdziwy opis
+            return 'OPŁATA', service 
         if 'DIESEL' in service.upper() or 'DIESEL' in category:
             return 'PALIWO', 'Diesel'
         if 'ADBLUE' in service.upper() or 'ADBLUE' in category:
@@ -129,11 +129,20 @@ def kategoryzuj_transakcje(row, zrodlo):
         
     return 'INNE', 'Nieznane'
     
-# --- NOWE FUNKCJE "TŁUMACZENIA" (Z POPRAWKĄ KATEGORII) ---
+# --- NOWE FUNKCJE "TŁUMACZENIA" (ZMIANA DLA EUROWAG) ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
-    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(df_eurowag['Karta'])
+    
+    # --- NOWA, LEPSZA LOGIKA IDENTYFIKATORA ---
+    # 1. Spróbuj 'Tablica rejestracyjna'
+    # 2. Jeśli puste, spróbuj 'Posiadacz karty' (bo tam jest np. "PL WGM0502K")
+    # 3. Jeśli puste, w ostateczności weź 'Karta'
+    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(
+                                df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta'])
+                            )
+    # --- KONIEC ZMIANY ---
+    
     df_out['kwota_netto'] = pd.to_numeric(df_eurowag['Kwota netto'], errors='coerce')
     df_out['kwota_brutto'] = pd.to_numeric(df_eurowag['Kwota brutto'], errors='coerce')
     df_out['waluta'] = df_eurowag['Waluta']
@@ -142,7 +151,7 @@ def normalizuj_eurowag(df_eurowag):
     
     kategorie = df_eurowag.apply(lambda row: kategoryzuj_transakcje(row, 'Eurowag'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
-    df_out['produkt'] = [kat[1] for kat in kategorie] # Teraz zawiera prawdziwy opis dla opłat
+    df_out['produkt'] = [kat[1] for kat in kategorie]
 
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
@@ -163,7 +172,7 @@ def normalizuj_e100_PL(df_e100):
     
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_PL'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
-    df_out['produkt'] = [kat[1] for kat in kategorie] # Teraz zawiera prawdziwy opis dla opłat
+    df_out['produkt'] = [kat[1] for kat in kategorie]
     
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
@@ -183,13 +192,13 @@ def normalizuj_e100_EN(df_e100):
     
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_EN'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
-    df_out['produkt'] = [kat[1] for kat in kategorie] # Teraz zawiera prawdziwy opis dla opłat
+    df_out['produkt'] = [kat[1] for kat in kategorie] 
     df_out['zrodlo'] = 'E100_EN'
     
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (BEZ ZMIAN) ---
+# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (ZMIANA DETEKTORA EUROWAG) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     lista_df_zunifikowanych = []
     for plik in przeslane_pliki:
@@ -215,12 +224,19 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                     else:
                         st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
                 
+                # --- ZMIANA: Sprawdzamy 'Posiadacz karty' ---
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_eurowag = pd.read_excel(xls, sheet_name=0) 
                     kolumny_eurowag = df_eurowag.columns
-                    if 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
-                        st.write("   -> Wykryto format Eurowag")
+                    if 'Data i godzina' in kolumny_eurowag and 'Posiadacz karty' in kolumny_eurowag:
+                        st.write("   -> Wykryto format Eurowag (Nowy)")
                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
+                    # Awaryjnie dla starszych plików
+                    elif 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
+                         st.write("   -> Wykryto format Eurowag (Starszy)")
+                         if 'Posiadacz karty' not in df_eurowag.columns:
+                             df_eurowag['Posiadacz karty'] = None # Wypełnij brakującą kolumnę
+                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
                     else:
                          st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu Eurowag.")
                 
@@ -377,14 +393,6 @@ def przetworz_plik_analizy(przeslany_plik):
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
     return df_agregacja
 
-# --- NOWA FUNKCJA: KONWERSJA DO EXCELA ---
-@st.cache_data
-def to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=True, sheet_name='Raport')
-    processed_data = output.getvalue()
-    return processed_data
 
 # --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
@@ -494,16 +502,16 @@ def main_app():
                             
                             filtr_paliwo = st.text_input("Filtruj pojazd:", key="filtr_paliwo").upper()
                             
-                            # --- ZMIANA: NOWA AGREGACJA DLA LITRÓW ---
                             podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
                                 Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                 Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                             )
                             
                             podsumowanie_litry = df_paliwo.groupby(['identyfikator_clean', 'produkt'])['ilosc'].sum().unstack(fill_value=0)
+                            if 'Diesel' not in podsumowanie_litry.columns: podsumowanie_litry['Diesel'] = 0
+                            if 'AdBlue' not in podsumowanie_litry.columns: podsumowanie_litry['AdBlue'] = 0
                             podsumowanie_litry = podsumowanie_litry.rename(columns={'Diesel': 'Litry (Diesel)', 'AdBlue': 'Litry (AdBlue)'})
                             
-                            # Łączymy tabele
                             podsumowanie_paliwo = podsumowanie_paliwo_kwoty.merge(podsumowanie_litry, left_index=True, right_index=True, how='left').fillna(0)
                             podsumowanie_paliwo = podsumowanie_paliwo.sort_values(by='Kwota_Brutto_EUR', ascending=False)
                             
@@ -515,18 +523,13 @@ def main_app():
                                 value=f"{podsumowanie_paliwo['Kwota_Brutto_EUR'].sum():,.2f} EUR"
                             )
                             
-                            # Definiujemy, które kolumny pokazać (na wypadek, gdyby brakowało AdBlue lub Diesla)
-                            kolumny_do_pokazania = ['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']
+                            kolumny_do_pokazania = ['Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 'Litry (Diesel)', 'Litry (AdBlue)']
                             formatowanie = {
                                 'Kwota_Netto_EUR': '{:,.2f} EUR',
                                 'Kwota_Brutto_EUR': '{:,.2f} EUR',
+                                'Litry (Diesel)': '{:,.2f} L',
+                                'Litry (AdBlue)': '{:,.2f} L'
                             }
-                            if 'Litry (Diesel)' in podsumowanie_paliwo.columns:
-                                kolumny_do_pokazania.append('Litry (Diesel)')
-                                formatowanie['Litry (Diesel)'] = '{:,.2f} L'
-                            if 'Litry (AdBlue)' in podsumowanie_paliwo.columns:
-                                kolumny_do_pokazania.append('Litry (AdBlue)')
-                                formatowanie['Litry (AdBlue)'] = '{:,.2f} L'
 
                             st.dataframe(
                                 podsumowanie_paliwo[kolumny_do_pokazania].style.format(formatowanie), 
@@ -603,7 +606,6 @@ def main_app():
                             
                             if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
                                 df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
-                                # ZMIANA: 'produkt' zawiera teraz prawdziwy opis
                                 df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
                                 st.dataframe(
                                     df_szczegoly_oplaty_display.rename(columns={
