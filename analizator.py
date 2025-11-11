@@ -6,12 +6,12 @@ import streamlit as st
 import time
 from datetime import date
 from sqlalchemy import text 
-import io # Potrzebne do eksportu Excela
+import io # <-- BRAKOWAŁO TEGO IMPORTU
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- KOD DO UKRYCIA STOPKI I MENU (MENU JEST WIDOCZNE) ---
+# --- KOD DO UKRYCIA STOPKI I MENU ---
 hide_streamlit_style = """
             <style>
             footer {visibility: hidden;}
@@ -87,7 +87,7 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
 
-# --- KATEGORYZACJA TRANSAKCJI (PRZENIESIONA WYŻEJ) ---
+# --- KATEGORYZACJA TRANSAKCJI (BEZ ZMIAN) ---
 def kategoryzuj_transakcje(row, zrodlo):
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
@@ -129,20 +129,11 @@ def kategoryzuj_transakcje(row, zrodlo):
         
     return 'INNE', 'Nieznane'
     
-# --- NOWE FUNKCJE "TŁUMACZENIA" (ZMIANA DLA EUROWAG) ---
+# --- NOWE FUNKCJE "TŁUMACZENIA" ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
-    
-    # --- NOWA, LEPSZA LOGIKA IDENTYFIKATORA ---
-    # 1. Spróbuj 'Tablica rejestracyjna'
-    # 2. Jeśli puste, spróbuj 'Posiadacz karty' (bo tam jest np. "PL WGM0502K")
-    # 3. Jeśli oba są puste, w ostateczności weź 'Karta'
-    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(
-                                df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta'])
-                            )
-    # --- KONIEC ZMIANY ---
-    
+    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta']))
     df_out['kwota_netto'] = pd.to_numeric(df_eurowag['Kwota netto'], errors='coerce')
     df_out['kwota_brutto'] = pd.to_numeric(df_eurowag['Kwota brutto'], errors='coerce')
     df_out['waluta'] = df_eurowag['Waluta']
@@ -227,7 +218,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_eurowag = pd.read_excel(xls, sheet_name=0) 
                     kolumny_eurowag = df_eurowag.columns
-                    # --- ZMIANA: Sprawdzamy 'Posiadacz karty' ---
                     if 'Data i godzina' in kolumny_eurowag and 'Posiadacz karty' in kolumny_eurowag:
                         st.write("   -> Wykryto format Eurowag (Nowy)")
                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
@@ -251,9 +241,8 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (NOWA STRUKTURA) ---
+# --- FUNKCJE BAZY DANYCH (BEZ ZMIAN) ---
 def setup_database(conn):
-    """Tworzy nową, rozbudowaną tabelę 'transactions'."""
     with conn.session as s:
         s.execute(text(f"""
             CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
@@ -289,29 +278,20 @@ def wyczysc_duplikaty(conn):
         s.commit()
 
 def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
-    """
-    Pobiera dane z bazy. Opcjonalnie filtruje po 'typ' (PALIWO, OPŁATA, INNE).
-    """
     params = {"data_start": data_start, "data_stop": data_stop}
-    
     query = f"""
         SELECT * FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}
         WHERE (data_transakcji::date) >= :data_start 
           AND (data_transakcji::date) <= :data_stop
     """
-    
     if typ:
         query += " AND typ = :typ"
         params["typ"] = typ
-        
     df = conn.query(query, params=params)
     return df
 
 # --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
-    """
-    Czyści klucze i przelicza waluty.
-    """
     if dane_z_bazy.empty:
         return dane_z_bazy, None
         
@@ -402,13 +382,20 @@ def przetworz_plik_analizy(przeslany_plik):
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
     return df_agregacja
 
+# --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
+@st.cache_data
+def to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=True, sheet_name='Raport')
+    processed_data = output.getvalue()
+    return processed_data
 
 # --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
     
-    # --- POPRAWKA: PANEL ADMINA JEST PIERWSZY ---
     tab_admin, tab_raport, tab_rentownosc = st.tabs([
         "⚙️ Panel Admina",
         "📊 Raport Paliw/Opłat", 
