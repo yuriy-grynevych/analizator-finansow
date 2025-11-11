@@ -10,7 +10,7 @@ from sqlalchemy import text
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- KOD DO UKRYCIA STOPKI I MENU ---
+# --- KOD DO UKRYCIA STOPKI I MENU (MENU JEST WIDOCZNE) ---
 hide_streamlit_style = """
             <style>
             footer {visibility: hidden;}
@@ -24,7 +24,6 @@ NAZWA_SCHEMATU = "public"
 NAZWA_POLACZENIA_DB = "db" 
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
-# (Na razie nieużywane, ale zostawiamy na później)
 ETYKIETY_PRZYCHODOW = [
     'Faktura VAT sprzedaży', 'Korekta faktury VAT zakupu', 'Przychód wewnętrzny'
 ]
@@ -110,7 +109,7 @@ def kategoryzuj_transakcje(row, zrodlo):
         return 'INNE', usluga # Inne
         
     return 'INNE', 'Nieznane'
-
+    
 # --- NOWE FUNKCJE "TŁUMACZENIA" ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
@@ -122,6 +121,7 @@ def normalizuj_eurowag(df_eurowag):
     df_out['ilosc'] = pd.to_numeric(df_eurowag['Ilość'], errors='coerce')
     df_out['zrodlo'] = 'Eurowag'
     
+    # Kategoryzacja
     kategorie = df_eurowag.apply(lambda row: kategoryzuj_transakcje(row, 'Eurowag'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -162,6 +162,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                 pass 
             
             elif nazwa_pliku_base.endswith(('.xls', '.xlsx')):
+                # Wczytujemy plik RAZ
                 xls = pd.ExcelFile(plik, engine='openpyxl')
                 
                 # --- NOWY DETEKTOR E100 ---
@@ -290,7 +291,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONY BŁĄD 'PUSHED') ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -318,12 +319,14 @@ def przetworz_plik_analizy(przeslany_plik):
 
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
+                # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                 wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': kwota_euro,
                     'koszty_inne': 0
                 })
             elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
+                 # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                  wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': 0,
