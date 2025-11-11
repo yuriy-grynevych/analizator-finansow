@@ -291,21 +291,23 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     return df
 
 # --- NOWA, BEZPIECZNA FUNKCJA DO CZYSZCZENIA KLUCZY ---
-def bezpieczne_czyszczenie_klucza(s):
+def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     """Otrzymuje całą kolumnę (Serię) i czyści ją w bezpieczny sposób."""
-    # 1. Konwertuj na string
-    s_str = s.astype(str)
+    # 1. Konwertuj na string, na wypadek gdyby były tam liczby lub inne typy
+    s_str = s_identyfikatorow.astype(str)
     
-    # 2. Wyodrębnij pierwszą grupę alfanumeryczną (4+ znaki)
-    s_extracted = s_str.str.extract(r'([A-Z0-9]{4,})', flags=re.IGNORECASE)
-    
-    # 3. Wypełnij puste, zamień na wielkie litery i usuń spacje
-    s_cleaned = s_extracted[0].fillna('Brak Identyfikatora').str.upper().str.strip()
-    
-    # 4. Zamień puste stringi (jeśli jakieś powstały) na 'Brak Identyfikatora'
-    s_cleaned = s_cleaned.replace('', 'Brak Identyfikatora')
-    
-    return s_cleaned
+    # 2. Funkcja do czyszczenia pojedynczego klucza
+    def clean_key(key):
+        if key == 'nan' or not key: 
+            return 'Brak Identyfikatora'
+        # Wyciąga pierwszą grupę liter/cyfr (np. "PL WGM0502K" -> "WGM0502K")
+        match = re.search(r'([A-Z0-9]{4,})', key)
+        if match:
+            return match.group(1).upper().strip()
+        return 'Brak Identyfikatora'
+        
+    # 3. Zastosuj funkcję do każdego elementu w kolumnie
+    return s_str.apply(clean_key)
 
 # --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
