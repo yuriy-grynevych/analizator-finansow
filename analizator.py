@@ -23,19 +23,10 @@ NAZWA_TABELI = "transactions"
 NAZWA_SCHEMATU = "public"
 NAZWA_POLACZENIA_DB = "db" 
 
-# --- NOWY SŁOWNIK VAT ---
-# Dodaj więcej krajów i stawek według potrzeb
+# --- SŁOWNIK VAT ---
 VAT_RATES = {
-    "PL": 0.23, # Polska
-    "DE": 0.19, # Niemcy
-    "CZ": 0.21, # Czechy
-    "AT": 0.20, # Austria
-    "FR": 0.20, # Francja
-    "DK": 0.25, # Dania
-    "NL": 0.21, # Holandia
-    "BE": 0.21, # Belgia
-    "ES": 0.21, # Hiszpania
-    "IT": 0.22, # Włochy
+    "PL": 0.23, "DE": 0.19, "CZ": 0.21, "AT": 0.20, "FR": 0.20,
+    "DK": 0.25, "NL": 0.21, "BE": 0.21, "ES": 0.21, "IT": 0.22,
 }
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
@@ -95,7 +86,7 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
 
-# --- KATEGORYZACJA TRANSAKCJI (Z POPRAWKĄ DLA E100_EN) ---
+# --- KATEGORYZACJA TRANSAKCJI (BEZ ZMIAN) ---
 def kategoryzuj_transakcje(row, zrodlo):
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
@@ -111,7 +102,7 @@ def kategoryzuj_transakcje(row, zrodlo):
             return 'INNE', 'Płatność kartą'
         return 'INNE', artykul
         
-    elif zrodlo == 'E100_PL': # Kategoria dla E100 po Polsku
+    elif zrodlo == 'E100_PL':
         usluga = str(row.get('Usługa', '')).upper()
         kategoria = str(row.get('Kategoria', '')).upper()
         
@@ -123,7 +114,7 @@ def kategoryzuj_transakcje(row, zrodlo):
             return 'PALIWO', 'AdBlue'
         return 'INNE', usluga
         
-    elif zrodlo == 'E100_EN': # Kategoria dla E100 po Angielsku
+    elif zrodlo == 'E100_EN':
         service = str(row.get('Service', '')).upper()
         category = str(row.get('Category', '')).upper()
         
@@ -155,15 +146,13 @@ def normalizuj_eurowag(df_eurowag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# Tłumacz dla pliku E100 po POLSKU
 def normalizuj_e100_PL(df_e100):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
     
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
-    # NOWA LOGIKA VAT: Oblicz netto na podstawie kraju
-    vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) # 0% VAT dla nieznanych
+    vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) 
     df_out['kwota_netto'] = kwota_brutto / (1 + vat_rate)
     df_out['kwota_brutto'] = kwota_brutto
     
@@ -178,15 +167,13 @@ def normalizuj_e100_PL(df_e100):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# Tłumacz dla pliku E100 po ANGIELSKU
 def normalizuj_e100_EN(df_e100):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Date'] + ' ' + df_e100['Time'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     df_out['identyfikator'] = df_e100['Car registration number'].fillna(df_e100['Card number'])
     
     kwota_brutto = pd.to_numeric(df_e100['Sum'], errors='coerce')
-    # NOWA LOGIKA VAT: Oblicz netto na podstawie kraju
-    vat_rate = df_e100['Country'].map(VAT_RATES).fillna(0.0) # 0% VAT dla nieznanych
+    vat_rate = df_e100['Country'].map(VAT_RATES).fillna(0.0) 
     df_out['kwota_netto'] = kwota_brutto / (1 + vat_rate)
     df_out['kwota_brutto'] = kwota_brutto
     
@@ -218,18 +205,15 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                     kolumny_e100 = df_e100.columns
                     
-                    # Detektor dla formatu PL (ma 'Numer samochodu' i 'Kwota')
                     if 'Numer samochodu' in kolumny_e100 and 'Kwota' in kolumny_e100:
                         st.write("   -> Wykryto format E100 (Polski)")
                         lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100))
-                    # Detektor dla formatu EN (ma 'Car registration number' i 'Sum')
                     elif 'Car registration number' in kolumny_e100 and 'Sum' in kolumny_e100:
                         st.write("   -> Wykryto format E100 (Angielski)")
                         lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100))
                     else:
                         st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
                 
-                # Detektor Eurowag
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_eurowag = pd.read_excel(xls, sheet_name=0) 
                     kolumny_eurowag = df_eurowag.columns
