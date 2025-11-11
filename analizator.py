@@ -387,15 +387,16 @@ def przetworz_plik_analizy(przeslany_plik):
     return df_agregacja
 
 
-# --- FUNKCJA main() (ZE ZMIANAMI) ---
+# --- FUNKCJA main() (ZMIENIONA KOLEJNOŚĆ ZAKŁADEK) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
     
-    tab_raport, tab_rentownosc, tab_admin = st.tabs([
+    # --- POPRAWKA: PANEL ADMINA JEST PIERWSZY ---
+    tab_admin, tab_raport, tab_rentownosc = st.tabs([
+        "⚙️ Panel Admina",
         "📊 Raport Paliw/Opłat", 
-        "💰 Rentowność (Zysk/Strata)", 
-        "⚙️ Panel Admina"
+        "💰 Rentowność (Zysk/Strata)"
     ])
 
     try:
@@ -404,7 +405,55 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (PRZEBUDOWANA) ---
+    # --- ZAKŁADKA 1: PANEL ADMINA (TERAZ PIERWSZA) ---
+    with tab_admin:
+        st.header("Panel Administracyjny")
+        
+        st.success("Zalogowano pomyślnie!")
+
+        if st.button("1. Stwórz tabelę w bazie danych (tylko raz!)"):
+            with st.spinner("Tworzenie tabeli..."):
+                setup_database(conn)
+            st.success("Tabela 'transactions' jest gotowa.")
+
+        st.subheader("Wgrywanie nowych plików (Paliwo/Opłaty)")
+        przeslane_pliki = st.file_uploader(
+            "Wybierz pliki Eurowag i E100 do dodania do bazy",
+            accept_multiple_files=True,
+            type=['xlsx', 'xls']
+        )
+        
+        if przeslane_pliki:
+            if st.button("2. Przetwórz i wgraj pliki do bazy", type="primary"):
+                with st.spinner("Wczytywanie i unifikowanie plików..."):
+                    dane_do_wgrania, blad = wczytaj_i_zunifikuj_pliki(przeslane_pliki)
+                
+                if blad:
+                    st.error(blad)
+                else:
+                    st.success(f"Zunifikowano {len(dane_do_wgrania)} nowych transakcji.")
+                    
+                    with st.spinner("Zapisywanie danych w bazie..."):
+                        try:
+                            dane_do_wgrania.to_sql(
+                                NAZWA_TABELI, 
+                                conn.engine, 
+                                if_exists='append', 
+                                index=False, 
+                                schema=NAZWA_SCHEMATU
+                            )
+                        except Exception as e:
+                            st.error(f"Błąd podczas zapisu do bazy: {e}")
+                            st.info("WSKAZÓWKA: Czy na pewno kliknąłeś 'Stwórz tabelę w bazie danych'?")
+                            st.stop()
+                            
+                    st.success("Dane zostały pomyślnie zapisane w bazie!")
+                    
+                    with st.spinner("Czyszczenie duplikatów..."):
+                        wyczysc_duplikaty(conn)
+                    st.success("Baza danych została oczyszczona. Gotowe!")
+
+    # --- ZAKŁADKA 2: RAPORT GŁÓWNY (TERAZ DRUGA) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
@@ -532,7 +581,7 @@ def main_app():
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
                  st.exception(e) 
 
-    # --- ZAKŁADKA 2: RENTOWNOŚĆ (BEZ ZMIAN) ---
+    # --- ZAKŁADKA 3: RENTOWNOŚĆ (TERAZ TRZECIA) ---
     with tab_rentownosc:
         st.header("Raport Rentowności (Zysk/Strata)")
         try:
@@ -650,53 +699,6 @@ def main_app():
                 use_container_width=True
             )
 
-    # --- ZAKŁADKA 3: PANEL ADMINA (BEZ ZMIAN) ---
-    with tab_admin:
-        st.header("Panel Administracyjny")
-        
-        st.success("Zalogowano pomyślnie!")
-
-        if st.button("1. Stwórz tabelę w bazie danych (tylko raz!)"):
-            with st.spinner("Tworzenie tabeli..."):
-                setup_database(conn)
-            st.success("Tabela 'transactions' jest gotowa.")
-
-        st.subheader("Wgrywanie nowych plików (Paliwo/Opłaty)")
-        przeslane_pliki = st.file_uploader(
-            "Wybierz pliki Eurowag i E100 do dodania do bazy",
-            accept_multiple_files=True,
-            type=['xlsx', 'xls']
-        )
-        
-        if przeslane_pliki:
-            if st.button("2. Przetwórz i wgraj pliki do bazy", type="primary"):
-                with st.spinner("Wczytywanie i unifikowanie plików..."):
-                    dane_do_wgrania, blad = wczytaj_i_zunifikuj_pliki(przeslane_pliki)
-                
-                if blad:
-                    st.error(blad)
-                else:
-                    st.success(f"Zunifikowano {len(dane_do_wgrania)} nowych transakcji.")
-                    
-                    with st.spinner("Zapisywanie danych w bazie..."):
-                        try:
-                            dane_do_wgrania.to_sql(
-                                NAZWA_TABELI, 
-                                conn.engine, 
-                                if_exists='append', 
-                                index=False, 
-                                schema=NAZWA_SCHEMATU
-                            )
-                        except Exception as e:
-                            st.error(f"Błąd podczas zapisu do bazy: {e}")
-                            st.info("WSKAZÓWKA: Czy na pewno kliknąłeś 'Stwórz tabelę w bazie danych'?")
-                            st.stop()
-                            
-                    st.success("Dane zostały pomyślnie zapisane w bazie!")
-                    
-                    with st.spinner("Czyszczenie duplikatów..."):
-                        wyczysc_duplikaty(conn)
-                    st.success("Baza danych została oczyszczona. Gotowe!")
 
 # --- LOGIKA LOGOWANIA (BEZ ZMIAN) ---
 def check_password():
