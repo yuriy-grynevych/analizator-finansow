@@ -6,7 +6,7 @@ import streamlit as st
 import time
 from datetime import date
 from sqlalchemy import text 
-import io # Potrzebne do eksportu Excela
+import io # <-- BRAKOWAŁO TEGO IMPORTU
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
@@ -91,10 +91,10 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
 def kategoryzuj_transakcje(row, zrodlo):
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
-        artykul = str(row.get('Artykuł', '')).strip() # Zostawiamy oryginalny opis
+        artykul = str(row.get('Artykuł', '')).strip() 
         
         if 'TOLL' in usluga.upper() or 'OPŁATA DROGOWA' in usluga.upper():
-            return 'OPŁATA', artykul # Zwraca prawdziwy opis
+            return 'OPŁATA', artykul 
         if 'DIESEL' in artykul.upper() or 'ON' in artykul.upper():
             return 'PALIWO', 'Diesel'
         if 'ADBLUE' in artykul.upper():
@@ -129,20 +129,11 @@ def kategoryzuj_transakcje(row, zrodlo):
         
     return 'INNE', 'Nieznane'
     
-# --- NOWE FUNKCJE "TŁUMACZENIA" (ZMIANA DLA EUROWAG) ---
+# --- NOWE FUNKCJE "TŁUMACZENIA" ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
-    
-    # --- NOWA, LEPSZA LOGIKA IDENTYFIKATORA (Twoja prośba) ---
-    # 1. Spróbuj 'Tablica rejestracyjna'
-    # 2. Jeśli puste, spróbuj 'Posiadacz karty' (bo tam jest np. "PL WGM0502K")
-    # 3. Jeśli oba są puste, w ostateczności weź 'Karta'
-    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(
-                                df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta'])
-                            )
-    # --- KONIEC ZMIANY ---
-    
+    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta']))
     df_out['kwota_netto'] = pd.to_numeric(df_eurowag['Kwota netto'], errors='coerce')
     df_out['kwota_brutto'] = pd.to_numeric(df_eurowag['Kwota brutto'], errors='coerce')
     df_out['waluta'] = df_eurowag['Waluta']
@@ -198,7 +189,7 @@ def normalizuj_e100_EN(df_e100):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (ZMIANA DETEKTORA EUROWAG) ---
+# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (POPRAWIONA) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     lista_df_zunifikowanych = []
     for plik in przeslane_pliki:
@@ -224,15 +215,12 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                     else:
                         st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
                 
-                # --- ZMIANA: Sprawdzamy 'Posiadacz karty' ---
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_eurowag = pd.read_excel(xls, sheet_name=0) 
                     kolumny_eurowag = df_eurowag.columns
-                    # Detektor dla nowego pliku Eurowag
                     if 'Data i godzina' in kolumny_eurowag and 'Posiadacz karty' in kolumny_eurowag:
                         st.write("   -> Wykryto format Eurowag (Nowy)")
                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
-                    # Awaryjnie dla starszych plików
                     elif 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
                          st.write("   -> Wykryto format Eurowag (Starszy)")
                          if 'Posiadacz karty' not in df_eurowag.columns:
@@ -302,26 +290,37 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     df = conn.query(query, params=params)
     return df
 
+# --- NOWA, BEZPIECZNA FUNKCJA DO CZYSZCZENIA KLUCZY ---
+def bezpieczne_czyszczenie_klucza(s):
+    """Otrzymuje całą kolumnę (Serię) i czyści ją w bezpieczny sposób."""
+    # 1. Konwertuj na string
+    s_str = s.astype(str)
+    
+    # 2. Wyodrębnij pierwszą grupę alfanumeryczną (4+ znaki)
+    s_extracted = s_str.str.extract(r'([A-Z0-9]{4,})', flags=re.IGNORECASE)
+    
+    # 3. Wypełnij puste, zamień na wielkie litery i usuń spacje
+    s_cleaned = s_extracted[0].fillna('Brak Identyfikatora').str.upper().str.strip()
+    
+    # 4. Zamień puste stringi (jeśli jakieś powstały) na 'Brak Identyfikatora'
+    s_cleaned = s_cleaned.replace('', 'Brak Identyfikatora')
+    
+    return s_cleaned
+
 # --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
+    """
+    Czyści klucze i przelicza waluty.
+    """
     if dane_z_bazy.empty:
         return dane_z_bazy, None
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    identyfikatory = dane_z_bazy['identyfikator'].astype(str)
+    # --- UŻYCIE NOWEJ, BEZPIECZNEJ FUNKCJI ---
+    dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
-    def clean_key(key):
-        if key == 'nan' or not key: 
-            return 'Brak Identyfikatora'
-        # Wyciąga pierwszą grupę liter/cyfr (np. "PL WGM0502K" -> "WGM0502K")
-        match = re.search(r'([A-Z0-9]{4,})', key)
-        if match:
-            return match.group(1).upper().strip()
-        return 'Brak Identyfikatora'
-        
-    dane_z_bazy['identyfikator_clean'] = identyfikatory.apply(clean_key)
-    
+    # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
     kurs_eur = pobierz_kurs_eur_pln()
     if not kurs_eur: return None, None
     unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -339,7 +338,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONY BŁĄD 'PUSHED') ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -385,15 +384,14 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).apply(
-        lambda x: re.search(r'([A-Z0-9]{4,})', str(x).upper()).group(1).strip() 
-        if re.search(r'([A-Z0-9]{4,})', str(x).upper()) else 'Brak Identyfikatora'
-    )
+    # --- UŻYCIE NOWEJ, BEZPIECZNEJ FUNKCJI ---
+    df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
 
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
     return df_agregacja
+
 
 # --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
 @st.cache_data
