@@ -10,7 +10,7 @@ from sqlalchemy import text
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- KOD DO UKRYCIA STOPKI I MENU (MENU JEST WIDOCZNE) ---
+# --- KOD DO UKRYCIA STOPKI I MENU ---
 hide_streamlit_style = """
             <style>
             footer {visibility: hidden;}
@@ -24,6 +24,7 @@ NAZWA_SCHEMATU = "public"
 NAZWA_POLACZENIA_DB = "db" 
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
+# (Na razie nieużywane, ale zostawiamy na później)
 ETYKIETY_PRZYCHODOW = [
     'Faktura VAT sprzedaży', 'Korekta faktury VAT zakupu', 'Przychód wewnętrzny'
 ]
@@ -80,7 +81,37 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
 
-# --- FUNKCJE "TŁUMACZENIA" (BEZ ZMIAN) ---
+# --- KATEGORYZACJA TRANSAKCJI (PRZENIESIONA WYŻEJ) ---
+def kategoryzuj_transakcje(row, zrodlo):
+    if zrodlo == 'Eurowag':
+        usluga = str(row.get('Usługa', '')).upper()
+        artykul = str(row.get('Artykuł', '')).upper()
+        
+        if 'TOLL' in usluga or 'OPŁATA DROGOWA' in usluga:
+            return 'OPŁATA', 'Opłata drogowa'
+        if 'DIESEL' in artykul or 'ON' in artykul:
+            return 'PALIWO', 'Diesel'
+        if 'ADBLUE' in artykul:
+            return 'PALIWO', 'AdBlue'
+        if 'OPENLOOP' in usluga or 'VISA' in usluga:
+            return 'INNE', 'Płatność kartą'
+        return 'INNE', artykul # Inne
+        
+    elif zrodlo == 'E100':
+        usluga = str(row.get('Usługa', '')).upper()
+        produkt = str(row.get('Produkt', '')).upper() # Używamy nowej kolumny 'Produkt'
+        
+        if 'TOLL' in usluga or 'OPŁATA DROGOWA' in usluga:
+            return 'OPŁATA', 'Opłata drogowa'
+        if 'ON' in usluga or 'DIESEL' in produkt:
+            return 'PALIWO', 'Diesel'
+        if 'ADBLUE' in usluga or 'ADBLUE' in produkt:
+            return 'PALIWO', 'AdBlue'
+        return 'INNE', usluga # Inne
+        
+    return 'INNE', 'Nieznane'
+
+# --- NOWE FUNKCJE "TŁUMACZENIA" ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
@@ -91,6 +122,7 @@ def normalizuj_eurowag(df_eurowag):
     df_out['ilosc'] = pd.to_numeric(df_eurowag['Ilość'], errors='coerce')
     df_out['zrodlo'] = 'Eurowag'
     
+    # Kategoryzacja
     kategorie = df_eurowag.apply(lambda row: kategoryzuj_transakcje(row, 'Eurowag'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -98,16 +130,18 @@ def normalizuj_eurowag(df_eurowag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-def normalizuj_e100(df_e100):
+def normalizuj_e100(df_e100): # Zaktualizowany dla nowego formatu E100
     df_out = pd.DataFrame()
-    df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
-    df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
-    df_out['kwota_netto'] = 0.0 
-    df_out['kwota_brutto'] = pd.to_numeric(df_e100['Kwota'], errors='coerce')
+    df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Godzina'], errors='coerce') # Używamy 'Godzina'
+    df_out['identyfikator'] = df_e100['Pojazd'].fillna(df_e100['Numer karty']) # Używamy 'Pojazd'
+    
+    df_out['kwota_netto'] = pd.to_numeric(df_e100['Kwota netto'], errors='coerce') # Mamy teraz Netto!
+    df_out['kwota_brutto'] = pd.to_numeric(df_e100['Kwota brutto'], errors='coerce') # Używamy 'Kwota brutto'
     df_out['waluta'] = df_e100['Waluta']
     df_out['ilosc'] = pd.to_numeric(df_e100['Ilość'], errors='coerce')
     df_out['zrodlo'] = 'E100'
     
+    # Kategoryzacja
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -127,18 +161,29 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
             
             elif nazwa_pliku_base.endswith(('.xls', '.xlsx')):
                 # Wczytujemy plik RAZ
-                xls_file = pd.ExcelFile(plik, engine='openpyxl')
+                xls = pd.ExcelFile(plik, engine='openpyxl')
                 
-                if 'Transactions' in xls_file.sheet_names:
-                    df_e100 = pd.read_excel(xls_file, sheet_name='Transactions')
-                    if 'Numer samochodu' in df_e100.columns and 'Numer karty' in df_e100.columns:
+                # Sprawdzamy, czy to plik E100 (ma arkusz 'Transactions')
+                if 'Transactions' in xls.sheet_names:
+                    df_e100 = pd.read_excel(xls, sheet_name='Transactions')
+                    kolumny_e100 = df_e100.columns
+                    # Detektor dla NOWEGO formatu E100
+                    if 'ID Transakcji' in kolumny_e100 and 'Pojazd' in kolumny_e100:
                         lista_df_zunifikowanych.append(normalizuj_e100(df_e100))
+                    # Detektor dla STAREGO formatu E100
+                    elif 'Numer samochodu' in kolumny_e100 and 'Numer karty' in kolumny_e100:
+                        st.warning("Wykryto stary format E100. Przetwarzanie...")
+                        # (Tutaj musielibyśmy napisać 'normalizuj_e100_stary', ale na razie pomijamy)
+                        # Na razie dostosowujemy się do nowego
+                        st.error("Stary format E100 nie jest już obsługiwany. Skontaktuj się z administratorem.")
                     else:
                         st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
                 
-                elif 'Sheet0' in xls_file.sheet_names or len(xls_file.sheet_names) > 0:
-                    df_eurowag = pd.read_excel(xls_file, sheet_name=0) 
-                    if 'Data i godzina' in df_eurowag.columns and 'Artykuł' in df_eurowag.columns:
+                # Sprawdzamy, czy to plik Eurowag (domyślnie pierwszy arkusz)
+                elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
+                    df_eurowag = pd.read_excel(xls, sheet_name=0) 
+                    kolumny_eurowag = df_eurowag.columns
+                    if 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
                     else:
                          st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu Eurowag.")
@@ -211,7 +256,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     df = conn.query(query, params=params)
     return df
 
-# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE (NAPRAWIONA) ---
+# --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
     Czyści klucze i przelicza waluty.
@@ -221,7 +266,6 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- CZYSZCZENIE KLUCZA IDENTYFIKATORA (OSTATECZNA POPRAWKA) ---
     identyfikatory = dane_z_bazy['identyfikator'].astype(str)
     
     def clean_key(key):
@@ -234,7 +278,6 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['identyfikator_clean'] = identyfikatory.apply(clean_key)
     
-    # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
     kurs_eur = pobierz_kurs_eur_pln()
     if not kurs_eur: return None, None
     unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -252,7 +295,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONY BŁĄD 'PUSHED') ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -280,14 +323,12 @@ def przetworz_plik_analizy(przeslany_plik):
 
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
-                # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                 wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': kwota_euro,
                     'koszty_inne': 0
                 })
             elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
-                 # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                  wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': 0,
@@ -300,7 +341,6 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # Używamy tej samej bezpiecznej metody .apply()
     df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).apply(
         lambda x: re.search(r'([A-Z0-9]{4,})', str(x).upper()).group(1).strip() 
         if re.search(r'([A-Z0-9]{4,})', str(x).upper()) else 'Brak Identyfikatora'
@@ -312,7 +352,7 @@ def przetworz_plik_analizy(przeslany_plik):
     return df_agregacja
 
 
-# --- FUNKCJA main() (BEZ ZMIAN) ---
+# --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
@@ -329,7 +369,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (BEZ ZMIAN) ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (PRZEBUDOWANA) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
