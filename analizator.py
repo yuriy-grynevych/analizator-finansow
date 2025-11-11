@@ -10,7 +10,7 @@ from sqlalchemy import text
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
 
-# --- KOD DO UKRYCIA STOPKI I MENU (MENU JEST WIDOCZNE) ---
+# --- KOD DO UKRYCIA STOPKI I MENU ---
 hide_streamlit_style = """
             <style>
             footer {visibility: hidden;}
@@ -291,23 +291,6 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     df = conn.query(query, params=params)
     return df
 
-# --- NOWA, BEZPIECZNA FUNKCJA DO CZYSZCZENIA KLUCZY ---
-def bezpieczne_czyszczenie_klucza(s):
-    """Otrzymuje całą kolumnę (Serię) i czyści ją w bezpieczny sposób."""
-    # 1. Konwertuj na string
-    s_str = s.astype(str)
-    
-    # 2. Wyodrębnij pierwszą grupę alfanumeryczną (4+ znaki)
-    s_extracted = s_str.str.extract(r'([A-Z0-9]{4,})', flags=re.IGNORECASE)
-    
-    # 3. Wypełnij puste, zamień na wielkie litery i usuń spacje
-    s_cleaned = s_extracted[0].fillna('Brak Identyfikatora').str.upper().str.strip()
-    
-    # 4. Zamień puste stringi (jeśli jakieś powstały) na 'Brak Identyfikatora'
-    s_cleaned = s_cleaned.replace('', 'Brak Identyfikatora')
-    
-    return s_cleaned
-
 # --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     """
@@ -318,10 +301,18 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     
-    # --- UŻYCIE NOWEJ, BEZPIECZNEJ FUNKCJI ---
-    dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
+    identyfikatory = dane_z_bazy['identyfikator'].astype(str)
     
-    # --- PRZELICZANIE WALUT (BEZ ZMIAN) ---
+    def clean_key(key):
+        if key == 'nan' or not key: 
+            return 'Brak Identyfikatora'
+        match = re.search(r'([A-Z0-9]{4,})', key)
+        if match:
+            return match.group(1).upper().strip()
+        return 'Brak Identyfikatora'
+        
+    dane_z_bazy['identyfikator_clean'] = identyfikatory.apply(clean_key)
+    
     kurs_eur = pobierz_kurs_eur_pln()
     if not kurs_eur: return None, None
     unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -339,7 +330,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONY BŁĄD 'PUSHED') ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
     st.write("Przetwarzanie pliku `analiza.xlsx`...")
@@ -385,8 +376,10 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # --- UŻYCIE NOWEJ, BEZPIECZNEJ FUNKCJI ---
-    df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
+    df_wyniki['pojazd_clean'] = df_wyniki['pojazd_oryg'].astype(str).apply(
+        lambda x: re.search(r'([A-Z0-9]{4,})', str(x).upper()).group(1).strip() 
+        if re.search(r'([A-Z0-9]{4,})', str(x).upper()) else 'Brak Identyfikatora'
+    )
 
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
@@ -394,7 +387,7 @@ def przetworz_plik_analizy(przeslany_plik):
     return df_agregacja
 
 
-# --- FUNKCJA main() (BEZ ZMIAN) ---
+# --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
@@ -411,7 +404,7 @@ def main_app():
         st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
         st.stop() 
 
-    # --- ZAKŁADKA 1: RAPORT GŁÓWNY ---
+    # --- ZAKŁADKA 1: RAPORT GŁÓWNY (PRZEBUDOWANA) ---
     with tab_raport:
         st.header("Szczegółowy Raport Paliw i Opłat")
         
