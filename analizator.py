@@ -6,7 +6,7 @@ import streamlit as st
 import time
 from datetime import date
 from sqlalchemy import text 
-import io # <-- BRAKOWAŁO TEGO IMPORTU
+import io # Potrzebne do eksportu Excela
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
@@ -129,11 +129,20 @@ def kategoryzuj_transakcje(row, zrodlo):
         
     return 'INNE', 'Nieznane'
     
-# --- NOWE FUNKCJE "TŁUMACZENIA" ---
+# --- NOWE FUNKCJE "TŁUMACZENIA" (ZMIANA DLA EUROWAG) ---
 def normalizuj_eurowag(df_eurowag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_eurowag['Data i godzina'], errors='coerce')
-    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta']))
+    
+    # --- NOWA, LEPSZA LOGIKA IDENTYFIKATORA (Twoja prośba) ---
+    # 1. Spróbuj 'Tablica rejestracyjna'
+    # 2. Jeśli puste, spróbuj 'Posiadacz karty' (bo tam jest np. "PL WGM0502K")
+    # 3. Jeśli oba są puste, w ostateczności weź 'Karta'
+    df_out['identyfikator'] = df_eurowag['Tablica rejestracyjna'].fillna(
+                                df_eurowag['Posiadacz karty'].fillna(df_eurowag['Karta'])
+                            )
+    # --- KONIEC ZMIANY ---
+    
     df_out['kwota_netto'] = pd.to_numeric(df_eurowag['Kwota netto'], errors='coerce')
     df_out['kwota_brutto'] = pd.to_numeric(df_eurowag['Kwota brutto'], errors='coerce')
     df_out['waluta'] = df_eurowag['Waluta']
@@ -189,7 +198,7 @@ def normalizuj_e100_EN(df_e100):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (POPRAWIONA) ---
+# --- FUNKCJA DO WCZYTYWANIA PLIKÓW (ZMIANA DETEKTORA EUROWAG) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     lista_df_zunifikowanych = []
     for plik in przeslane_pliki:
@@ -215,12 +224,15 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                     else:
                         st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
                 
+                # --- ZMIANA: Sprawdzamy 'Posiadacz karty' ---
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_eurowag = pd.read_excel(xls, sheet_name=0) 
                     kolumny_eurowag = df_eurowag.columns
+                    # Detektor dla nowego pliku Eurowag
                     if 'Data i godzina' in kolumny_eurowag and 'Posiadacz karty' in kolumny_eurowag:
                         st.write("   -> Wykryto format Eurowag (Nowy)")
                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag))
+                    # Awaryjnie dla starszych plików
                     elif 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
                          st.write("   -> Wykryto format Eurowag (Starszy)")
                          if 'Posiadacz karty' not in df_eurowag.columns:
@@ -302,6 +314,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     def clean_key(key):
         if key == 'nan' or not key: 
             return 'Brak Identyfikatora'
+        # Wyciąga pierwszą grupę liter/cyfr (np. "PL WGM0502K" -> "WGM0502K")
         match = re.search(r'([A-Z0-9]{4,})', key)
         if match:
             return match.group(1).upper().strip()
