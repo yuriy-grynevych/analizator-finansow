@@ -347,13 +347,27 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     def clean_key(key):
         if key == 'nan' or not key: 
             return 'Brak Identyfikatora'
-        match = re.search(r'([A-Z0-9]{4,})', key)
+        
+        key = key.strip().strip('"') # Wyczyść najpierw
+        
+        # *** NOWA POPRAWKA: Zachowaj specjalne kategorie ***
+        if key.startswith("("):
+            return key
+
+        # Wyciąga numer rejestracyjny (szuka czegoś co wygląda jak PO6UA33 lub WGM34791)
+        match = re.search(r'([A-Z]{2,3}[A-Z0-9]{4,5})', key, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+            
+        # Jeśli nie, spróbuj znaleźć cokolwiek co ma 4+ litery/cyfry
+        match = re.search(r'([A-Z0-9]{4,})', key) 
         if match:
             return match.group(1).upper().strip()
-        cleaned_key = key.strip()
-        if not cleaned_key or cleaned_key == 'nan':
+        
+        if not key:
             return 'Brak Identyfikatora'
-        return cleaned_key 
+        return key.upper() # Zwróć cokolwiek zostało
+            
     return s_str.apply(clean_key)
 
 # --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
@@ -381,12 +395,11 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 14.0 - POPRAWIONE REGEXY) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 15.0 - POPRAWKA ROZPOZNAWANIA POJAZD/KONTRAHENT) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
-    # Możesz włączyć DEBUG usuwając komentarze
-    # st.write(f"--- DEBUG (V14): Rozpoczynam przetwarzanie pliku...")
-    # st.write(f"--- DEBUG (V14): Szukany okres: {data_start} do {data_stop}")
+    # st.write(f"--- DEBUG (V15): Rozpoczynam przetwarzanie pliku...")
+    # st.write(f"--- DEBUG (V15): Szukany okres: {data_start} do {data_stop}")
 
     # --- 1. MAPOWANIE WALUT ---
     MAPA_WALUT_PLIKU = {
@@ -406,14 +419,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-        # st.write(f"--- DEBUG (V14): Pobrane kursy do EUR: {mapa_kursow}")
+        # st.write(f"--- DEBUG (V15): Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     # --- 3. WCZYTANIE PLIKU ---
     try:
-        # st.write("--- DEBUG (V14): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
+        # st.write("--- DEBUG (V15): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
@@ -437,8 +450,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
         
-        # st.write(f"--- DEBUG (V14): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
-        # st.write(f"--- DEBUG (V14): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
+        # st.write(f"--- DEBUG (V15): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
+        # st.write(f"--- DEBUG (V15): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
         
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
@@ -462,7 +475,9 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             return False # Ma dziwne znaki (np. "...", "Ł", "Ą", "."), więc to KONTRAHENT
             
         # 2. Sprawdź, czy przynajmniej jedno "słowo" ma 3+ cyfry LUB wygląda jak numer rejestracyjny
-        words = re.split(r'[\s+I]+', line) # Dzielimy po spacji, +, I
+        words = re.split(r'[\s+Ii]+', line) # Dzielimy po spacji, +, I
+        if not words: return False
+        
         has_vehicle_word = False
         for word in words:
             if not word: continue
@@ -480,7 +495,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             
         # 4. Sprawdź, czy jakieś słowo jest za długie (numery rej. są krótkie)
         for word in words:
-            if len(word) > 10: # Dłuższe słowa to prawdopodobnie kontrahenci (np. HEISTKAMP, TRANSPORT)
+            if word and len(word) > 10: # Dłuższe słowa to prawdopodobnie kontrahenci (np. HEISTKAMP, TRANSPORT)
                 return False
                 
         return True
@@ -492,24 +507,22 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
-            # *** POCZĄTEK POPRAWKI BŁĘDU .fillna ***
+            # *** POPRAWKA BŁĘDU .fillna Z POPRZEDNIEJ WERSJI ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
-                    if pd.isna(kwota_val): kwota_val = 0.0
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
                     kwota_brutto_eur += kwota_val * kurs
             
             for col_tuple, kurs in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
-                    if pd.isna(kwota_val): kwota_val = 0.0
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
                     kwota_netto_eur += kwota_val * kurs
-            # *** KONIEC POPRAWKI BŁĘDU .fillna ***
+            # *** KONIEC POPRAWKI ***
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
-            # st.write(f"--- DEBUG (V14): Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
+            # st.write(f"--- DEBUG (V15): Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -584,7 +597,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
             
             for pojazd in pojazdy_do_zapisu:
-                # st.write(f"--- DEBUG (V14): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, KONTRAHENT: {aktualny_kontrahent}, ETYKIETA: {etykieta_do_uzycia}")
+                # st.write(f"--- DEBUG (V15): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, KONTRAHENT: {aktualny_kontrahent}, ETYKIETA: {etykieta_do_uzycia}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
@@ -607,7 +620,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # --- 5. AGREGACJA WYNIKÓW ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        # st.info("--- DEBUG (V14): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
+        # st.info("--- DEBUG (V15): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
