@@ -343,7 +343,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 3.0 - OBSŁUGA DAT, KOSZTÓW I DZIELENIA POJAZDÓW) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 4.0 - OBSŁUGA WPISÓW OGÓLNYCH) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     st.write(f"Przetwarzanie pliku: {przeslany_plik.name} dla dat {data_start} - {data_stop}...")
@@ -368,7 +368,6 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
                 st.error(f"Błąd krytyczny: Nie znaleziono kolumny etykiet ('{kolumna_etykiet}').")
                 return None
         
-        # Opcja dla XLSX (jeśli kiedyś wrócisz)
         elif przeslany_plik.name.endswith(('.xlsx', '.xls')):
             st.write("Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
             df = pd.read_excel(przeslany_plik, 
@@ -387,11 +386,10 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     # --- 2. NOWA LOGIKA PARSOWANIA ---
     
     wyniki = []
-    lista_aktualnych_pojazdow = [] # <-- Do dzielenia kosztów/przychodów
+    lista_aktualnych_pojazdow = [] 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None          # <-- Do filtrowania dat
+    aktualna_data = None          
     
-    # Regex do wykrywania dat w formacie YYYY-MM-DD
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
     for index, row in df.iterrows():
@@ -399,67 +397,69 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             etykieta_wiersza = str(row[kolumna_etykiet]).strip()
             kwota_euro = pd.to_numeric(row.get('euro'), errors='coerce').fillna(0.0)
         except:
-            continue # Pomiń uszkodzone wiersze
+            continue 
 
-        # BLOK 1: Szukanie daty (ROZWIĄZANIE PROBLEMU 1)
+        # BLOK 1: Szukanie daty
         if date_regex.match(etykieta_wiersza):
             try:
                 aktualna_data = pd.to_datetime(etykieta_wiersza).date()
             except:
-                pass # Ignoruj błędy parsowania daty
-            continue # Przejdź do następnego wiersza
+                pass 
+            continue 
 
-        # BLOK 2: Szukanie pojazdu/pojazdów (ROZWIĄZANIE PROBLEMU 3)
+        # BLOK 2: Szukanie pojazdu/pojazdów
         if etykieta_wiersza != 'nan' and etykieta_wiersza and (etykieta_wiersza not in WSZYSTKIE_ZNANE_ETYKIETY):
-            # Dzielimy etykietę, jeśli zawiera " i " lub " I "
             lista_pojazdow_str = re.split(r'\s+i\s+|\s+I\s+', etykieta_wiersza, flags=re.IGNORECASE)
             lista_aktualnych_pojazdow = [p.strip() for p in lista_pojazdow_str if p.strip()]
-            ostatnia_etykieta_pojazdu = None # Resetuj etykietę
+            ostatnia_etykieta_pojazdu = None 
             continue
 
-        # BLOK 3: Przetwarzanie kwoty (ROZWIĄZANIE PROBLEMU 2)
+        # BLOK 3: Przetwarzanie kwoty
         
         etykieta_do_uzycia = None
         kwota_do_uzycia = 0.0
 
-        # Case A: Etykieta i kwota w tym samym wierszu (np. "Leasing", 5866.87)
+        # Case A: Etykieta i kwota w tym samym wierszu
         if etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro != 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 etykieta_do_uzycia = etykieta_wiersza
                 kwota_do_uzycia = kwota_euro
-            ostatnia_etykieta_pojazdu = None # Zużyte
+            ostatnia_etykieta_pojazdu = None 
 
-        # Case B.1: Etykieta bez kwoty (np. "Faktura VAT sprzedaży")
+        # Case B.1: Etykieta bez kwoty
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro == 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
-                ostatnia_etykieta_pojazdu = etykieta_wiersza # Zapamiętaj na następny wiersz
+                ostatnia_etykieta_pojazdu = etykieta_wiersza 
         
-        # Case B.2: Kwota bez etykiety (np. ", 6279.16")
+        # Case B.2: Kwota bez etykiety
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_euro != 0.0:
-            if ostatnia_etykieta_pojazdu: # Mamy zapamiętaną etykietę
+            if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
                 kwota_do_uzycia = kwota_euro
-                ostatnia_etykieta_pojazdu = None # Zużyte
+                ostatnia_etykieta_pojazdu = None 
 
-        # BLOK 4: Zapisywanie wyników (Wspólne dla Bloku 3)
+        # BLOK 4: Zapisywanie wyników
         if etykieta_do_uzycia and kwota_do_uzycia != 0.0:
             
-            # Sprawdź, czy mamy datę i czy mieści się w zakresie (Problem 1)
+            # Sprawdź, czy mamy datę i czy mieści się w zakresie
             if not aktualna_data:
-                continue # Pomiń, jeśli nie znaleziono jeszcze daty
+                continue 
             if not (data_start <= aktualna_data <= data_stop):
-                continue # Pomiń, jeśli data jest poza zakresem
+                continue 
 
-            # Sprawdź, czy mamy pojazdy (Problem 3)
+            # --- *** NOWA LOGIKA DLA BRAKU POJAZDU *** ---
+            pojazdy_do_zapisu = []
             if not lista_aktualnych_pojazdow:
-                continue # Pomiń, jeśli kwota nie jest przypisana do pojazdu
+                # Jeśli nie ma przypisanego pojazdu, przypisz do kategorii ogólnej
+                pojazdy_do_zapisu = ["(Koszty/Przychody Ogólne)"]
+            else:
+                pojazdy_do_zapisu = lista_aktualnych_pojazdow
+            # --- *** KONIEC NOWEJ LOGIKI *** ---
             
-            liczba_pojazdow = len(lista_aktualnych_pojazdow)
+            liczba_pojazdow = len(pojazdy_do_zapisu)
             podzielona_kwota = kwota_do_uzycia / liczba_pojazdow
             
-            for pojazd in lista_aktualnych_pojazdow:
-                
-                # Sprawdź typ (Problem 2)
+            for pojazd in pojazdy_do_zapisu:
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'pojazd_oryg': pojazd, 
@@ -481,10 +481,8 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # Czyścimy nazwy pojazdów (np. "PL WGM0502K" -> "WGM0502K")
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
 
-    # Agregujemy wszystko na czyste nazwy pojazdów
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
