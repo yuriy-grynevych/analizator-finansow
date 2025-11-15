@@ -44,7 +44,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta'
 ]
 ETYKIETY_IGNOROWANE = [
-    'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końowa', 'Nr pojazdu',
+    'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końcowa', 'Nr pojazdu',
     'Zamówienie od klienta', 'Wydanie zewnętrzne'
 ]
 WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKIETY_IGNOROWANE
@@ -351,6 +351,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 8.0 - MULTI-WALUTY + ZWRACA DANE SUROWE) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
+    # Możesz wyłączyć DEBUG, usuwając lub komentując poniższe linie
     st.write(f"--- DEBUG: Rozpoczynam przetwarzanie pliku: {przeslany_plik.name}")
     st.write(f"--- DEBUG: Szukany okres: {data_start} do {data_stop}")
 
@@ -878,36 +879,36 @@ def main_app():
                                 # Zapisz surowe dane z analizy w sesji
                                 st.session_state['dane_analizy_raw'] = df_analiza_raw
                                 
-                                if df_analiza_agreg is not None:
-                                    # Scal z nową ramką danych
-                                    df_rentownosc = df_analiza_agreg.merge(
-                                        df_koszty_baza_wszystkie, 
-                                        left_index=True, 
-                                        right_index=True, 
-                                        how='outer'
-                                    ).fillna(0)
-                                    
-                                    # Oblicz zysk z nową kolumną kosztów
-                                    df_rentownosc['ZYSK / STRATA (EUR)'] = (
-                                        df_rentownosc['przychody'] - 
-                                        df_rentownosc['koszty_inne'] - 
-                                        df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
-                                    )
-                                    
-                                    st.session_state['raport_gotowy'] = True
-                                    st.session_state['df_rentownosc'] = df_rentownosc
-                                    st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
-                                else:
-                                    # Jeśli nie ma danych z pliku analizy, ale są z bazy
-                                    st.warning("Nie znaleziono danych w pliku 'analiza.xlsx' dla tych dat, ale spróbuję połączyć z danymi z bazy.")
-                                    df_rentownosc = df_koszty_baza_wszystkie.copy()
-                                    df_rentownosc['przychody'] = 0.0
-                                    df_rentownosc['koszty_inne'] = 0.0
-                                    df_rentownosc['ZYSK / STRATA (EUR)'] = -df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
-                                    
-                                    st.session_state['raport_gotowy'] = True
-                                    st.session_state['df_rentownosc'] = df_rentownosc
-                                    st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
+                                # Sprawdź, czy dane z Excela zostały wczytane
+                                if df_analiza_agreg is None:
+                                    # Jeśli nie ma danych z Excela, utwórz pusty df, aby uniknąć błędu
+                                    # Ale sprawdź, czy są dane z bazy
+                                    if df_koszty_baza_wszystkie.empty:
+                                        st.error("Nie znaleziono żadnych danych ani w pliku 'analiza.xlsx', ani w bazie danych dla wybranego okresu.")
+                                        st.session_state['raport_gotowy'] = False
+                                        st.stop()
+                                    else:
+                                        st.warning("Nie znaleziono danych w pliku 'analiza.xlsx' dla tych dat, ale pokazuję koszty z bazy.")
+                                        df_analiza_agreg = pd.DataFrame(columns=['przychody', 'koszty_inne'])
+
+                                # Scal dane
+                                df_rentownosc = df_analiza_agreg.merge(
+                                    df_koszty_baza_wszystkie, 
+                                    left_index=True, 
+                                    right_index=True, 
+                                    how='outer'
+                                ).fillna(0)
+                                
+                                # Oblicz zysk
+                                df_rentownosc['ZYSK / STRATA (EUR)'] = (
+                                    df_rentownosc['przychody'] - 
+                                    df_rentownosc['koszty_inne'] - 
+                                    df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
+                                )
+                                
+                                st.session_state['raport_gotowy'] = True
+                                st.session_state['df_rentownosc'] = df_rentownosc
+                                st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
                                 
                 if st.session_state.get('raport_gotowy', False):
                     st.subheader("Wyniki dla wybranego okresu")
@@ -964,7 +965,13 @@ def main_app():
                             baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
                             if not baza_details.empty:
                                 # Użyj 'produkt' dla opisu, i 'typ' dla kategoryzacji
-                                baza_formatted = baza_details[['data_transakcji_dt', 'produkt', 'typ', 'kwota_finalna_eur']]
+                                baza_formatted = baza_details[['data_transakcji_dt', 'produkt', 'typ', 'kwota_finalna_eur']].copy() # Dodano .copy()
+                                
+                                # *** POPRAWKA BŁĘDU TypeError: Cannot compare... ***
+                                # Ujednolicamy format daty do .date(), aby pasował do danych z Excela
+                                baza_formatted['data_transakcji_dt'] = baza_formatted['data_transakcji_dt'].dt.date
+                                # *** KONIEC POPRAWKI ***
+
                                 baza_formatted.rename(columns={
                                     'data_transakcji_dt': 'data',
                                     'produkt': 'opis',
