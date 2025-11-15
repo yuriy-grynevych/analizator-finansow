@@ -809,7 +809,7 @@ def main_app():
                     data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_start")
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
-            plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
+                    plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
                 
                 if 'raport_gotowy' not in st.session_state:
                     st.session_state['raport_gotowy'] = False
