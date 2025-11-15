@@ -464,37 +464,29 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-    # *** POPRAWIONY REGEX (V15): Logika rozpoznawania pojazdu ***
     def is_vehicle_line(line):
         if not line or line == 'nan':
             return False
-        
-        # 1. Sprawdź, czy linia nie zawiera niczego poza dozwolonymi znakami (A-Z, 0-9, spacja, +, I)
         if not re.fullmatch(r'^[A-Z0-9\sIi+]+$', line.strip(), flags=re.IGNORECASE):
-            return False # Ma dziwne znaki (np. "...", "Ł", "Ą", "."), więc to KONTRAHENT
-            
-        # 2. Sprawdź, czy przynajmniej jedno "słowo" ma 3+ cyfry LUB wygląda jak numer rejestracyjny
-        words = re.split(r'[\s+Ii]+', line) # Dzielimy po spacji, +, I
+            return False 
+        words = re.split(r'[\s+Ii]+', line) 
         if not words: return False
         
         has_vehicle_word = False
         for word in words:
             if not word: continue
-            if re.search(r'\d{3,}', word): # Ma 3 lub więcej cyfr (np. WGM34791)
+            if re.search(r'\d{3,}', word): 
                 has_vehicle_word = True
                 break
-            if re.fullmatch(r'[A-Z]{2,3}[A-Z0-9]{4,5}', word, flags=re.IGNORECASE): # np. PO6UA33
+            if re.fullmatch(r'[A-Z]{2,3}[A-Z0-9]{4,5}', word, flags=re.IGNORECASE): 
                 has_vehicle_word = True
                 break
         
-        # 3. Sprawdź, czy nie jest to nazwa firmy (np. HEISTKAMP TRANSPORT)
         if not has_vehicle_word:
-             # Żadne słowo nie wygląda jak rejestracja, więc to Kontrahent
             return False
             
-        # 4. Sprawdź, czy jakieś słowo jest za długie (numery rej. są krótkie)
         for word in words:
-            if word and len(word) > 10: # Dłuższe słowa to prawdopodobnie kontrahenci (np. HEISTKAMP, TRANSPORT)
+            if word and len(word) > 10: 
                 return False
                 
         return True
@@ -564,13 +556,10 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
 
         # *** POPRAWIONY BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent) ***
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
-            # Użyj nowej funkcji do sprawdzenia
             if is_vehicle_line(etykieta_wiersza):
-                # To jest linia z pojazdem/pojazdami
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+|\s*\+\s*', etykieta_wiersza, flags=re.IGNORECASE)
                 lista_aktualnych_pojazdow = [p.strip() for p in lista_aktualnych_pojazdow if p.strip()]
             else:
-                # To jest wiersz z Kontrahentem
                 aktualny_kontrahent = etykieta_wiersza.strip('"')
             continue
         
