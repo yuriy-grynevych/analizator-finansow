@@ -424,14 +424,18 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         MAPA_NETTO_DO_KURSU = {}
         
         for col_waluta, col_typ in df.columns:
-            if col_waluta in WALUTY_W_PLIKU and col_typ == TYP_KWOTY_BRUTTO:
-                iso_code = WALUTY_W_PLIKU[col_waluta]
+            # *** POCZĄTEK POPRAWKI LITERÓWKI ***
+            if col_waluta in MAPA_WALUT_PLIKU and col_typ == TYP_KWOTY_BRUTTO:
+                iso_code = MAPA_WALUT_PLIKU[col_waluta]
+            # *** KONIEC POPRAWKI LITERÓWKI ***
                 kurs = mapa_kursow.get(iso_code, 0.0)
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_BRUTTO_DO_KURSU[(col_waluta, col_typ)] = kurs
             
-            if col_waluta in WALUTY_W_PLIKU and col_typ == TYP_KWOTY_NETTO:
-                iso_code = WALUTY_W_PLIKU[col_waluta]
+            # *** POCZĄTEK POPRAWKI LITERÓWKI ***
+            if col_waluta in MAPA_WALUT_PLIKU and col_typ == TYP_KWOTY_NETTO:
+                iso_code = MAPA_WALUT_PLIKU[col_waluta]
+            # *** KONIEC POPRAWKI LITERÓWKI ***
                 kurs = mapa_kursow.get(iso_code, 0.0)
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
@@ -450,6 +454,9 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     ostatnia_etykieta_pojazdu = None
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
+    
+    # *** NOWY REGEX: Rozpoznaje tylko numery rejestracyjne (i ew. 'I' lub 'i') ***
+    vehicle_regex = re.compile(r'^[A-Z0-9\sIi]+$')
 
     for index, row in df.iterrows():
         try:
@@ -465,6 +472,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                  if pd.notna(row[col_tuple]):
                     kwota_netto_eur += pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0) * kurs
             
+            # Używamy brutto jako podstawy, jeśli netto jest 0 (np. dla starych wpisów)
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
@@ -508,8 +516,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
 
         # *** POPRAWIONY BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent) ***
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
-            # Wzorzec na pojazd: same duże litery, cyfry, spacje i litera 'I'
-            if re.fullmatch(r'^[A-Z0-9\sI]+$', etykieta_wiersza.strip()):
+            # Użyj nowego regexu do sprawdzenia
+            if vehicle_regex.match(etykieta_wiersza):
                 # To jest linia z pojazdem/pojazdami
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+', etykieta_wiersza, flags=re.IGNORECASE)
                 lista_aktualnych_pojazdow = [p.strip() for p in lista_aktualnych_pojazdow if p.strip()]
@@ -865,7 +873,6 @@ def main_app():
                         else:
                             df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
                             
-                            # *** ZMIANA: Przekazujemy plik_analizy (który jest teraz obiektem pliku lub BytesIO) ***
                             df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
                             st.session_state['dane_analizy_raw'] = df_analiza_raw 
                             
@@ -957,7 +964,6 @@ def main_app():
                                 'produkt': 'opis'
                             }, inplace=True)
                             
-                            # Koszty z bazy są ujemne
                             baza_formatted['kwota_netto_eur'] = -baza_formatted['kwota_netto_eur'].abs() 
                             baza_formatted['kwota_brutto_eur'] = -baza_formatted['kwota_brutto_eur'].abs() 
                             lista_df_szczegolow.append(baza_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']])
@@ -1015,7 +1021,6 @@ def main_app():
 
         except Exception as e:
             if "does not exist" in str(e):
-                 # Sprawdź, czy to błąd tabeli plików
                  if NAZWA_TABELI_PLIKOW in str(e):
                      st.warning("Tabela do zapisywania plików nie istnieje. Przejdź do 'Panelu Admina' i kliknij '2. Stwórz tabelę saved_files'.")
                  else:
