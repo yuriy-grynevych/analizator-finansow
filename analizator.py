@@ -343,14 +343,16 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 4.0 - OBSŁUGA WPISÓW OGÓLNYCH) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 5.0 - TRYB DIAGNOSTYCZNY) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
-    st.write(f"Przetwarzanie pliku: {przeslany_plik.name} dla dat {data_start} - {data_stop}...")
+    st.write(f"--- DEBUG: Rozpoczynam przetwarzanie pliku: {przeslany_plik.name}")
+    st.write(f"--- DEBUG: Szukany okres: {data_start} do {data_stop}")
     
     # --- 1. WCZYTANIE PLIKU ---
     try:
         if przeslany_plik.name.endswith('pojazdy.csv'):
+            st.write("--- DEBUG: Wykryto plik 'pojazdy.csv'. Wczytuję z header=7.")
             df = pd.read_csv(przeslany_plik, 
                              header=7, 
                              engine='python',
@@ -358,18 +360,21 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             
             kolumna_etykiet = df.columns[0]
             df.columns = [str(c).strip() for c in df.columns]
+            st.write(f"--- DEBUG: Znalezione kolumny: {list(df.columns)}")
             
             if 'euro' not in df.columns and 'EUR' in df.columns:
                 df['euro'] = df['EUR']
             elif 'euro' not in df.columns:
-                df['euro'] = 0.0
-
-            if kolumna_etykiet not in df.columns:
-                st.error(f"Błąd krytyczny: Nie znaleziono kolumny etykiet ('{kolumna_etykiet}').")
+                st.error(f"BŁĄD KRYTYCZNY: W pliku '{przeslany_plik.name}' nie ma kolumny 'euro' ani 'EUR'.")
+                st.info(f"Zamiast tego, mam kolumny: {list(df.columns)}")
+                st.info("Czy na pewno wrzuciłeś plik 'analiza.xlsx - pojazdy.csv'?")
                 return None
-        
+            
+            st.write(f"--- DEBUG: Kolumna etykiet to '{kolumna_etykiet}', kolumna kwot to 'euro'.")
+
         elif przeslany_plik.name.endswith(('.xlsx', '.xls')):
-            st.write("Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
+            # Ten kod prawdopodobnie nie jest już używany, ale zostawiam
+            st.write("--- DEBUG: Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
             df = pd.read_excel(przeslany_plik, 
                                sheet_name='pojazdy', 
                                engine='openpyxl', 
@@ -377,13 +382,15 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             kolumna_etykiet = 'Etykiety wierszy'
         else:
             st.error(f"Nie rozpoznano pliku. Prześlij plik `analiza.xlsx - pojazdy.csv`.")
+            st.info(f"Przesłany plik to: {przeslany_plik.name}")
             return None
 
     except Exception as e:
         st.error(f"Nie udało się wczytać danych. Błąd: {e}")
+        st.info("Upewnij się, że plik .csv ma poprawny format i nagłówek w 8. wierszu.")
         return None
 
-    # --- 2. NOWA LOGIKA PARSOWANIA ---
+    # --- 2. LOGIKA PARSOWANIA (BEZ ZMIAN WZGLĘDEM V4) ---
     
     wyniki = []
     lista_aktualnych_pojazdow = [] 
@@ -391,12 +398,14 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     aktualna_data = None          
     
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    znaleziono_dane = False # Flaga do debugowania
 
     for index, row in df.iterrows():
         try:
             etykieta_wiersza = str(row[kolumna_etykiet]).strip()
             kwota_euro = pd.to_numeric(row.get('euro'), errors='coerce').fillna(0.0)
-        except:
+        except Exception as e_row:
+            st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -415,23 +424,19 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             continue
 
         # BLOK 3: Przetwarzanie kwoty
-        
         etykieta_do_uzycia = None
         kwota_do_uzycia = 0.0
 
-        # Case A: Etykieta i kwota w tym samym wierszu
         if etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro != 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 etykieta_do_uzycia = etykieta_wiersza
                 kwota_do_uzycia = kwota_euro
             ostatnia_etykieta_pojazdu = None 
 
-        # Case B.1: Etykieta bez kwoty
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro == 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 ostatnia_etykieta_pojazdu = etykieta_wiersza 
         
-        # Case B.2: Kwota bez etykiety
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_euro != 0.0:
             if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
@@ -440,26 +445,27 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
 
         # BLOK 4: Zapisywanie wyników
         if etykieta_do_uzycia and kwota_do_uzycia != 0.0:
-            
-            # Sprawdź, czy mamy datę i czy mieści się w zakresie
+            znaleziono_dane = True # Znaleźliśmy coś!
+
             if not aktualna_data:
+                st.write(f"--- DEBUG: Pomijam dane (ETYKIETA: {etykieta_do_uzycia}, KWOTA: {kwota_do_uzycia}), bo nie mam jeszcze daty.")
                 continue 
+            
             if not (data_start <= aktualna_data <= data_stop):
+                st.write(f"--- DEBUG: Pomijam dane (DATA: {aktualna_data}, ETYKIETA: {etykieta_do_uzycia}), bo data jest poza zakresem.")
                 continue 
 
-            # --- *** NOWA LOGIKA DLA BRAKU POJAZDU *** ---
             pojazdy_do_zapisu = []
             if not lista_aktualnych_pojazdow:
-                # Jeśli nie ma przypisanego pojazdu, przypisz do kategorii ogólnej
                 pojazdy_do_zapisu = ["(Koszty/Przychody Ogólne)"]
             else:
                 pojazdy_do_zapisu = lista_aktualnych_pojazdow
-            # --- *** KONIEC NOWEJ LOGIKI *** ---
             
             liczba_pojazdow = len(pojazdy_do_zapisu)
             podzielona_kwota = kwota_do_uzycia / liczba_pojazdow
             
             for pojazd in pojazdy_do_zapisu:
+                st.write(f"--- DEBUG: ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}, KWOTA: {podzielona_kwota:.2f}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'pojazd_oryg': pojazd, 
@@ -477,6 +483,10 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
         
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
+        if not znaleziono_dane:
+            st.error("--- DEBUG: Nie znaleziono ŻADNYCH danych (nawet przed filtrowaniem dat). To sugeruje problem z plikiem lub kolumnami.")
+        else:
+            st.info("--- DEBUG: Znaleziono dane, ale wszystkie zostały odfiltrowane (prawdopodobnie przez zakres dat).")
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
@@ -486,8 +496,8 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
+    st.write(f"--- DEBUG: Funkcja zakończyła pracę, agregacja gotowa.")
     return df_agregacja
-
 # --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
 @st.cache_data
 def to_excel(df):
