@@ -343,7 +343,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 5.0 - TRYB DIAGNOSTYCZNY) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 6.0 - POD PLIK XLSX) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     st.write(f"--- DEBUG: Rozpoczynam przetwarzanie pliku: {przeslany_plik.name}")
@@ -351,65 +351,75 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     
     # --- 1. WCZYTANIE PLIKU ---
     try:
-        if przeslany_plik.name.endswith('pojazdy.csv'):
-            st.write("--- DEBUG: Wykryto plik 'pojazdy.csv'. Wczytuję z header=7.")
-            df = pd.read_csv(przeslany_plik, 
-                             header=7, 
-                             engine='python',
-                             skip_blank_lines=False) 
-            
-            kolumna_etykiet = df.columns[0]
-            df.columns = [str(c).strip() for c in df.columns]
-            st.write(f"--- DEBUG: Znalezione kolumny: {list(df.columns)}")
-            
-            if 'euro' not in df.columns and 'EUR' in df.columns:
-                df['euro'] = df['EUR']
-            elif 'euro' not in df.columns:
-                st.error(f"BŁĄD KRYTYCZNY: W pliku '{przeslany_plik.name}' nie ma kolumny 'euro' ani 'EUR'.")
-                st.info(f"Zamiast tego, mam kolumny: {list(df.columns)}")
-                st.info("Czy na pewno wrzuciłeś plik 'analiza.xlsx - pojazdy.csv'?")
-                return None
-            
-            st.write(f"--- DEBUG: Kolumna etykiet to '{kolumna_etykiet}', kolumna kwot to 'euro'.")
-
-        elif przeslany_plik.name.endswith(('.xlsx', '.xls')):
-            # Ten kod prawdopodobnie nie jest już używany, ale zostawiam
+        # Ten kod jest teraz TYLKO dla pliku XLSX
+        if przeslany_plik.name.endswith(('.xlsx', '.xls')):
             st.write("--- DEBUG: Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
             df = pd.read_excel(przeslany_plik, 
                                sheet_name='pojazdy', 
                                engine='openpyxl', 
-                               header=7)
+                               header=7) # Nagłówek jest w 8. wierszu (indeks 7)
+            
+            # W pliku Excel kolumna etykiet nazywa się 'Etykiety wierszy'
             kolumna_etykiet = 'Etykiety wierszy'
+            
+            # Sprawdź, czy kolumny istnieją
+            if kolumna_etykiet not in df.columns:
+                st.error(f"BŁĄD: Nie znaleziono kolumny '{kolumna_etykiet}'.")
+                st.info(f"Dostępne kolumny: {list(df.columns)}")
+                return None
+            
+            # Zapewnij istnienie kolumny 'euro' lub 'EUR'
+            if 'euro' not in df.columns and 'EUR' in df.columns:
+                df['euro'] = df['EUR']
+            elif 'euro' not in df.columns:
+                 st.error(f"BŁĄD: Nie znaleziono kolumny 'euro' ani 'EUR'.")
+                 st.info(f"Dostępne kolumny: {list(df.columns)}")
+                 return None
+            
+            st.write(f"--- DEBUG: Plik .xlsx wczytany. Kolumna etykiet: '{kolumna_etykiet}', Kolumna kwot: 'euro'.")
+        
         else:
-            st.error(f"Nie rozpoznano pliku. Prześlij plik `analiza.xlsx - pojazdy.csv`.")
+            st.error(f"Nie rozpoznano formatu pliku. Prześlij oryginalny plik `.xlsx`.")
             st.info(f"Przesłany plik to: {przeslany_plik.name}")
             return None
 
     except Exception as e:
-        st.error(f"Nie udało się wczytać danych. Błąd: {e}")
-        st.info("Upewnij się, że plik .csv ma poprawny format i nagłówek w 8. wierszu.")
+        st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
+        st.info("Upewnij się, że plik nie jest uszkodzony i zawiera arkusz 'pojazdy'.")
         return None
 
-    # --- 2. LOGIKA PARSOWANIA (BEZ ZMIAN WZGLĘDEM V4) ---
+    # --- 2. NOWA LOGIKA PARSOWANIA (dla XLSX) ---
     
     wyniki = []
     lista_aktualnych_pojazdow = [] 
     ostatnia_etykieta_pojazdu = None
     aktualna_data = None          
     
-    date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-    znaleziono_dane = False # Flaga do debugowania
+    date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') # Do szukania dat
 
     for index, row in df.iterrows():
         try:
+            # W Excelu puste komórki to 'NaN', musimy je bezpiecznie obsłużyć
             etykieta_wiersza = str(row[kolumna_etykiet]).strip()
-            kwota_euro = pd.to_numeric(row.get('euro'), errors='coerce').fillna(0.0)
+            
+            # *** KLUCZOWA POPRAWKA BŁĘDU .fillna ***
+            # Wczytujemy kwotę i od razu rzutujemy na liczbę, pustym komórkom (NaN) przypisujemy 0.0
+            kwota_euro = pd.to_numeric(row.get('euro'), errors='coerce')
+            if pd.isna(kwota_euro):
+                kwota_euro = 0.0
+            # *** KONIEC POPRAWKI ***
+
         except Exception as e_row:
             st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
-        if date_regex.match(etykieta_wiersza):
+        # W Excelu data może być już obiektem daty, a nie tekstem
+        if isinstance(row[kolumna_etykiet], (pd.Timestamp, date)):
+             aktualna_data = row[kolumna_etykiet].date()
+             continue
+        # Jeśli to tekst, sprawdzamy regexem
+        elif date_regex.match(etykieta_wiersza):
             try:
                 aktualna_data = pd.to_datetime(etykieta_wiersza).date()
             except:
@@ -424,19 +434,23 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             continue
 
         # BLOK 3: Przetwarzanie kwoty
+        
         etykieta_do_uzycia = None
         kwota_do_uzycia = 0.0
 
+        # Case A: Etykieta i kwota w tym samym wierszu
         if etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro != 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 etykieta_do_uzycia = etykieta_wiersza
                 kwota_do_uzycia = kwota_euro
             ostatnia_etykieta_pojazdu = None 
 
+        # Case B.1: Etykieta bez kwoty
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro == 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 ostatnia_etykieta_pojazdu = etykieta_wiersza 
         
+        # Case B.2: Kwota bez etykiety
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_euro != 0.0:
             if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
@@ -445,14 +459,10 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
 
         # BLOK 4: Zapisywanie wyników
         if etykieta_do_uzycia and kwota_do_uzycia != 0.0:
-            znaleziono_dane = True # Znaleźliśmy coś!
-
-            if not aktualna_data:
-                st.write(f"--- DEBUG: Pomijam dane (ETYKIETA: {etykieta_do_uzycia}, KWOTA: {kwota_do_uzycia}), bo nie mam jeszcze daty.")
-                continue 
             
+            if not aktualna_data:
+                continue 
             if not (data_start <= aktualna_data <= data_stop):
-                st.write(f"--- DEBUG: Pomijam dane (DATA: {aktualna_data}, ETYKIETA: {etykieta_do_uzycia}), bo data jest poza zakresem.")
                 continue 
 
             pojazdy_do_zapisu = []
@@ -467,32 +477,19 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             for pojazd in pojazdy_do_zapisu:
                 st.write(f"--- DEBUG: ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}, KWOTA: {podzielona_kwota:.2f}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
-                    wyniki.append({
-                        'pojazd_oryg': pojazd, 
-                        'przychody': podzielona_kwota, 
-                        'koszty_inne': 0
-                    })
+                    wyniki.append({'pojazd_oryg': pojazd, 'przychody': podzielona_kwota, 'koszty_inne': 0})
                 elif etykieta_do_uzycia in ETYKIETY_KOSZTOW_INNYCH:
-                    wyniki.append({
-                        'pojazd_oryg': pojazd, 
-                        'przychody': 0, 
-                        'koszty_inne': podzielona_kwota
-                    })
+                    wyniki.append({'pojazd_oryg': pojazd, 'przychody': 0, 'koszty_inne': podzielona_kwota})
             
     # --- 3. AGREGACJA WYNIKÓW ---
         
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        if not znaleziono_dane:
-            st.error("--- DEBUG: Nie znaleziono ŻADNYCH danych (nawet przed filtrowaniem dat). To sugeruje problem z plikiem lub kolumnami.")
-        else:
-            st.info("--- DEBUG: Znaleziono dane, ale wszystkie zostały odfiltrowane (prawdopodobnie przez zakres dat).")
+        st.info("--- DEBUG: Jeśli widzisz ten komunikat, ale powyżej były komunikaty 'ZAPISUJĘ WPIS', sprawdź logikę filtrowania dat.")
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
-    
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
-
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
@@ -812,8 +809,8 @@ def main_app():
                     data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_start")
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
-
-                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx - pojazdy.csv` (z Subiekta)", type=['xlsx', 'csv'])
+# TO JEST POPRAWNE DLA NOWEJ FUNKCJI:
+plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
                 
                 if 'raport_gotowy' not in st.session_state:
                     st.session_state['raport_gotowy'] = False
