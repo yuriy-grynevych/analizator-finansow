@@ -381,11 +381,11 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 11.0 - POPRAWIONE REGEXY) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 12.0 - POPRAWKA BŁĘDU .fillna) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
-    st.write(f"--- DEBUG (V11): Rozpoczynam przetwarzanie pliku...")
-    st.write(f"--- DEBUG (V11): Szukany okres: {data_start} do {data_stop}")
+    st.write(f"--- DEBUG (V12): Rozpoczynam przetwarzanie pliku...")
+    st.write(f"--- DEBUG (V12): Szukany okres: {data_start} do {data_stop}")
 
     # --- 1. MAPOWANIE WALUT ---
     MAPA_WALUT_PLIKU = {
@@ -405,14 +405,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-        st.write(f"--- DEBUG (V11): Pobrane kursy do EUR: {mapa_kursow}")
+        st.write(f"--- DEBUG (V12): Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     # --- 3. WCZYTANIE PLIKU ---
     try:
-        st.write("--- DEBUG (V11): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
+        st.write("--- DEBUG (V12): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
@@ -436,8 +436,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
         
-        st.write(f"--- DEBUG (V11): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
-        st.write(f"--- DEBUG (V11): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
+        st.write(f"--- DEBUG (V12): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
+        st.write(f"--- DEBUG (V12): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
         
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
@@ -451,7 +451,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-    # *** NOWY REGEX: Rozpoznaje numery rejestracyjne (połączone 'I' lub '+') ***
+    # *** POPRAWIONY REGEX: Rozpoznaje numery rejestracyjne (połączone 'I', 'i', '+') ***
     vehicle_regex = re.compile(r'^[A-Z0-9\sIi+]+$')
 
     for index, row in df.iterrows():
@@ -460,17 +460,24 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
+            # *** POCZĄTEK POPRAWKI BŁĘDU .fillna ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
-                    kwota_brutto_eur += pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0) * kurs
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
+                    kwota_brutto_eur += kwota_val * kurs
             
             for col_tuple, kurs in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
-                    kwota_netto_eur += pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0) * kurs
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
+                    kwota_netto_eur += kwota_val * kurs
+            # *** KONIEC POPRAWKI BŁĘDU .fillna ***
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
+            # st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -509,16 +516,12 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             else:
                 continue 
 
-        # *** POPRAWIONY BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent) ***
+        # BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent)
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
-            # Użyj nowego regexu do sprawdzenia
             if vehicle_regex.match(etykieta_wiersza):
-                # To jest linia z pojazdem/pojazdami
-                # *** NOWY SPLIT: Dzieli po 'I' oraz po '+' ***
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+|\s*\+\s*', etykieta_wiersza, flags=re.IGNORECASE)
                 lista_aktualnych_pojazdow = [p.strip() for p in lista_aktualnych_pojazdow if p.strip()]
             else:
-                # To jest wiersz z Kontrahentem
                 aktualny_kontrahent = etykieta_wiersza.strip('"')
             continue
         
@@ -546,7 +549,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
             
             for pojazd in pojazdy_do_zapisu:
-                st.write(f"--- DEBUG (V11): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}")
+                # Wykomentowane, żeby nie spamować
+                # st.write(f"--- DEBUG (V12): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
@@ -569,7 +573,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # --- 5. AGREGACJA WYNIKÓW ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        st.info("--- DEBUG (V11): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
+        st.info("--- DEBUG (V12): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
