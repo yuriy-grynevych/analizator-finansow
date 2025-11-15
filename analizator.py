@@ -233,7 +233,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
                     st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu.")
                     
         except Exception as e:
-             st.error(f"BŁĄD wczytania pliku {nazwa_pliku_base}: {e}")
+           st.error(f"BŁĄD wczytania pliku {nazwa_pliku_base}: {e}")
     
     if not lista_df_zunifikowanych:
         return None, "Nie udało się zunifikować żadnych danych."
@@ -304,7 +304,12 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         match = re.search(r'([A-Z0-9]{4,})', key)
         if match:
             return match.group(1).upper().strip()
-        return 'Brak Identyfikatora'
+        # --- POPRAWKA: Jeśli regex nie znajdzie dopasowania, zwróć oryginalny klucz lub domyślny
+        # Ta linijka obsługuje przypadki typu "(Koszty/Przychody Ogólne)"
+        cleaned_key = key.strip()
+        if not cleaned_key or cleaned_key == 'nan':
+            return 'Brak Identyfikatora'
+        return cleaned_key # Zwraca wyczyszczony string, jeśli regex nie pasuje
         
     # 3. Zastosuj funkcję do każdego elementu w kolumnie
     return s_str.apply(clean_key)
@@ -485,7 +490,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
         
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        st.info("--- DEBUG: Jeśli widzisz ten komunikat, ale powyżej były komunikaty 'ZAPISUJĘ WPIS', sprawdź logikę filtrowania dat.")
+        st.info("--- DEBUG: Jeśli widzisz ten komunikat, ale powyżej były komunikaty 'ZAPISUJĘ WPIS', spróbuj wybrać szerszy zakres dat.")
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
@@ -495,6 +500,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
     st.write(f"--- DEBUG: Funkcja zakończyła pracę, agregacja gotowa.")
     return df_agregacja
+
 # --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
 @st.cache_data
 def to_excel(df):
@@ -809,7 +815,9 @@ def main_app():
                     data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_start")
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
-                    plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
+
+                # *** POPRAWKA 1: Upewnij się, że przyjmujemy tylko .xlsx ***
+                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
                 
                 if 'raport_gotowy' not in st.session_state:
                     st.session_state['raport_gotowy'] = False
@@ -820,10 +828,12 @@ def main_app():
                         st.session_state['raport_gotowy'] = False 
                     else:
                         with st.spinner("Pracuję..."):
-                            dane_z_bazy_rent = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent, typ='PALIWO') 
+                            # *** POPRAWKA 2: Pobierz WSZYSTKIE dane, nie tylko 'PALIWO' ***
+                            dane_z_bazy_rent = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent) 
                             
                             if dane_z_bazy_rent.empty:
-                                st.error("Brak danych paliwowych w wybranym okresie.")
+                                # *** POPRAWKA 3: Zmień komunikat błędu ***
+                                st.error("Brak jakichkolwiek danych z bazy (Paliwo/Opłaty) w wybranym okresie.")
                                 st.session_state['raport_gotowy'] = False
                             else:
                                 dane_przygotowane_rent, _ = przygotuj_dane_paliwowe(dane_z_bazy_rent.copy())
@@ -831,27 +841,30 @@ def main_app():
                                 if dane_przygotowane_rent is None: 
                                     st.session_state['raport_gotowy'] = False
                                 else:
-                                    df_koszty_paliwa = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty Paliwa (z Bazy)')
+                                    # *** POPRAWKA 4: Sumuj WSZYSTKIE koszty z bazy ***
+                                    df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
                                     df_analiza = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
                                     
                                     if df_analiza is not None:
+                                        # *** POPRAWKA 5: Scal z nową ramką danych ***
                                         df_rentownosc = df_analiza.merge(
-                                            df_koszty_paliwa, 
+                                            df_koszty_baza_wszystkie, 
                                             left_index=True, 
                                             right_index=True, 
                                             how='outer'
                                         ).fillna(0)
                                         
+                                        # *** POPRAWKA 6: Oblicz zysk z nową kolumną kosztów ***
                                         df_rentownosc['ZYSK / STRATA (EUR)'] = (
                                             df_rentownosc['przychody'] - 
                                             df_rentownosc['koszty_inne'] - 
-                                            df_rentownosc['Koszty Paliwa (z Bazy)']
+                                            df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
                                         )
                                         
                                         st.session_state['raport_gotowy'] = True
                                         st.session_state['df_rentownosc'] = df_rentownosc
                                         st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
-                        
+                                
                 if st.session_state.get('raport_gotowy', False):
                     st.subheader("Wyniki dla wybranego okresu")
                     df_rentownosc = st.session_state['df_rentownosc']
@@ -870,7 +883,8 @@ def main_app():
                             dane_pojazdu = df_rentownosc.loc[wybrany_pojazd_rent]
                             przychody = dane_pojazdu['przychody']
                             koszty_inne = dane_pojazdu['koszty_inne']
-                            koszty_paliwa = dane_pojazdu['Koszty Paliwa (z Bazy)']
+                            # *** POPRAWKA 7: Użyj nowej nazwy kolumny ***
+                            koszty_bazy = dane_pojazdu['Koszty z Bazy (Paliwo+Opłaty+Inne)']
                             zysk = dane_pojazdu['ZYSK / STRATA (EUR)']
                             
                             delta_color = "normal"
@@ -881,7 +895,8 @@ def main_app():
                             col1, col2, col3 = st.columns(3)
                             col1.metric("Przychód (z Subiekta)", f"{przychody:,.2f} EUR")
                             col2.metric("Koszty Inne (z Subiekta)", f"{-koszty_inne:,.2f} EUR")
-                            col3.metric("Koszty Paliwa (z Bazy)", f"{-koszty_paliwa:,.2f} EUR")
+                            # *** POPRAWKA 8: Użyj nowej nazwy i etykiety ***
+                            col3.metric("Koszty z Bazy (Paliwo+Opłaty)", f"{-koszty_bazy:,.2f} EUR")
                         
                         except KeyError:
                             st.error("Nie znaleziono danych dla tego pojazdu.")
@@ -890,14 +905,16 @@ def main_app():
                     zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
                     st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
                     
+                    # *** POPRAWKA 9: Zaktualizuj ramkę danych do wyświetlenia ***
                     df_rentownosc_display = df_rentownosc[[
                         'przychody', 
                         'koszty_inne', 
-                        'Koszty Paliwa (z Bazy)',
+                        'Koszty z Bazy (Paliwo+Opłaty+Inne)',
                         'ZYSK / STRATA (EUR)'
                     ]].rename(columns={
                         'przychody': 'Przychód (Subiekt)',
-                        'koszty_inne': 'Koszty Inne (Subiekt)'
+                        'koszty_inne': 'Koszty Inne (Subiekt)',
+                        'Koszty z Bazy (Paliwo+Opłaty+Inne)': 'Koszty z Bazy (Paliwo+Opłaty)'
                     })
                     
                     st.dataframe(
