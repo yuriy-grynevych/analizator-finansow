@@ -384,6 +384,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 14.0 - POPRAWIONE ROZPOZNAWANIE POJAZD/KONTRAHENT) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
+    # Możesz włączyć DEBUG usuwając komentarze
     # st.write(f"--- DEBUG (V14): Rozpoczynam przetwarzanie pliku...")
     # st.write(f"--- DEBUG (V14): Szukany okres: {data_start} do {data_stop}")
 
@@ -452,21 +453,27 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     # *** NOWY, BARDZIEJ RESTRYKCYJNY REGEX DLA POJAZDÓW ***
-    # Dozwolone: A-Z, 0-9, spacja, +, I
-    # Ale: *nie może* zawierać długich słów (jak HEISTKAMP)
-    # Ta funkcja sprawdza, czy linia wygląda jak lista numerów rejestracyjnych
     def is_vehicle_line(line):
         if not line or line == 'nan':
             return False
-        # Reguła 1: Musi pasować do podstawowego wzorca (bez dziwnych znaków)
+        
+        # 1. Sprawdź, czy linia nie zawiera niczego poza dozwolonymi znakami (A-Z, 0-9, spacja, +, I)
         if not re.fullmatch(r'^[A-Z0-9\sIi+]+$', line.strip(), flags=re.IGNORECASE):
-            return False
-        # Reguła 2: Żadne "słowo" w linii nie może być dłuższe niż 10 znaków (numery rej. są krótkie)
+            return False # Ma dziwne znaki (np. "...", "Ł", "Ą", "."), więc to KONTRAHENT
+            
+        # 2. Sprawdź, czy przynajmniej jedno "słowo" ma 3+ cyfry LUB wygląda jak numer rejestracyjny
         words = re.split(r'[\s+I]+', line)
+        has_vehicle_word = False
         for word in words:
-            if len(word) > 10: # Dłuższe słowa to prawdopodobnie kontrahenci (np. HEISTKAMP, TRANSPORT)
-                return False
-        return True
+            if re.search(r'\d{3,}', word): # Ma 3 lub więcej cyfr (np. WGM34791)
+                has_vehicle_word = True
+                break
+            if re.fullmatch(r'[A-Z]{2,3}[A-Z0-9]{4,5}', word, flags=re.IGNORECASE): # np. PO6UA33
+                has_vehicle_word = True
+                break
+        
+        # Jeśli nie ma słowa wyglądającego jak rejestracja (np. linia "HEISTKAMP TRANSPORT"), to NIE jest pojazd
+        return has_vehicle_word
 
 
     for index, row in df.iterrows():
@@ -585,7 +592,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # --- 5. AGREGACJA WYNIKÓW ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        st.info("--- DEBUG (V14): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
+        # st.info("--- DEBUG (V14): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
