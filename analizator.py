@@ -384,8 +384,8 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 12.0 - POPRAWKA BŁĘDU .fillna) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
-    st.write(f"--- DEBUG (V12): Rozpoczynam przetwarzanie pliku...")
-    st.write(f"--- DEBUG (V12): Szukany okres: {data_start} do {data_stop}")
+    # st.write(f"--- DEBUG (V12): Rozpoczynam przetwarzanie pliku...")
+    # st.write(f"--- DEBUG (V12): Szukany okres: {data_start} do {data_stop}")
 
     # --- 1. MAPOWANIE WALUT ---
     MAPA_WALUT_PLIKU = {
@@ -405,14 +405,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-        st.write(f"--- DEBUG (V12): Pobrane kursy do EUR: {mapa_kursow}")
+        # st.write(f"--- DEBUG (V12): Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     # --- 3. WCZYTANIE PLIKU ---
     try:
-        st.write("--- DEBUG (V12): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
+        # st.write("--- DEBUG (V12): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
@@ -436,8 +436,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
         
-        st.write(f"--- DEBUG (V12): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
-        st.write(f"--- DEBUG (V12): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
+        # st.write(f"--- DEBUG (V12): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
+        # st.write(f"--- DEBUG (V12): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
         
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
@@ -451,7 +451,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-    # *** POPRAWIONY REGEX: Rozpoznaje numery rejestracyjne (połączone 'I', 'i', '+') ***
     vehicle_regex = re.compile(r'^[A-Z0-9\sIi+]+$')
 
     for index, row in df.iterrows():
@@ -463,14 +462,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             # *** POCZĄTEK POPRAWKI BŁĘDU .fillna ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
-                    if pd.isna(kwota_val): kwota_val = 0.0
+                    # Bezpośrednio rzutujemy na liczbę, fillna(0.0) jest na wyniku
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
                     kwota_brutto_eur += kwota_val * kurs
             
             for col_tuple, kurs in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
-                    if pd.isna(kwota_val): kwota_val = 0.0
+                    # Bezpośrednio rzutujemy na liczbę, fillna(0.0) jest na wyniku
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
                     kwota_netto_eur += kwota_val * kurs
             # *** KONIEC POPRAWKI BŁĘDU .fillna ***
             
@@ -526,7 +525,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             continue
         
         else:
-            continue # Pusty wiersz bez kwot, ignoruj
+            continue 
 
         # --- BLOK 5: ZAPISYWANIE WYNIKÓW ---
         if 'etykieta_do_uzycia' in locals() and etykieta_do_uzycia:
@@ -549,7 +548,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
             
             for pojazd in pojazdy_do_zapisu:
-                # Wykomentowane, żeby nie spamować
                 # st.write(f"--- DEBUG (V12): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
@@ -579,9 +577,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     df_wyniki = pd.DataFrame(wyniki)
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
     
-    df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody')
-    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().abs().to_frame('koszty_inne')
-    df_agregacja = df_przychody.merge(df_koszty, left_index=True, right_index=True, how='outer').fillna(0)
+    # *** NOWA AGREGACJA: Sumujemy Netto i Brutto oddzielnie ***
+    df_przychody_brutto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+    df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+    df_koszty_brutto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().abs().to_frame('koszty_inne_brutto')
+    df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().abs().to_frame('koszty_inne_netto')
+
+    # Łączymy wszystko w jedną tabelę agregującą
+    df_agregacja = pd.concat([df_przychody_brutto, df_przychody_netto, df_koszty_brutto, df_koszty_netto], axis=1).fillna(0)
     
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
     return df_agregacja, df_wyniki
@@ -872,31 +875,42 @@ def main_app():
                             st.session_state['raport_gotowy'] = False
                             st.error("Nie udało się pobrać kursów walut z NBP.")
                         else:
-                            df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
+                            # *** NOWA AGREGACJA Z BAZY: Sumujemy Netto i Brutto ***
+                            df_koszty_baza_agg = dane_przygotowane_rent.groupby('identyfikator_clean').agg(
+                                koszty_baza_netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                                koszty_baza_brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                            )
                             
                             df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
                             st.session_state['dane_analizy_raw'] = df_analiza_raw 
                             
                             if df_analiza_agreg is None:
-                                if df_koszty_baza_wszystkie.empty:
+                                if df_koszty_baza_agg.empty:
                                     st.error("Nie znaleziono żadnych danych ani w pliku 'analiza.xlsx', ani w bazie danych dla wybranego okresu.")
                                     st.session_state['raport_gotowy'] = False
                                     st.stop()
                                 else:
                                     st.warning("Nie znaleziono danych w pliku 'analiza.xlsx' dla tych dat, ale pokazuję koszty z bazy.")
-                                    df_analiza_agreg = pd.DataFrame(columns=['przychody', 'koszty_inne'])
+                                    df_analiza_agreg = pd.DataFrame(columns=['przychody_brutto', 'przychody_netto', 'koszty_inne_brutto', 'koszty_inne_netto'])
 
+                            # *** NOWE SCALANIE: Łączymy obie agregacje (Subiekt + Baza) ***
                             df_rentownosc = df_analiza_agreg.merge(
-                                df_koszty_baza_wszystkie, 
+                                df_koszty_baza_agg, 
                                 left_index=True, 
                                 right_index=True, 
                                 how='outer'
                             ).fillna(0)
                             
-                            df_rentownosc['ZYSK / STRATA (EUR)'] = (
-                                df_rentownosc['przychody'] - 
-                                df_rentownosc['koszty_inne'] - 
-                                df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
+                            # *** NOWE OBLICZENIA ZYSKU: Brutto i Netto ***
+                            df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'] = (
+                                df_rentownosc['przychody_brutto'] - 
+                                df_rentownosc['koszty_inne_brutto'] - 
+                                df_rentownosc['koszty_baza_brutto']
+                            )
+                            df_rentownosc['ZYSK_STRATA_NETTO_EUR'] = (
+                                df_rentownosc['przychody_netto'] - 
+                                df_rentownosc['koszty_inne_netto'] - 
+                                df_rentownosc['koszty_baza_netto']
                             )
                             
                             st.session_state['raport_gotowy'] = True
@@ -906,7 +920,8 @@ def main_app():
             if st.session_state.get('raport_gotowy', False):
                 st.subheader("Wyniki dla wybranego okresu")
                 df_rentownosc = st.session_state['df_rentownosc']
-                df_rentownosc = df_rentownosc.sort_values(by='ZYSK / STRATA (EUR)', ascending=False)
+                # Sortujemy po Brutto
+                df_rentownosc = df_rentownosc.sort_values(by='ZYSK_STRATA_BRUTTO_EUR', ascending=False)
                 
                 lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc.index.unique())
                 
@@ -919,25 +934,26 @@ def main_app():
                 if wybrany_pojazd_rent != "--- Wybierz pojazd ---":
                     try:
                         dane_pojazdu = df_rentownosc.loc[wybrany_pojazd_rent]
-                        przychody = dane_pojazdu['przychody']
-                        koszty_inne = dane_pojazdu['koszty_inne']
-                        koszty_bazy = dane_pojazdu['Koszty z Bazy (Paliwo+Opłaty+Inne)']
-                        zysk = dane_pojazdu['ZYSK / STRATA (EUR)']
+                        # Pobieramy Brutto dla metryk
+                        przychody = dane_pojazdu['przychody_brutto']
+                        koszty_inne = dane_pojazdu['koszty_inne_brutto']
+                        koszty_bazy = dane_pojazdu['koszty_baza_brutto']
+                        zysk = dane_pojazdu['ZYSK_STRATA_BRUTTO_EUR']
                         
                         delta_color = "normal"
                         if zysk < 0: delta_color = "inverse"
                         
-                        st.metric(label="ZYSK / STRATA (EUR)", value=f"{zysk:,.2f} EUR", delta_color=delta_color)
+                        st.metric(label="ZYSK / STRATA (BRUTTO EUR)", value=f"{zysk:,.2f} EUR", delta_color=delta_color)
                         
                         col1, col2, col3 = st.columns(3)
-                        col1.metric("Przychód (z Subiekta)", f"{przychody:,.2f} EUR")
-                        col2.metric("Koszty Inne (z Subiekta)", f"{-koszty_inne:,.2f} EUR")
-                        col3.metric("Koszty z Bazy (Paliwo+Opłaty)", f"{-koszty_bazy:,.2f} EUR")
+                        col1.metric("Przychód Brutto (Subiekt)", f"{przychody:,.2f} EUR")
+                        col2.metric("Koszty Inne Brutto (Subiekt)", f"{-koszty_inne:,.2f} EUR")
+                        col3.metric("Koszty Brutto z Bazy (Paliwo+Opłaty)", f"{-koszty_bazy:,.2f} EUR")
                     
                     except KeyError:
                         st.error("Nie znaleziono danych dla tego pojazdu.")
 
-                    # --- *** POCZĄTEK NOWEJ FUNKCJI: SZCZEGÓŁOWA LISTA (NETTO/BRUTTO) *** ---
+                    # --- SEKCJA SZCZEGÓŁOWA (BEZ ZMIAN, JUŻ POKAZUJE NETTO/BRUTTO) ---
                     st.divider()
                     st.subheader(f"Szczegółowa lista transakcji dla {wybrany_pojazd_rent}")
 
@@ -946,14 +962,12 @@ def main_app():
                     
                     lista_df_szczegolow = []
                     
-                    # 1. Dane z pliku analizy (Subiekt)
                     if df_analiza_raw is not None and not df_analiza_raw.empty:
                         subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
                         if not subiekt_details.empty:
                             subiekt_formatted = subiekt_details[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
                             lista_df_szczegolow.append(subiekt_formatted)
 
-                    # 2. Dane z bazy (Paliwo, Opłaty, Inne)
                     if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
                         baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
                         if not baza_details.empty:
@@ -969,7 +983,6 @@ def main_app():
                             baza_formatted['kwota_brutto_eur'] = -baza_formatted['kwota_brutto_eur'].abs() 
                             lista_df_szczegolow.append(baza_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']])
 
-                    # 3. Połącz i wyświetl
                     if not lista_df_szczegolow:
                         st.info("Brak szczegółowych transakcji dla tego pojazdu w wybranym okresie.")
                     else:
@@ -991,22 +1004,35 @@ def main_app():
                                 "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR")
                             }
                         )
-                    # --- *** KONIEC NOWEJ FUNKCJI *** ---
+                    # --- *** KONIEC SEKCJI SZCZEGÓŁOWEJ *** ---
 
                 
                 st.divider()
-                zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
-                st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
+                # *** NOWE METRYKI SUMY: BRUTTO I NETTO ***
+                zysk_laczny_brutto = df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'].sum()
+                zysk_laczny_netto = df_rentownosc['ZYSK_STRATA_NETTO_EUR'].sum()
                 
+                col_sum1, col_sum2 = st.columns(2)
+                col_sum1.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA BRUTTO)", value=f"{zysk_laczny_brutto:,.2f} EUR")
+                col_sum2.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA NETTO)", value=f"{zysk_laczny_netto:,.2f} EUR")
+                
+                
+                # *** NOWA TABELA GŁÓWNA: POKAZUJE NETTO I BRUTTO ***
+                st.subheader("Podsumowanie dla wszystkich pojazdów")
                 df_rentownosc_display = df_rentownosc[[
-                    'przychody', 
-                    'koszty_inne', 
-                    'Koszty z Bazy (Paliwo+Opłaty+Inne)',
-                    'ZYSK / STRATA (EUR)'
+                    'przychody_netto', 'przychody_brutto', 
+                    'koszty_inne_netto', 'koszty_inne_brutto',
+                    'koszty_baza_netto', 'koszty_baza_brutto',
+                    'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR'
                 ]].rename(columns={
-                    'przychody': 'Przychód (Subiekt)',
-                    'koszty_inne': 'Koszty Inne (Subiekt)',
-                    'Koszty z Bazy (Paliwo+Opłaty+Inne)': 'Koszty z Bazy (Paliwo+Opłaty)'
+                    'przychody_netto': 'Przychód Netto (Subiekt)',
+                    'przychody_brutto': 'Przychód Brutto (Subiekt)',
+                    'koszty_inne_netto': 'Koszty Inne Netto (Subiekt)',
+                    'koszty_inne_brutto': 'Koszty Inne Brutto (Subiekt)',
+                    'koszty_baza_netto': 'Koszty Bazy Netto',
+                    'koszty_baza_brutto': 'Koszty Bazy Brutto',
+                    'ZYSK_STRATA_NETTO_EUR': 'ZYSK/STRATA NETTO',
+                    'ZYSK_STRATA_BRUTTO_EUR': 'ZYSK/STRATA BRUTTO'
                 })
                 
                 st.dataframe(
