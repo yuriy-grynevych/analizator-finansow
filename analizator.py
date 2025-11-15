@@ -322,10 +322,11 @@ def zapisz_plik_w_bazie(conn, file_name, file_bytes):
     except Exception as e:
         st.error(f"Błąd podczas zapisu pliku do bazy: {e}")
 
+# *** POPRAWKA UnhashableParamError: Zmieniono 'conn' na '_conn' ***
 @st.cache_data(ttl=60) # Cache'ujemy odczyt pliku na 1 minutę
-def wczytaj_plik_z_bazy(conn, file_name):
+def wczytaj_plik_z_bazy(_conn, file_name):
     try:
-        result = conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
+        result = _conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
         if not result.empty:
             return result.iloc[0]['file_data']
         return None
@@ -412,7 +413,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # --- 3. WCZYTANIE PLIKU ---
     try:
         st.write("--- DEBUG: Wczytuję arkusz 'pojazdy' z pliku .xlsx...")
-        # *** WAŻNA ZMIANA: Czytamy z 'przeslany_plik_bytes' ***
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
@@ -542,7 +542,6 @@ def main_app():
     
     st.title("Analizator Wydatków Floty") 
 
-    # *** POPRAWKA 1: Przenosimy 'to_excel' tutaj, żeby naprawić 'NameError' ***
     @st.cache_data
     def to_excel(df):
         output = io.BytesIO()
@@ -576,7 +575,6 @@ def main_app():
                     setup_database(conn)
                 st.success("Tabela 'transactions' jest gotowa.")
         
-        # <<< NOWA SEKCJA W ADMINIE DO ZARZĄDZANIA PLIKAMI >>>
         with col2_admin:
             st.subheader("Baza Danych Plików")
             if st.button("2. Stwórz tabelę 'saved_files' (tylko raz!)"):
@@ -761,19 +759,24 @@ def main_app():
             min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
             min_max_date = conn.query(min_max_date_query)
             
+            # Ustalanie domyślnych dat
             if min_max_date.empty or min_max_date.iloc[0, 0] is None:
+                st.info("Baza danych transakcji jest pusta. Ustawiam domyślne daty na dzisiaj.")
                 domyslny_start_rent = date.today()
                 domyslny_stop_rent = date.today()
-                st.info("Baza danych transakcji jest pusta. Ustawiam domyślne daty.")
+                min_date_val = date(2020, 1, 1) # Zapobiegnięcie błędowi jeśli baza jest pusta
+                max_date_val = date.today()
             else:
                 domyslny_start_rent = min_max_date.iloc[0, 0]
                 domyslny_stop_rent = min_max_date.iloc[0, 1]
-                
+                min_date_val = domyslny_start_rent
+                max_date_val = domyslny_stop_rent
+
             col1_rent, col2_rent = st.columns(2)
             with col1_rent:
-                data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_start")
+                data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=min_date_val, max_value=max_date_val, key="rent_start")
             with col2_rent:
-                data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
+                data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=min_date_val, max_value=max_date_val, key="rent_stop")
             
             st.divider()
 
@@ -786,14 +789,14 @@ def main_app():
             
             if uploaded_file is not None:
                 # Użytkownik aktywnie wrzucił nowy plik
-                plik_analizy = uploaded_file
+                plik_analizy = uploaded_file # Użyj tego pliku
                 st.info("Wykryto nowy plik. Zostanie użyty do generowania raportu.")
                 if st.button("Zapisz ten plik na stałe (nadpisze stary)"):
                     zapisz_plik_w_bazie(conn, "analiza.xlsx", uploaded_file.getvalue())
             
             else:
                 # 2. Jeśli nie ma nowego pliku, spróbuj wczytać stary z bazy
-                zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, "analiza.xlsx")
+                zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, "analiza.xlsx") # Tutaj 'conn' jest OK, bo przekazujemy go do funkcji
                 if zapisany_plik_bytes is not None:
                     st.success("Używam pliku `analiza.xlsx` zapisanego w bazie.")
                     plik_analizy = io.BytesIO(zapisany_plik_bytes) # Traktuj bajty jak plik
@@ -817,23 +820,17 @@ def main_app():
                     st.session_state['raport_gotowy'] = False 
                 else:
                     with st.spinner("Pracuję..."):
-                        # Pobierz WSZYSTKIE dane z bazy
                         dane_z_bazy_rent = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent) 
-                        
                         dane_przygotowane_rent, _ = przygotuj_dane_paliwowe(dane_z_bazy_rent.copy())
-                        st.session_state['dane_bazy_raw'] = dane_przygotowane_rent # Zapisz do sesji dla szczegółów
+                        st.session_state['dane_bazy_raw'] = dane_przygotowane_rent 
                         
                         if dane_przygotowane_rent is None: 
                             st.session_state['raport_gotowy'] = False
                             st.error("Nie udało się pobrać kursów walut z NBP.")
                         else:
-                            # Sumuj WSZYSTKIE koszty z bazy
                             df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
-                            
-                            # Przetwórz plik analizy
                             df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
-                            
-                            st.session_state['dane_analizy_raw'] = df_analiza_raw # Zapisz do sesji dla szczegółów
+                            st.session_state['dane_analizy_raw'] = df_analiza_raw 
                             
                             if df_analiza_agreg is None:
                                 if df_koszty_baza_wszystkie.empty:
@@ -844,7 +841,6 @@ def main_app():
                                     st.warning("Nie znaleziono danych w pliku 'analiza.xlsx' dla tych dat, ale pokazuję koszty z bazy.")
                                     df_analiza_agreg = pd.DataFrame(columns=['przychody', 'koszty_inne'])
 
-                            # Scal dane
                             df_rentownosc = df_analiza_agreg.merge(
                                 df_koszty_baza_wszystkie, 
                                 left_index=True, 
@@ -852,7 +848,6 @@ def main_app():
                                 how='outer'
                             ).fillna(0)
                             
-                            # Oblicz zysk
                             df_rentownosc['ZYSK / STRATA (EUR)'] = (
                                 df_rentownosc['przychody'] - 
                                 df_rentownosc['koszty_inne'] - 
