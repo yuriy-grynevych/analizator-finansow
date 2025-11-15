@@ -344,49 +344,115 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     return dane_z_bazy, mapa_kursow
 
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA POD KĄTEM PLIKÓW CSV) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
-    st.write("Przetwarzanie pliku `analiza.xlsx`...")
+    st.write(f"Przetwarzanie pliku: {przeslany_plik.name}...")
     try:
-        df = pd.read_excel(przeslany_plik, 
-                           sheet_name='pojazdy', 
-                           engine='openpyxl', 
-                           header=7) 
+        # Sprawdzamy, czy to plik CSV, który nas interesuje
+        if przeslany_plik.name.endswith('pojazdy.csv'):
+            st.write("Wykryto plik `pojazdy.csv`, wczytuję...")
+            # Wczytujemy plik CSV, nagłówek jest w 8. wierszu (indeks 7)
+            df = pd.read_csv(przeslany_plik, 
+                             header=7, 
+                             engine='python', # Używamy silnika python, jest bardziej elastyczny
+                             skip_blank_lines=False) # WAŻNE: Nie pomijaj pustych wierszy
+            
+            # Znajdź pierwszą kolumnę (z etykietami), nawet jeśli ma dziwną nazwę
+            kolumna_etykiet = df.columns[0]
+            st.write(f"Wczytano dane. Kolumna etykiet: '{kolumna_etykiet}'")
+
+            # Wyczyść nazwy kolumn na wszelki wypadek
+            df.columns = [str(c).strip() for c in df.columns]
+            
+            # Wypełnij puste komórki w kolumnie etykiet, żeby ułatwić przetwarzanie
+            # df[kolumna_etykiet] = df[kolumna_etykiet].fillna('PUSTY_WIERSZ')
+
+        # Kod dla plików XLSX (zostawiamy na wszelki wypadek)
+        elif przeslany_plik.name.endswith(('.xlsx', '.xls')):
+            st.write("Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
+            df = pd.read_excel(przeslany_plik, 
+                               sheet_name='pojazdy', 
+                               engine='openpyxl', 
+                               header=7)
+            kolumna_etykiet = 'Etykiety wierszy' # Domyślna nazwa w Excelu
+        else:
+            st.error(f"Nie rozpoznano pliku. Prześlij plik `analiza.xlsx - pojazdy.csv`.")
+            return None
+
     except Exception as e:
-        st.error(f"Nie udało się wczytać arkusza 'pojazdy' z pliku `analiza.xlsx`. Błąd: {e}")
+        st.error(f"Nie udało się wczytać danych. Błąd: {e}")
+        st.info("Upewnij się, że plik .csv ma poprawny format i nagłówek w 8. wierszu.")
         return None
 
-    df = df.dropna(subset=['Etykiety wierszy'])
+    # --- NOWA LOGIKA PARSOWANIA ---
+    # Ta logika rozumie, że kwota może być w innym wierszu niż etykieta
     
     wyniki = []
     aktualny_pojazd_oryg = None
-    
+    ostatnia_etykieta_pojazdu = None # Zapamiętuje np. "Faktura VAT sprzedaży"
+
+    # Zapewnij istnienie kolumn
+    if 'euro' not in df.columns and 'EUR' in df.columns:
+        df['euro'] = df['EUR']
+    elif 'euro' not in df.columns:
+        df['euro'] = 0.0 # Stwórz pustą kolumnę, jeśli nie ma
+
+    if kolumna_etykiet not in df.columns:
+        st.error(f"Krytyczny błąd: Nie znaleziono kolumny etykiet ('{kolumna_etykiet}') po wczytaniu.")
+        return None
+
     for index, row in df.iterrows():
-        etykieta = str(row['Etykiety wierszy']).strip()
-        kwota_euro = row.get('euro', row.get('EUR', 0.0)) 
+        # Pobieramy etykietę z pierwszej kolumny
+        etykieta_wiersza = str(row[kolumna_etykiet]).strip()
+        
+        # Pobieramy kwotę
+        kwota_euro = pd.to_numeric(row.get('euro'), errors='coerce')
+        if pd.isna(kwota_euro):
+            kwota_euro = 0.0
 
-        if etykieta not in WSZYSTKIE_ZNANE_ETYKIETY:
-            aktualny_pojazd_oryg = etykieta
-            continue 
+        # Scenariusz 1: To jest NOWY POJAZD (np. "WGM34791")
+        # Zakładamy, że to pojazd, jeśli etykieta nie jest pusta i nie jest znaną etykietą
+        if etykieta_wiersza != 'nan' and etykieta_wiersza and (etykieta_wiersza not in WSZYSTKIE_ZNANE_ETYKIETY):
+            aktualny_pojazd_oryg = etykieta_wiersza
+            ostatnia_etykieta_pojazdu = None # Resetuj etykietę przy nowym pojeździe
+            continue # Przejdź do następnego wiersza
 
-        if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
-            if etykieta in ETYKIETY_PRZYCHODOW:
-                # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
-                wyniki.append({
-                    'pojazd_oryg': aktualny_pojazd_oryg,
-                    'przychody': kwota_euro,
-                    'koszty_inne': 0
-                })
-            elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
-                 # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
-                 wyniki.append({
-                    'pojazd_oryg': aktualny_pojazd_oryg,
-                    'przychody': 0,
-                    'koszty_inne': kwota_euro 
-                })
+        # Scenariusz 2: To jest ZNANA ETYKIETA (np. "Faktura VAT sprzedaży")
+        elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY:
+            if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
+                ostatnia_etykieta_pojazdu = etykieta_wiersza # Zapamiętaj etykietę
+            else:
+                ostatnia_etykieta_pojazdu = None # To etykieta ignorowana
+            continue # Przejdź do następnego wiersza
+
+        # Scenariusz 3: To jest WIERSZ Z KWOTĄ (etykieta jest pusta/nan, ale jest kwota)
+        elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_euro != 0.0:
+            # Mamy kwotę. Sprawdź, czy mamy pojazd i etykietę, do której można ją przypisać
             
+            if aktualny_pojazd_oryg is not None and ostatnia_etykieta_pojazdu is not None:
+                
+                if ostatnia_etykieta_pojazdu in ETYKIETY_PRZYCHODOW:
+                    wyniki.append({
+                        'pojazd_oryg': aktualny_pojazd_oryg,
+                        'przychody': kwota_euro,
+                        'koszty_inne': 0
+                    })
+                elif ostatnia_etykieta_pojazdu in ETYKIETY_KOSZTOW_INNYCH:
+                    wyniki.append({
+                        'pojazd_oryg': aktualny_pojazd_oryg,
+                        'przychody': 0,
+                        'koszty_inne': kwota_euro 
+                    })
+                
+                # Ważne: Resetuj etykietę po jej "zużyciu".
+                # Zakładamy, że jedna kwota pasuje do jednej etykiety.
+                ostatnia_etykieta_pojazdu = None
+    
+    # --- Koniec nowej logiki ---
+        
     if not wyniki:
-        st.error("Nie znaleziono żadnych danych o przychodach/kosztach w pliku `analiza.xlsx`.")
+        st.error("Nie znaleziono żadnych danych o przychodach/kosztach w pliku `pojazdy.csv`.")
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
@@ -396,9 +462,8 @@ def przetworz_plik_analizy(przeslany_plik):
 
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
-    st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
+    st.success("Plik analizy przetworzony pomyślnie.")
     return df_agregacja
-
 
 # --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
 @st.cache_data
@@ -715,7 +780,7 @@ def main_app():
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
 
-                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
+                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx - pojazdy.csv` (z Subiekta)", type=['xlsx', 'csv'])
                 
                 if 'raport_gotowy' not in st.session_state:
                     st.session_state['raport_gotowy'] = False
