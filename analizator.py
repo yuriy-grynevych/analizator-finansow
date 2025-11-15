@@ -723,11 +723,7 @@ def main_app():
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
 
-                # Zezwól na pliki .csv
-plik_analizy = st.file_uploader(
-    "Prześlij plik `analiza.xlsx` lub `pojazdy.csv`", 
-    type=['xlsx', 'csv']  # <--- DODAJ 'csv'
-)
+                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx', 'csv'])
                 
                 if 'raport_gotowy' not in st.session_state:
                     st.session_state['raport_gotowy'] = False
