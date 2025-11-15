@@ -367,7 +367,6 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     unikalne_waluty = dane_z_bazy['waluta'].unique()
     mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
     
-    # *** ZMIANA: Dodajemy kwota_netto_eur i kwota_brutto_eur z bazy ***
     dane_z_bazy['kwota_netto_num'] = pd.to_numeric(dane_z_bazy['kwota_netto'], errors='coerce').fillna(0.0)
     dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
     
@@ -378,25 +377,22 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
     )
     
-    # Główna kwota do raportów rentowności to Brutto
     dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_eur'] 
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 9.0 - NETTO/BRUTTO, KONTRAHENT) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 10.0 - POPRAWIONE ROZPOZNAWANIE POJAZD/KONTRAHENT) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
-    st.write(f"--- DEBUG (V9): Rozpoczynam przetwarzanie pliku...")
-    st.write(f"--- DEBUG (V9): Szukany okres: {data_start} do {data_stop}")
+    st.write(f"--- DEBUG (V10): Rozpoczynam przetwarzanie pliku...")
+    st.write(f"--- DEBUG (V10): Szukany okres: {data_start} do {data_stop}")
 
     # --- 1. MAPOWANIE WALUT ---
-    # Nazwy kolumn walut w pliku
-    WALUTY_W_PLIKU = {
+    MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
         'złoty polski': 'PLN',
         'korona duńska': 'DKK'
     }
-    # Nazwy kolumn Netto/Brutto w pliku
     TYP_KWOTY_BRUTTO = 'Suma Wartosc_BruttoPoRabacie'
     TYP_KWOTY_NETTO = 'Suma Wartosc_NettoPoRabacie'
     
@@ -407,27 +403,23 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             st.error("Nie udało się pobrać kursu EUR/PLN z NBP. Przetwarzanie przerwane.")
             return None, None
         
-        lista_iso_walut = list(WALUTY_W_PLIKU.values())
+        lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-        st.write(f"--- DEBUG (V9): Pobrane kursy do EUR: {mapa_kursow}")
+        st.write(f"--- DEBUG (V10): Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     # --- 3. WCZYTANIE PLIKU ---
     try:
-        st.write("--- DEBUG (V9): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
-        # Czytamy nagłówek z linii 8 (indeks 7) i 9 (indeks 8)
+        st.write("--- DEBUG (V10): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
-                           header=[7, 8]) # Kluczowa zmiana!
+                           header=[7, 8]) 
         
-        # Stworzy to MultiIndex. Musimy go spłaszczyć.
-        # Kolumna etykiet to ('Etykiety wierszy', 'Unnamed: 8_level_1') lub podobna. Weźmy ją po indeksie.
         kolumna_etykiet_tuple = df.columns[0]
         
-        # Zbudujmy mapowanie kolumn brutto i netto
         MAPA_BRUTTO_DO_KURSU = {}
         MAPA_NETTO_DO_KURSU = {}
         
@@ -435,26 +427,26 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             if col_waluta in WALUTY_W_PLIKU and col_typ == TYP_KWOTY_BRUTTO:
                 iso_code = WALUTY_W_PLIKU[col_waluta]
                 kurs = mapa_kursow.get(iso_code, 0.0)
-                if iso_code == 'EUR': kurs = 1.0 # EUR to zawsze 1.0
+                if iso_code == 'EUR': kurs = 1.0
                 MAPA_BRUTTO_DO_KURSU[(col_waluta, col_typ)] = kurs
             
             if col_waluta in WALUTY_W_PLIKU and col_typ == TYP_KWOTY_NETTO:
                 iso_code = WALUTY_W_PLIKU[col_waluta]
                 kurs = mapa_kursow.get(iso_code, 0.0)
-                if iso_code == 'EUR': kurs = 1.0 # EUR to zawsze 1.0
+                if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
         
-        st.write(f"--- DEBUG (V9): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
-        st.write(f"--- DEBUG (V9): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
+        st.write(f"--- DEBUG (V10): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
+        st.write(f"--- DEBUG (V10): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
         
     except Exception as e:
-        st.error(f"Nie udało się wczytać pliku Excel (być może zmieniła się struktura nagłówka?). Błąd: {e}")
+        st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
         return None, None
 
     # --- 4. LOGIKA PARSOWANIA (NOWA STATE MACHINE) ---
     wyniki = []
     lista_aktualnych_pojazdow = [] 
-    aktualny_kontrahent = None # <-- NOWY STAN
+    aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
@@ -462,8 +454,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     for index, row in df.iterrows():
         try:
             etykieta_wiersza = str(row[kolumna_etykiet_tuple]).strip()
-            
-            # Oblicz kwoty Netto i Brutto dla tego wiersza
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
@@ -474,13 +464,12 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             for col_tuple, kurs in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
                     kwota_netto_eur += pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0) * kurs
-
-            kwota_laczna = kwota_brutto_eur + kwota_netto_eur # Używamy brutto jako kwoty finalnej, jeśli netto = 0
+            
+            kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
             continue 
 
-        # --- NOWA STATE MACHINE ---
         # BLOK 1: Szukanie daty
         if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)) or date_regex.match(etykieta_wiersza):
             if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)):
@@ -488,7 +477,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             else:
                 try: aktualna_data = pd.to_datetime(etykieta_wiersza).date()
                 except: pass
-            # Reset stanu po znalezieniu daty
             lista_aktualnych_pojazdow = [] 
             aktualny_kontrahent = None
             ostatnia_etykieta_pojazdu = None
@@ -498,36 +486,31 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 ostatnia_etykieta_pojazdu = etykieta_wiersza
-                # Sprawdź, czy kwota jest w tym samym wierszu
                 if kwota_laczna != 0.0:
-                    # To jest wiersz "Case A" (etykieta i kwota w jednym)
-                    kwota_do_uzycia = kwota_brutto_eur if kwota_brutto_eur != 0.0 else kwota_netto_eur
+                    etykieta_do_uzycia = ostatnia_etykieta_pojazdu
                     kwota_netto_do_uzycia = kwota_netto_eur
                     kwota_brutto_do_uzycia = kwota_brutto_eur
-                    ostatnia_etykieta_pojazdu = None # Zużyte
+                    ostatnia_etykieta_pojazdu = None 
                 else:
-                    # To jest wiersz "Case B.1" (czekamy na kwotę poniżej)
                     continue
             else:
-                continue # Ignorowana etykieta
+                continue 
 
         # BLOK 3: Wiersz z kwotą (pusta etykieta)
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_laczna != 0.0:
-            if ostatnia_etykieta_pojazdu: # Mamy zapamiętaną etykietę
+            if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
-                kwota_do_uzycia = kwota_brutto_eur if kwota_brutto_eur != 0.0 else kwota_netto_eur
                 kwota_netto_do_uzycia = kwota_netto_eur
                 kwota_brutto_do_uzycia = kwota_brutto_eur
-                ostatnia_etykieta_pojazdu = None # Zużyte
+                ostatnia_etykieta_pojazdu = None 
             else:
-                continue # Pusta kwota bez etykiety
+                continue 
 
-        # BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent)
+        # *** POPRAWIONY BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent) ***
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
-            # Sprawdź, czy to pojazd
-            pojazdy = re.findall(r'([A-Z0-9]{4,})', etykieta_wiersza)
-            if pojazdy:
-                # To jest wiersz z pojazdem/pojazdami
+            # Wzorzec na pojazd: same duże litery, cyfry, spacje i litera 'I'
+            if re.fullmatch(r'^[A-Z0-9\sI]+$', etykieta_wiersza.strip()):
+                # To jest linia z pojazdem/pojazdami
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+', etykieta_wiersza, flags=re.IGNORECASE)
                 lista_aktualnych_pojazdow = [p.strip() for p in lista_aktualnych_pojazdow if p.strip()]
             else:
@@ -538,8 +521,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         else:
             continue # Pusty wiersz bez kwot, ignoruj
 
-        # --- BLOK 5: ZAPISYWANIE WYNIKÓW (Tylko jeśli mamy 'kwota_do_uzycia') ---
-        if 'kwota_do_uzycia' in locals() and kwota_do_uzycia != 0.0:
+        # --- BLOK 5: ZAPISYWANIE WYNIKÓW ---
+        if 'etykieta_do_uzycia' in locals() and etykieta_do_uzycia:
             
             if not aktualna_data: continue 
             if not (data_start <= aktualna_data <= data_stop): continue 
@@ -554,7 +537,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             podz_kwota_brutto = kwota_brutto_do_uzycia / liczba_pojazdow
             podz_kwota_netto = kwota_netto_do_uzycia / liczba_pojazdow
             
-            # Zbuduj opis
             opis_transakcji = etykieta_do_uzycia
             if aktualny_kontrahent and aktualny_kontrahent != "nan":
                 opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
@@ -571,25 +553,23 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                     wyniki.append({
                         'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
                         'typ': 'Koszt (Subiekt)', 'zrodlo': 'Subiekt',
-                        'kwota_brutto_eur': -abs(podz_kwota_brutto), # Koszty są ujemne
+                        'kwota_brutto_eur': -abs(podz_kwota_brutto), 
                         'kwota_netto_eur': -abs(podz_kwota_netto)
                     })
             
-            # Reset zmiennych
-            del kwota_do_uzycia
+            del etykieta_do_uzycia
             kwota_brutto_do_uzycia = 0.0
             kwota_netto_do_uzycia = 0.0
             
     # --- 5. AGREGACJA WYNIKÓW ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        st.info("--- DEBUG (V9): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
+        st.info("--- DEBUG (V10): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
     
-    # Agregacja bazuje na BRUTTO
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody')
     df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().abs().to_frame('koszty_inne')
     df_agregacja = df_przychody.merge(df_koszty, left_index=True, right_index=True, how='outer').fillna(0)
@@ -884,6 +864,8 @@ def main_app():
                             st.error("Nie udało się pobrać kursów walut z NBP.")
                         else:
                             df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
+                            
+                            # *** ZMIANA: Przekazujemy plik_analizy (który jest teraz obiektem pliku lub BytesIO) ***
                             df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
                             st.session_state['dane_analizy_raw'] = df_analiza_raw 
                             
@@ -947,7 +929,7 @@ def main_app():
                     except KeyError:
                         st.error("Nie znaleziono danych dla tego pojazdu.")
 
-                    # --- *** POCZĄTEK NOWEJ FUNKCJI: SZCZEGÓŁOWA LISTA *** ---
+                    # --- *** POCZĄTEK NOWEJ FUNKCJI: SZCZEGÓŁOWA LISTA (NETTO/BRUTTO) *** ---
                     st.divider()
                     st.subheader(f"Szczegółowa lista transakcji dla {wybrany_pojazd_rent}")
 
@@ -960,7 +942,6 @@ def main_app():
                     if df_analiza_raw is not None and not df_analiza_raw.empty:
                         subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
                         if not subiekt_details.empty:
-                            # *** NOWE KOLUMNY: 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur' ***
                             subiekt_formatted = subiekt_details[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
                             lista_df_szczegolow.append(subiekt_formatted)
 
@@ -968,7 +949,6 @@ def main_app():
                     if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
                         baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
                         if not baza_details.empty:
-                            # *** NOWE KOLUMNY: 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo' ***
                             baza_formatted = baza_details[['data_transakcji_dt', 'produkt', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']].copy() 
                             baza_formatted['data_transakcji_dt'] = baza_formatted['data_transakcji_dt'].dt.date
                             
@@ -988,7 +968,6 @@ def main_app():
                     else:
                         combined_details = pd.concat(lista_df_szczegolow).sort_values(by='data', ascending=False)
                         
-                        # Funkcja do kolorowania
                         def koloruj_kwoty(val):
                             color = 'red' if val < 0 else 'green'
                             return f'color: {color}'
@@ -1036,7 +1015,11 @@ def main_app():
 
         except Exception as e:
             if "does not exist" in str(e):
-                 st.warning("Baza danych jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
+                 # Sprawdź, czy to błąd tabeli plików
+                 if NAZWA_TABELI_PLIKOW in str(e):
+                     st.warning("Tabela do zapisywania plików nie istnieje. Przejdź do 'Panelu Admina' i kliknij '2. Stwórz tabelę saved_files'.")
+                 else:
+                     st.warning("Baza danych transakcji jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
                  st.exception(e) 
