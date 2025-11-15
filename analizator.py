@@ -381,7 +381,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 14.0 - POPRAWIONE ROZPOZNAWANIE POJAZD/KONTRAHENT) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 14.0 - POPRAWIONE REGEXY) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # Możesz włączyć DEBUG usuwając komentarze
@@ -462,9 +462,10 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             return False # Ma dziwne znaki (np. "...", "Ł", "Ą", "."), więc to KONTRAHENT
             
         # 2. Sprawdź, czy przynajmniej jedno "słowo" ma 3+ cyfry LUB wygląda jak numer rejestracyjny
-        words = re.split(r'[\s+I]+', line)
+        words = re.split(r'[\s+I]+', line) # Dzielimy po spacji, +, I
         has_vehicle_word = False
         for word in words:
+            if not word: continue
             if re.search(r'\d{3,}', word): # Ma 3 lub więcej cyfr (np. WGM34791)
                 has_vehicle_word = True
                 break
@@ -472,8 +473,17 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 has_vehicle_word = True
                 break
         
-        # Jeśli nie ma słowa wyglądającego jak rejestracja (np. linia "HEISTKAMP TRANSPORT"), to NIE jest pojazd
-        return has_vehicle_word
+        # 3. Sprawdź, czy nie jest to nazwa firmy (np. HEISTKAMP TRANSPORT)
+        if not has_vehicle_word:
+             # Żadne słowo nie wygląda jak rejestracja, więc to Kontrahent
+            return False
+            
+        # 4. Sprawdź, czy jakieś słowo jest za długie (numery rej. są krótkie)
+        for word in words:
+            if len(word) > 10: # Dłuższe słowa to prawdopodobnie kontrahenci (np. HEISTKAMP, TRANSPORT)
+                return False
+                
+        return True
 
 
     for index, row in df.iterrows():
@@ -482,6 +492,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
+            # *** POPRAWKA BŁĘDU .fillna Z POPRZEDNIEJ WERSJI ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
                     kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
@@ -491,10 +502,12 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                  if pd.notna(row[col_tuple]):
                     kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
                     kwota_netto_eur += kwota_val * kurs
+            # *** KONIEC POPRAWKI ***
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
+            # st.write(f"--- DEBUG (V14): Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
