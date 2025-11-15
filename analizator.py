@@ -346,36 +346,23 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (POPRAWIONA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik):
-    st.write(f"Przetwarzanie pliku: {przeslany_plik.name}...")
+    st.write("Przetwarzanie pliku `analiza.xlsx`...")
     try:
-        # SPRAWDZAMY, CZY TO PLIK CSV
-        if przeslany_plik.name.endswith('.csv'):
-            st.write("Wykryto plik .csv, wczytuję za pomocą read_csv...")
-            df = pd.read_csv(przeslany_plik, 
-                             header=7) # <-- CSV wciąż ma 7 linii nagłówka
-
-        # JEŚLI NIE, TO ZAKŁADAMY, ŻE TO XLSX
-        else:
-            st.write("Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
-            df = pd.read_excel(przeslany_plik, 
-                               sheet_name='pojazdy', 
-                               engine='openpyxl', 
-                               header=7) 
-
+        df = pd.read_excel(przeslany_plik, 
+                           sheet_name='pojazdy', 
+                           engine='openpyxl', 
+                           header=7) 
     except Exception as e:
-        st.error(f"Nie udało się wczytać danych. Błąd: {e}")
-        st.info("Upewnij się, że plik .xlsx zawiera arkusz 'pojazdy' lub plik .csv ma poprawny format.")
+        st.error(f"Nie udało się wczytać arkusza 'pojazdy' z pliku `analiza.xlsx`. Błąd: {e}")
         return None
 
-    # ... (reszta funkcji bez zmian) ...
     df = df.dropna(subset=['Etykiety wierszy'])
-
+    
     wyniki = []
     aktualny_pojazd_oryg = None
-
+    
     for index, row in df.iterrows():
         etykieta = str(row['Etykiety wierszy']).strip()
-        # Upewnij się, że kolumna 'euro' lub 'EUR' istnieje
         kwota_euro = row.get('euro', row.get('EUR', 0.0)) 
 
         if etykieta not in WSZYSTKIE_ZNANE_ETYKIETY:
@@ -384,30 +371,35 @@ def przetworz_plik_analizy(przeslany_plik):
 
         if aktualny_pojazd_oryg is not None and pd.notna(kwota_euro):
             if etykieta in ETYKIETY_PRZYCHODOW:
+                # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
                 wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': kwota_euro,
                     'koszty_inne': 0
                 })
             elif etykieta in ETYKIETY_KOSZTOW_INNYCH:
-                wyniki.append({
+                 # --- OSTATECZNA POPRAWKA: ZMIANA .pushed NA .append ---
+                 wyniki.append({
                     'pojazd_oryg': aktualny_pojazd_oryg,
                     'przychody': 0,
                     'koszty_inne': kwota_euro 
                 })
-
+            
     if not wyniki:
-        st.error("Nie znaleziono żadnych danych o przychodach/kosztach w pliku.")
+        st.error("Nie znaleziono żadnych danych o przychodach/kosztach w pliku `analiza.xlsx`.")
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
-
+    
+    # --- UŻYCIE NOWEJ, BEZPIECZNEJ FUNKCJI ---
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
 
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
-
-    st.success("Plik analizy przetworzony pomyślnie.")
+    
+    st.success("Plik `analiza.xlsx` przetworzony pomyślnie.")
     return df_agregacja
+
+
 # --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
 @st.cache_data
 def to_excel(df):
@@ -723,7 +715,7 @@ def main_app():
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
 
-                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx', 'csv'])
+                plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
                 
                 if 'raport_gotowy' not in st.session_state:
                     st.session_state['raport_gotowy'] = False
