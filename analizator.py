@@ -381,11 +381,12 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 12.0 - POPRAWKA BŁĘDU .fillna) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 13.0 - POPRAWKA BŁĘDU .fillna) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
-    # st.write(f"--- DEBUG (V12): Rozpoczynam przetwarzanie pliku...")
-    # st.write(f"--- DEBUG (V12): Szukany okres: {data_start} do {data_stop}")
+    # Możesz włączyć DEBUG usuwając komentarze
+    # st.write(f"--- DEBUG (V13): Rozpoczynam przetwarzanie pliku...")
+    # st.write(f"--- DEBUG (V13): Szukany okres: {data_start} do {data_stop}")
 
     # --- 1. MAPOWANIE WALUT ---
     MAPA_WALUT_PLIKU = {
@@ -405,14 +406,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-        # st.write(f"--- DEBUG (V12): Pobrane kursy do EUR: {mapa_kursow}")
+        # st.write(f"--- DEBUG (V13): Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     # --- 3. WCZYTANIE PLIKU ---
     try:
-        # st.write("--- DEBUG (V12): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
+        # st.write("--- DEBUG (V13): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
@@ -436,8 +437,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
         
-        # st.write(f"--- DEBUG (V12): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
-        # st.write(f"--- DEBUG (V12): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
+        # st.write(f"--- DEBUG (V13): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
+        # st.write(f"--- DEBUG (V13): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
         
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
@@ -462,21 +463,21 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             # *** POCZĄTEK POPRAWKI BŁĘDU .fillna ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
-                    # Bezpośrednio rzutujemy na liczbę, fillna(0.0) jest na wyniku
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
                     kwota_brutto_eur += kwota_val * kurs
             
             for col_tuple, kurs in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
-                    # Bezpośrednio rzutujemy na liczbę, fillna(0.0) jest na wyniku
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
                     kwota_netto_eur += kwota_val * kurs
             # *** KONIEC POPRAWKI BŁĘDU .fillna ***
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
-            # st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
+            st.write(f"--- DEBUG (V13): Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -548,7 +549,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
             
             for pojazd in pojazdy_do_zapisu:
-                # st.write(f"--- DEBUG (V12): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}")
+                # st.write(f"--- DEBUG (V13): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
@@ -571,7 +572,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # --- 5. AGREGACJA WYNIKÓW ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        st.info("--- DEBUG (V12): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
+        # st.info("--- DEBUG (V13): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
@@ -953,7 +954,7 @@ def main_app():
                     except KeyError:
                         st.error("Nie znaleziono danych dla tego pojazdu.")
 
-                    # --- SEKCJA SZCZEGÓŁOWA (BEZ ZMIAN, JUŻ POKAZUJE NETTO/BRUTTO) ---
+                    # --- *** POCZĄTEK NOWEJ FUNKCJI: SZCZEGÓŁOWA LISTA (NETTO/BRUTTO) *** ---
                     st.divider()
                     st.subheader(f"Szczegółowa lista transakcji dla {wybrany_pojazd_rent}")
 
@@ -962,12 +963,14 @@ def main_app():
                     
                     lista_df_szczegolow = []
                     
+                    # 1. Dane z pliku analizy (Subiekt)
                     if df_analiza_raw is not None and not df_analiza_raw.empty:
                         subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
                         if not subiekt_details.empty:
                             subiekt_formatted = subiekt_details[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
                             lista_df_szczegolow.append(subiekt_formatted)
 
+                    # 2. Dane z bazy (Paliwo, Opłaty, Inne)
                     if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
                         baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
                         if not baza_details.empty:
@@ -983,6 +986,7 @@ def main_app():
                             baza_formatted['kwota_brutto_eur'] = -baza_formatted['kwota_brutto_eur'].abs() 
                             lista_df_szczegolow.append(baza_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']])
 
+                    # 3. Połącz i wyświetl
                     if not lista_df_szczegolow:
                         st.info("Brak szczegółowych transakcji dla tego pojazdu w wybranym okresie.")
                     else:
@@ -1004,7 +1008,7 @@ def main_app():
                                 "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR")
                             }
                         )
-                    # --- *** KONIEC SEKCJI SZCZEGÓŁOWEJ *** ---
+                    # --- *** KONIEC NOWEJ FUNKCJI *** ---
 
                 
                 st.divider()
