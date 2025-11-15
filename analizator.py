@@ -350,7 +350,6 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         
         key = key.strip().strip('"') # Wyczyść najpierw
         
-        # *** NOWA POPRAWKA: Zachowaj specjalne kategorie ***
         if key.startswith("("):
             return key
 
@@ -359,14 +358,13 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         if match:
             return match.group(1).upper()
             
-        # Jeśli nie, spróbuj znaleźć cokolwiek co ma 4+ litery/cyfry
         match = re.search(r'([A-Z0-9]{4,})', key) 
         if match:
             return match.group(1).upper().strip()
         
         if not key:
             return 'Brak Identyfikatora'
-        return key.upper() # Zwróć cokolwiek zostało
+        return key.upper() 
             
     return s_str.apply(clean_key)
 
@@ -466,7 +464,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-    # *** NOWY, BARDZIEJ RESTRYKCYJNY REGEX DLA POJAZDÓW ***
+    # *** POPRAWIONY REGEX (V15): Logika rozpoznawania pojazdu ***
     def is_vehicle_line(line):
         if not line or line == 'nan':
             return False
