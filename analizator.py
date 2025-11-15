@@ -44,7 +44,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta'
 ]
 ETYKIETY_IGNOROWANE = [
-    'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końcowa', 'Nr pojazdu',
+    'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końowa', 'Nr pojazdu',
     'Zamówienie od klienta', 'Wydanie zewnętrzne'
 ]
 WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKIETY_IGNOROWANE
@@ -348,14 +348,13 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 7.0 - MULTI-WALUTY) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 8.0 - MULTI-WALUTY + ZWRACA DANE SUROWE) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     st.write(f"--- DEBUG: Rozpoczynam przetwarzanie pliku: {przeslany_plik.name}")
     st.write(f"--- DEBUG: Szukany okres: {data_start} do {data_stop}")
-    
+
     # --- 1. MAPOWANIE WALUT ---
-    # Mapuje nazwy kolumn z Excela na kody ISO dla NBP
     MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
         'złoty polski': 'PLN',
@@ -368,15 +367,15 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
         kurs_eur_pln_nbp = pobierz_kurs_eur_pln()
         if not kurs_eur_pln_nbp:
             st.error("Nie udało się pobrać kursu EUR/PLN z NBP. Przetwarzanie przerwane.")
-            return None
+            return None, None
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
         st.write(f"--- DEBUG: Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
-        return None
-
+        return None, None
+    
     # --- 3. WCZYTANIE PLIKU ---
     try:
         if przeslany_plik.name.endswith(('.xlsx', '.xls')):
@@ -390,24 +389,22 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             
             if kolumna_etykiet not in df.columns:
                 st.error(f"BŁĄD: Nie znaleziono kolumny '{kolumna_etykiet}'.")
-                return None
+                return None, None
             
-            # Sprawdź, czy mamy CHOCIAŻ JEDNĄ z mapowanych kolumn walut
             znalezione_waluty = [col for col in MAPA_WALUT_PLIKU if col in df.columns]
             if not znalezione_waluty:
                 st.error(f"BŁĄD: Nie znaleziono żadnej ze zdefiniowanych kolumn walut (np. 'euro', 'złoty polski').")
-                st.info(f"Dostępne kolumny: {list(df.columns)}")
-                return None
+                return None, None
             
             st.write(f"--- DEBUG: Plik .xlsx wczytany. Znalezione kolumny walut: {znalezione_waluty}")
         
         else:
             st.error(f"Nie rozpoznano formatu pliku. Prześlij oryginalny plik `.xlsx`.")
-            return None
+            return None, None
 
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
-        return None
+        return None, None
 
     # --- 4. LOGIKA PARSOWANIA (z multi-walutą) ---
     
@@ -422,20 +419,20 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
         try:
             etykieta_wiersza = str(row[kolumna_etykiet]).strip()
             
-            # *** NOWA LOGIKA WALUTOWA ***
             kwota_euro = 0.0
             for col_name, iso_code in MAPA_WALUT_PLIKU.items():
                 if col_name in row and pd.notna(row[col_name]):
                     kwota_w_walucie = pd.to_numeric(row[col_name], errors='coerce')
                     if pd.notna(kwota_w_walucie) and kwota_w_walucie != 0.0:
                         kurs = mapa_kursow.get(iso_code, 0.0) 
-                        if kurs == 0.0 and iso_code != 'EUR': # EUR może mieć kurs 0.0 jeśli NBP padnie, ale to rzadkie
+                        if kurs == 0.0 and iso_code != 'EUR':
                              st.warning(f"--- DEBUG: Brak kursu dla {iso_code} ({col_name}). Kwota {kwota_w_walucie} pominięta.")
+                        # Specjalna obsługa dla EUR (jeśli NBP padnie, użyj 1.0)
+                        if iso_code == 'EUR':
+                            kurs = 1.0
                         kwota_euro += kwota_w_walucie * kurs
-            # *** KONIEC NOWEJ LOGIKI WALUTOWEJ ***
 
         except Exception as e_row:
-            # st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -494,30 +491,59 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             podzielona_kwota = kwota_do_uzycia / liczba_pojazdow
             
             for pojazd in pojazdy_do_zapisu:
-                # st.write(f"--- DEBUG: ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}, KWOTA: {podzielona_kwota:.2f}")
+                # *** NOWA FUNKCJA: Zapisujemy szczegółowe dane do listy 'wyniki' ***
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
-                    wyniki.append({'pojazd_oryg': pojazd, 'przychody': podzielona_kwota, 'koszty_inne': 0})
+                    wyniki.append({
+                        'data': aktualna_data,
+                        'pojazd_oryg': pojazd,
+                        'opis': etykieta_do_uzycia,
+                        'typ': 'Przychód (Subiekt)',
+                        'kwota_eur': podzielona_kwota
+                    })
                 elif etykieta_do_uzycia in ETYKIETY_KOSZTOW_INNYCH:
-                    wyniki.append({'pojazd_oryg': pojazd, 'przychody': 0, 'koszty_inne': podzielona_kwota})
+                    wyniki.append({
+                        'data': aktualna_data,
+                        'pojazd_oryg': pojazd,
+                        'opis': etykieta_do_uzycia,
+                        'typ': 'Koszt (Subiekt)',
+                        'kwota_eur': -abs(podzielona_kwota) # Zapisujemy koszty jako ujemne
+                    })
             
     # --- 5. AGREGACJA WYNIKÓW ---
         
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
         st.info("--- DEBUG: Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
-        return None
+        return None, None # *** NOWA FUNKCJA: Zwracamy None, None ***
 
     df_wyniki = pd.DataFrame(wyniki)
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
-    df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
+
+    # *** NOWA FUNKCJA: Tworzymy agregację na podstawie 'df_wyniki' ***
+    df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_eur'].sum().to_frame('przychody')
+    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_eur'].sum().abs().to_frame('koszty_inne')
+    
+    df_agregacja = df_przychody.merge(df_koszty, left_index=True, right_index=True, how='outer').fillna(0)
     
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
-    # st.write(f"--- DEBUG: Funkcja zakończyła pracę, agregacja gotowa.")
-    return df_agregacja
+    
+    # *** NOWA FUNKCJA: Zwracamy agregację ORAZ surowe dane ***
+    return df_agregacja, df_wyniki
+
+
 # --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
+
+    # *** POPRAWKA 1: Przenosimy 'to_excel' tutaj, żeby naprawić 'NameError' ***
+    @st.cache_data
+    def to_excel(df):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=True, sheet_name='Raport')
+        processed_data = output.getvalue()
+        return processed_data
     
     tab_admin, tab_raport, tab_rentownosc = st.tabs([
         "⚙️ Panel Admina",
@@ -820,7 +846,6 @@ def main_app():
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
                 
-                # *** POPRAWKA 1: Upewnij się, że przyjmujemy tylko .xlsx ***
                 plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
                 
                 if 'raport_gotowy' not in st.session_state:
@@ -832,42 +857,57 @@ def main_app():
                         st.session_state['raport_gotowy'] = False 
                     else:
                         with st.spinner("Pracuję..."):
-                            # *** POPRAWKA 2: Pobierz WSZYSTKIE dane, nie tylko 'PALIWO' ***
+                            # Pobierz WSZYSTKIE dane z bazy
                             dane_z_bazy_rent = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent) 
                             
-                            if dane_z_bazy_rent.empty:
-                                # *** POPRAWKA 3: Zmień komunikat błędu ***
-                                st.error("Brak jakichkolwiek danych z bazy (Paliwo/Opłaty) w wybranym okresie.")
+                            # *** NOWA FUNKCJA: Zapisz dane z bazy w sesji, nawet jeśli są puste ***
+                            # Będziemy ich potrzebować do listy szczegółowej
+                            dane_przygotowane_rent, _ = przygotuj_dane_paliwowe(dane_z_bazy_rent.copy())
+                            st.session_state['dane_bazy_raw'] = dane_przygotowane_rent
+                            
+                            if dane_przygotowane_rent is None: 
                                 st.session_state['raport_gotowy'] = False
+                                st.error("Nie udało się pobrać kursów walut z NBP.")
                             else:
-                                dane_przygotowane_rent, _ = przygotuj_dane_paliwowe(dane_z_bazy_rent.copy())
+                                # Sumuj WSZYSTKIE koszty z bazy
+                                df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
                                 
-                                if dane_przygotowane_rent is None: 
-                                    st.session_state['raport_gotowy'] = False
-                                else:
-                                    # *** POPRAWKA 4: Sumuj WSZYSTKIE koszty z bazy ***
-                                    df_koszty_baza_wszystkie = dane_przygotowane_rent.groupby('identyfikator_clean')['kwota_finalna_eur'].sum().to_frame('Koszty z Bazy (Paliwo+Opłaty+Inne)')
-                                    df_analiza = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
+                                # *** NOWA FUNKCJA: Odbierz DWIE tabele ***
+                                df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent)
+                                
+                                # Zapisz surowe dane z analizy w sesji
+                                st.session_state['dane_analizy_raw'] = df_analiza_raw
+                                
+                                if df_analiza_agreg is not None:
+                                    # Scal z nową ramką danych
+                                    df_rentownosc = df_analiza_agreg.merge(
+                                        df_koszty_baza_wszystkie, 
+                                        left_index=True, 
+                                        right_index=True, 
+                                        how='outer'
+                                    ).fillna(0)
                                     
-                                    if df_analiza is not None:
-                                        # *** POPRAWKA 5: Scal z nową ramką danych ***
-                                        df_rentownosc = df_analiza.merge(
-                                            df_koszty_baza_wszystkie, # <-- Używamy nowej ramki danych
-                                            left_index=True, 
-                                            right_index=True, 
-                                            how='outer'
-                                        ).fillna(0)
-                                        
-                                        # *** POPRAWKA 6: Oblicz zysk z nową kolumną kosztów ***
-                                        df_rentownosc['ZYSK / STRATA (EUR)'] = (
-                                            df_rentownosc['przychody'] - 
-                                            df_rentownosc['koszty_inne'] - 
-                                            df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)'] # <-- Używamy nowej kolumny
-                                        )
-                                        
-                                        st.session_state['raport_gotowy'] = True
-                                        st.session_state['df_rentownosc'] = df_rentownosc
-                                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
+                                    # Oblicz zysk z nową kolumną kosztów
+                                    df_rentownosc['ZYSK / STRATA (EUR)'] = (
+                                        df_rentownosc['przychody'] - 
+                                        df_rentownosc['koszty_inne'] - 
+                                        df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
+                                    )
+                                    
+                                    st.session_state['raport_gotowy'] = True
+                                    st.session_state['df_rentownosc'] = df_rentownosc
+                                    st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---" 
+                                else:
+                                    # Jeśli nie ma danych z pliku analizy, ale są z bazy
+                                    st.warning("Nie znaleziono danych w pliku 'analiza.xlsx' dla tych dat, ale spróbuję połączyć z danymi z bazy.")
+                                    df_rentownosc = df_koszty_baza_wszystkie.copy()
+                                    df_rentownosc['przychody'] = 0.0
+                                    df_rentownosc['koszty_inne'] = 0.0
+                                    df_rentownosc['ZYSK / STRATA (EUR)'] = -df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
+                                    
+                                    st.session_state['raport_gotowy'] = True
+                                    st.session_state['df_rentownosc'] = df_rentownosc
+                                    st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
                                 
                 if st.session_state.get('raport_gotowy', False):
                     st.subheader("Wyniki dla wybranego okresu")
@@ -887,7 +927,6 @@ def main_app():
                             dane_pojazdu = df_rentownosc.loc[wybrany_pojazd_rent]
                             przychody = dane_pojazdu['przychody']
                             koszty_inne = dane_pojazdu['koszty_inne']
-                            # *** POPRAWKA 7: Użyj nowej nazwy kolumny ***
                             koszty_bazy = dane_pojazdu['Koszty z Bazy (Paliwo+Opłaty+Inne)']
                             zysk = dane_pojazdu['ZYSK / STRATA (EUR)']
                             
@@ -899,17 +938,79 @@ def main_app():
                             col1, col2, col3 = st.columns(3)
                             col1.metric("Przychód (z Subiekta)", f"{przychody:,.2f} EUR")
                             col2.metric("Koszty Inne (z Subiekta)", f"{-koszty_inne:,.2f} EUR")
-                            # *** POPRAWKA 8: Użyj nowej nazwy i etykiety ***
                             col3.metric("Koszty z Bazy (Paliwo+Opłaty)", f"{-koszty_bazy:,.2f} EUR")
                         
                         except KeyError:
                             st.error("Nie znaleziono danych dla tego pojazdu.")
+
+                        # --- *** POCZĄTEK NOWEJ FUNKCJI: SZCZEGÓŁOWA LISTA *** ---
+                        st.divider()
+                        st.subheader(f"Szczegółowa lista transakcji dla {wybrany_pojazd_rent}")
+
+                        df_analiza_raw = st.session_state.get('dane_analizy_raw')
+                        dane_przygotowane_rent = st.session_state.get('dane_bazy_raw')
+                        
+                        lista_df_szczegolow = []
+                        
+                        # 1. Dane z pliku analizy (Subiekt)
+                        if df_analiza_raw is not None and not df_analiza_raw.empty:
+                            subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
+                            if not subiekt_details.empty:
+                                subiekt_formatted = subiekt_details[['data', 'opis', 'typ', 'kwota_eur']]
+                                lista_df_szczegolow.append(subiekt_formatted)
+
+                        # 2. Dane z bazy (Paliwo, Opłaty, Inne)
+                        if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
+                            baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
+                            if not baza_details.empty:
+                                # Użyj 'produkt' dla opisu, i 'typ' dla kategoryzacji
+                                baza_formatted = baza_details[['data_transakcji_dt', 'produkt', 'typ', 'kwota_finalna_eur']]
+                                baza_formatted.rename(columns={
+                                    'data_transakcji_dt': 'data',
+                                    'produkt': 'opis',
+                                    'typ': 'typ_baza',
+                                    'kwota_finalna_eur': 'kwota_eur'
+                                }, inplace=True)
+                                
+                                # Przemapuj 'typ_baza' na bardziej czytelne etykiety
+                                def map_typ_bazy(typ_baza):
+                                    if typ_baza == 'PALIWO': return 'Koszt (Paliwo)'
+                                    if typ_baza == 'OPŁATA': return 'Koszt (Opłaty drogowe)'
+                                    return 'Koszt (Inne z bazy)'
+                                
+                                baza_formatted['typ'] = baza_formatted['typ_baza'].apply(map_typ_bazy)
+                                baza_formatted['kwota_eur'] = -baza_formatted['kwota_eur'].abs() # Koszty są ujemne
+                                lista_df_szczegolow.append(baza_formatted[['data', 'opis', 'typ', 'kwota_eur']])
+
+                        # 3. Połącz i wyświetl
+                        if not lista_df_szczegolow:
+                            st.info("Brak szczegółowych transakcji dla tego pojazdu w wybranym okresie.")
+                        else:
+                            combined_details = pd.concat(lista_df_szczegolow).sort_values(by='data', ascending=False)
+                            
+                            # Funkcja do kolorowania
+                            def koloruj_kwoty(val):
+                                color = 'red' if val < 0 else 'green'
+                                return f'color: {color}'
+                            
+                            st.dataframe(
+                                combined_details.style.apply(axis=1, subset=['kwota_eur'], func=lambda row: [koloruj_kwoty(row.kwota_eur)]),
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "data": st.column_config.DateColumn("Data", format="YYYY-MM-DD"),
+                                    "opis": "Opis",
+                                    "typ": "Typ transakcji",
+                                    "kwota_eur": st.column_config.NumberColumn("Kwota (EUR)", format="%.2f EUR")
+                                }
+                            )
+                        # --- *** KONIEC NOWEJ FUNKCJI *** ---
+
                     
                     st.divider()
                     zysk_laczny = df_rentownosc['ZYSK / STRATA (EUR)'].sum()
                     st.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA)", value=f"{zysk_laczny:,.2f} EUR")
                     
-                    # *** POPRAWKA 9: Zaktualizuj ramkę danych do wyświetlenia ***
                     df_rentownosc_display = df_rentownosc[[
                         'przychody', 
                         'koszty_inne', 
