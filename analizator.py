@@ -290,7 +290,7 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     df = conn.query(query, params=params)
     return df
 
-# --- NOWA, BEZPIECZNA FUNKCJA DO CZYSZCZENIA KLUCZY ---
+# --- NOWA, BEZPIECZNA FUNKCJA DO CZYSZCZENIA KLUCZY (Z POPRAWKĄ) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     """Otrzymuje całą kolumnę (Serię) i czyści ją w bezpieczny sposób."""
     # 1. Konwertuj na string, na wypadek gdyby były tam liczby lub inne typy
@@ -304,8 +304,8 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         match = re.search(r'([A-Z0-9]{4,})', key)
         if match:
             return match.group(1).upper().strip()
-        # --- POPRAWKA: Jeśli regex nie znajdzie dopasowania, zwróć oryginalny klucz lub domyślny
-        # Ta linijka obsługuje przypadki typu "(Koszty/Przychody Ogólne)"
+        
+        # *** POPRAWKA: Obsługa kluczy, które nie są rejestracjami (np. Koszty Ogólne) ***
         cleaned_key = key.strip()
         if not cleaned_key or cleaned_key == 'nan':
             return 'Brak Identyfikatora'
@@ -351,6 +351,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 6.0 - POD PLIK XLSX) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
+    # Możesz wyłączyć DEBUG, usuwając lub komentując poniższe linie
     st.write(f"--- DEBUG: Rozpoczynam przetwarzanie pliku: {przeslany_plik.name}")
     st.write(f"--- DEBUG: Szukany okres: {data_start} do {data_stop}")
     
@@ -415,7 +416,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             # *** KONIEC POPRAWKI ***
 
         except Exception as e_row:
-            st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
+            # st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -480,7 +481,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             podzielona_kwota = kwota_do_uzycia / liczba_pojazdow
             
             for pojazd in pojazdy_do_zapisu:
-                st.write(f"--- DEBUG: ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}, KWOTA: {podzielona_kwota:.2f}")
+                # st.write(f"--- DEBUG: ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, ETYKIETA: {etykieta_do_uzycia}, KWOTA: {podzielona_kwota:.2f}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({'pojazd_oryg': pojazd, 'przychody': podzielona_kwota, 'koszty_inne': 0})
                 elif etykieta_do_uzycia in ETYKIETY_KOSZTOW_INNYCH:
@@ -490,7 +491,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
         
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        st.info("--- DEBUG: Jeśli widzisz ten komunikat, ale powyżej były komunikaty 'ZAPISUJĘ WPIS', spróbuj wybrać szerszy zakres dat.")
+        st.info("--- DEBUG: Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
         return None
 
     df_wyniki = pd.DataFrame(wyniki)
@@ -498,7 +499,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     df_agregacja = df_wyniki.groupby('pojazd_clean')[['przychody', 'koszty_inne']].sum()
     
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
-    st.write(f"--- DEBUG: Funkcja zakończyła pracę, agregacja gotowa.")
+    # st.write(f"--- DEBUG: Funkcja zakończyła pracę, agregacja gotowa.")
     return df_agregacja
 
 # --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
@@ -815,7 +816,7 @@ def main_app():
                     data_start_rent = st.date_input("Data Start", value=domyslny_start_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_start")
                 with col2_rent:
                     data_stop_rent = st.date_input("Data Stop", value=domyslny_stop_rent, min_value=domyslny_start_rent, max_value=domyslny_stop_rent, key="rent_stop")
-
+                
                 # *** POPRAWKA 1: Upewnij się, że przyjmujemy tylko .xlsx ***
                 plik_analizy = st.file_uploader("Prześlij plik `analiza.xlsx` (ten z Subiekta)", type=['xlsx'])
                 
@@ -848,7 +849,7 @@ def main_app():
                                     if df_analiza is not None:
                                         # *** POPRAWKA 5: Scal z nową ramką danych ***
                                         df_rentownosc = df_analiza.merge(
-                                            df_koszty_baza_wszystkie, 
+                                            df_koszty_baza_wszystkie, # <-- Używamy nowej ramki danych
                                             left_index=True, 
                                             right_index=True, 
                                             how='outer'
@@ -858,7 +859,7 @@ def main_app():
                                         df_rentownosc['ZYSK / STRATA (EUR)'] = (
                                             df_rentownosc['przychody'] - 
                                             df_rentownosc['koszty_inne'] - 
-                                            df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)']
+                                            df_rentownosc['Koszty z Bazy (Paliwo+Opłaty+Inne)'] # <-- Używamy nowej kolumny
                                         )
                                         
                                         st.session_state['raport_gotowy'] = True
