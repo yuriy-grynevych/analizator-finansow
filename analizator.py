@@ -348,83 +348,100 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 6.0 - POD PLIK XLSX) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 7.0 - MULTI-WALUTY) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
-    # Możesz wyłączyć DEBUG, usuwając lub komentując poniższe linie
     st.write(f"--- DEBUG: Rozpoczynam przetwarzanie pliku: {przeslany_plik.name}")
     st.write(f"--- DEBUG: Szukany okres: {data_start} do {data_stop}")
     
-    # --- 1. WCZYTANIE PLIKU ---
+    # --- 1. MAPOWANIE WALUT ---
+    # Mapuje nazwy kolumn z Excela na kody ISO dla NBP
+    MAPA_WALUT_PLIKU = {
+        'euro': 'EUR',
+        'złoty polski': 'PLN',
+        'korona duńska': 'DKK'
+        # Możesz tu dodać więcej, np. 'korona czeska': 'CZK'
+    }
+    
+    # --- 2. POBIERANIE KURSÓW WALUT ---
     try:
-        # Ten kod jest teraz TYLKO dla pliku XLSX
+        kurs_eur_pln_nbp = pobierz_kurs_eur_pln()
+        if not kurs_eur_pln_nbp:
+            st.error("Nie udało się pobrać kursu EUR/PLN z NBP. Przetwarzanie przerwane.")
+            return None
+        
+        lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
+        mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
+        st.write(f"--- DEBUG: Pobrane kursy do EUR: {mapa_kursow}")
+    except Exception as e:
+        st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
+        return None
+
+    # --- 3. WCZYTANIE PLIKU ---
+    try:
         if przeslany_plik.name.endswith(('.xlsx', '.xls')):
             st.write("--- DEBUG: Wykryto plik .xlsx, wczytuję arkusz 'pojazdy'...")
             df = pd.read_excel(przeslany_plik, 
                                sheet_name='pojazdy', 
                                engine='openpyxl', 
-                               header=7) # Nagłówek jest w 8. wierszu (indeks 7)
+                               header=7) 
             
-            # W pliku Excel kolumna etykiet nazywa się 'Etykiety wierszy'
             kolumna_etykiet = 'Etykiety wierszy'
             
-            # Sprawdź, czy kolumny istnieją
             if kolumna_etykiet not in df.columns:
                 st.error(f"BŁĄD: Nie znaleziono kolumny '{kolumna_etykiet}'.")
+                return None
+            
+            # Sprawdź, czy mamy CHOCIAŻ JEDNĄ z mapowanych kolumn walut
+            znalezione_waluty = [col for col in MAPA_WALUT_PLIKU if col in df.columns]
+            if not znalezione_waluty:
+                st.error(f"BŁĄD: Nie znaleziono żadnej ze zdefiniowanych kolumn walut (np. 'euro', 'złoty polski').")
                 st.info(f"Dostępne kolumny: {list(df.columns)}")
                 return None
             
-            # Zapewnij istnienie kolumny 'euro' lub 'EUR'
-            if 'euro' not in df.columns and 'EUR' in df.columns:
-                df['euro'] = df['EUR']
-            elif 'euro' not in df.columns:
-                 st.error(f"BŁĄD: Nie znaleziono kolumny 'euro' ani 'EUR'.")
-                 st.info(f"Dostępne kolumny: {list(df.columns)}")
-                 return None
-            
-            st.write(f"--- DEBUG: Plik .xlsx wczytany. Kolumna etykiet: '{kolumna_etykiet}', Kolumna kwot: 'euro'.")
+            st.write(f"--- DEBUG: Plik .xlsx wczytany. Znalezione kolumny walut: {znalezione_waluty}")
         
         else:
             st.error(f"Nie rozpoznano formatu pliku. Prześlij oryginalny plik `.xlsx`.")
-            st.info(f"Przesłany plik to: {przeslany_plik.name}")
             return None
 
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
-        st.info("Upewnij się, że plik nie jest uszkodzony i zawiera arkusz 'pojazdy'.")
         return None
 
-    # --- 2. NOWA LOGIKA PARSOWANIA (dla XLSX) ---
+    # --- 4. LOGIKA PARSOWANIA (z multi-walutą) ---
     
     wyniki = []
     lista_aktualnych_pojazdow = [] 
     ostatnia_etykieta_pojazdu = None
     aktualna_data = None          
     
-    date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') # Do szukania dat
+    date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
 
     for index, row in df.iterrows():
         try:
-            # W Excelu puste komórki to 'NaN', musimy je bezpiecznie obsłużyć
             etykieta_wiersza = str(row[kolumna_etykiet]).strip()
             
-            # *** KLUCZOWA POPRAWKA BŁĘDU .fillna ***
-            # Wczytujemy kwotę i od razu rzutujemy na liczbę, pustym komórkom (NaN) przypisujemy 0.0
-            kwota_euro = pd.to_numeric(row.get('euro'), errors='coerce')
-            if pd.isna(kwota_euro):
-                kwota_euro = 0.0
-            # *** KONIEC POPRAWKI ***
+            # *** NOWA LOGIKA WALUTOWA ***
+            kwota_euro = 0.0
+            for col_name, iso_code in MAPA_WALUT_PLIKU.items():
+                if col_name in row and pd.notna(row[col_name]):
+                    kwota_w_walucie = pd.to_numeric(row[col_name], errors='coerce')
+                    if pd.notna(kwota_w_walucie) and kwota_w_walucie != 0.0:
+                        kurs = mapa_kursow.get(iso_code, 0.0) 
+                        if kurs == 0.0 and iso_code != 'EUR': # EUR może mieć kurs 0.0 jeśli NBP padnie, ale to rzadkie
+                             st.warning(f"--- DEBUG: Brak kursu dla {iso_code} ({col_name}). Kwota {kwota_w_walucie} pominięta.")
+                        kwota_euro += kwota_w_walucie * kurs
+            # *** KONIEC NOWEJ LOGIKI WALUTOWEJ ***
 
         except Exception as e_row:
             # st.write(f"--- DEBUG: Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
-        # W Excelu data może być już obiektem daty, a nie tekstem
         if isinstance(row[kolumna_etykiet], (pd.Timestamp, date)):
              aktualna_data = row[kolumna_etykiet].date()
              continue
-        # Jeśli to tekst, sprawdzamy regexem
         elif date_regex.match(etykieta_wiersza):
             try:
                 aktualna_data = pd.to_datetime(etykieta_wiersza).date()
@@ -440,23 +457,19 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
             continue
 
         # BLOK 3: Przetwarzanie kwoty
-        
         etykieta_do_uzycia = None
         kwota_do_uzycia = 0.0
 
-        # Case A: Etykieta i kwota w tym samym wierszu
         if etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro != 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 etykieta_do_uzycia = etykieta_wiersza
                 kwota_do_uzycia = kwota_euro
             ostatnia_etykieta_pojazdu = None 
 
-        # Case B.1: Etykieta bez kwoty
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY and kwota_euro == 0.0:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 ostatnia_etykieta_pojazdu = etykieta_wiersza 
         
-        # Case B.2: Kwota bez etykiety
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_euro != 0.0:
             if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
@@ -487,7 +500,7 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
                 elif etykieta_do_uzycia in ETYKIETY_KOSZTOW_INNYCH:
                     wyniki.append({'pojazd_oryg': pojazd, 'przychody': 0, 'koszty_inne': podzielona_kwota})
             
-    # --- 3. AGREGACJA WYNIKÓW ---
+    # --- 5. AGREGACJA WYNIKÓW ---
         
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
@@ -501,16 +514,6 @@ def przetworz_plik_analizy(przeslany_plik, data_start, data_stop):
     st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
     # st.write(f"--- DEBUG: Funkcja zakończyła pracę, agregacja gotowa.")
     return df_agregacja
-
-# --- DODANA FUNKCJA: KONWERSJA DO EXCELA ---
-@st.cache_data
-def to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=True, sheet_name='Raport')
-    processed_data = output.getvalue()
-    return processed_data
-
 # --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
     
