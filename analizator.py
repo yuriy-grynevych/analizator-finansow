@@ -395,9 +395,10 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 15.0 - POPRAWKA ROZPOZNAWANIA POJAZD/KONTRAHENT) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 15.0 - POPRAWKA BŁĘDU .fillna) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
+    # Możesz włączyć DEBUG usuwając komentarze
     # st.write(f"--- DEBUG (V15): Rozpoczynam przetwarzanie pliku...")
     # st.write(f"--- DEBUG (V15): Szukany okres: {data_start} do {data_stop}")
 
@@ -507,17 +508,19 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
-            # *** POPRAWKA BŁĘDU .fillna Z POPRZEDNIEJ WERSJI ***
+            # *** POCZĄTEK POPRAWKI BŁĘDU .fillna ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
                     kwota_brutto_eur += kwota_val * kurs
             
             for col_tuple, kurs in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
-                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce').fillna(0.0)
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
                     kwota_netto_eur += kwota_val * kurs
-            # *** KONIEC POPRAWKI ***
+            # *** KONIEC POPRAWKI BŁĘDU .fillna ***
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
