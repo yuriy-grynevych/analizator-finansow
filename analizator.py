@@ -342,6 +342,7 @@ def usun_plik_z_bazy(conn, file_name):
         st.error(f"Błąd podczas usuwania pliku z bazy: {e}")
 
 # --- ULEPSZONA FUNKCJA CZYSZCZENIA (USUWA PREFIKS "PL" Z EUROWAGU) ---
+# --- ULEPSZONA FUNKCJA CZYSZCZENIA (POPRAWKA DLA KRÓTSZYCH NAZW TYPU PLTRUCK5) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
     
@@ -352,11 +353,11 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         # 1. Usuwamy spacje, myślniki i cudzysłowy
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         
-        # --- NOWOŚĆ: LOGIKA DLA "PL" ---
-        # Jeśli numer zaczyna się od "PL" i jest długi (powyżej 8 znaków),
-        # to znaczy, że Eurowag dokleił prefiks kraju do polskiej rejestracji (np. PLZPL12345).
-        # Standardowa rejestracja z Płocka (PL 12345) ma max 7-8 znaków po sklejeniu.
-        if key_nospace.startswith("PL") and len(key_nospace) > 8:
+        # --- POPRAWIONA LOGIKA DLA "PL" ---
+        # Standardowa polska tablica (np. PL12345) ma 7 znaków.
+        # Wszystko co zaczyna się na PL i ma WIĘCEJ niż 7 znaków (czyli 8 i w górę),
+        # traktujemy jako doklejony prefiks kraju (np. PLTRUCK5 -> TRUCK5).
+        if key_nospace.startswith("PL") and len(key_nospace) > 7:
             key_nospace = key_nospace[2:] # Ucinamy pierwsze dwa znaki (PL)
         
         if not key_nospace:
@@ -370,7 +371,7 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         
         if match:
             found = match.group(1)
-            # Dodatkowe filtrowanie, żeby nie łapać nazw systemów
+            # Dodatkowe filtrowanie nazw systemów
             if found in ['E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD']:
                 return 'Brak Identyfikatora'
             return found
