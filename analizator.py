@@ -242,7 +242,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (Z DODATKAMI) ---
+# --- NAPRAWIONE FUNKCJE BAZY DANYCH (WERSJA DEBUG) ---
 def setup_database(conn):
     with conn.session as s:
         s.execute(text(f"""
@@ -262,22 +262,25 @@ def setup_database(conn):
         s.commit()
 
 def setup_file_database(conn):
-    """Tworzy tabelę od nowa, aby upewnić się, że ma Primary Key"""
-    with conn.session as s:
-        # 1. Najpierw usuwamy starą tabelę (jeśli jest źle zrobiona)
-        s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}"))
-        s.commit()
-        
-        # 2. Tworzymy ją na czysto z poprawnym kluczem
-        s.execute(text(f"""
-            CREATE TABLE {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (
-                file_name VARCHAR(255) PRIMARY KEY,
-                file_data BYTEA,
-                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """))
-        s.commit()
-    st.success(f"Tabela '{NAZWA_TABELI_PLIKOW}' została naprawiona i stworzona na nowo!")
+    """Niszczy starą tabelę i tworzy nową poprawną."""
+    try:
+        with conn.session as s:
+            # Najpierw usuwamy, żeby nie było konfliktów struktur
+            s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}"))
+            s.commit()
+            
+            # Tworzymy nową
+            s.execute(text(f"""
+                CREATE TABLE {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (
+                    file_name VARCHAR(255) PRIMARY KEY,
+                    file_data BYTEA,
+                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            s.commit()
+        st.success(f"SUKCES: Tabela '{NAZWA_TABELI_PLIKOW}' została utworzona na nowo!")
+    except Exception as e:
+        st.error(f"BŁĄD przy tworzeniu tabeli: {e}")
 
 def wyczysc_duplikaty(conn):
     st.write("Czyszczenie duplikatów...")
@@ -310,63 +313,60 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     return df
 
 def zapisz_plik_w_bazie(conn, file_name, file_bytes):
-    """Zapisuje plik binarnie. Usuwa stary wpis przed dodaniem nowego, co jest bezpieczniejsze."""
     try:
-        # Upewniamy się, że mamy bajty
+        # Konwersja do bytes, jeśli to buffer
         if not isinstance(file_bytes, bytes):
-            file_bytes = file_bytes.getvalue()
-
+            if hasattr(file_bytes, 'getvalue'):
+                file_bytes = file_bytes.getvalue()
+        
         with conn.session as s:
-            # 1. Najpierw usuń stary plik o tej nazwie (zamiast ON CONFLICT)
-            # To rozwiązuje problemy z kompatybilnością niektórych baz SQL
+            # Usuń stary wpis
             s.execute(text(f"DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"), {"name": file_name})
-            
-            # 2. Wstaw nowy plik
-            s.execute(text(f"""
-                INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (file_name, file_data, uploaded_at)
-                VALUES (:name, :data, CURRENT_TIMESTAMP)
-            """), {"name": file_name, "data": file_bytes})
-            
             s.commit()
             
-        st.success(f"Plik '{file_name}' został pomyślnie zapisany w bazie!")
+            # Wstaw nowy
+            s.execute(text(f"""
+                INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (file_name, file_data)
+                VALUES (:name, :data)
+            """), {"name": file_name, "data": file_bytes})
+            s.commit()
+            
+        st.success(f"Zapisano plik '{file_name}' w bazie!")
         time.sleep(1)
         st.rerun()
-        
     except Exception as e:
-        st.error(f"Błąd krytyczny podczas zapisu pliku: {e}")
-@st.cache_data(ttl=60) 
+        st.error(f"BŁĄD ZAPISU: {e}")
+
+@st.cache_data(ttl=0) # Wyłączamy cache dla testów
 def wczytaj_plik_z_bazy(_conn, file_name):
     try:
-        # Używamy raw SQL connection dla pewności przy pobieraniu BYTEA
-        query = text(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name")
-        
-        # Streamlit `conn.query` zwraca DataFrame, ale dla BYTEA lepiej użyć sesji lub bezpośredniego wykonania
-        # Tutaj użyjemy standardowego conn.query, bo Streamlit dobrze radzi sobie z odczytem
+        # Sprawdzamy czy tabela w ogóle istnieje
+        test = _conn.query(f"SELECT to_regclass('{NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}')")
+        if test.empty or test.iloc[0,0] is None:
+            st.error(f"Tabela '{NAZWA_TABELI_PLIKOW}' NIE ISTNIEJE w bazie! Wejdź w Panel Admina i utwórz ją.")
+            return None
+
         df = _conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
-        
         if not df.empty:
             dane = df.iloc[0]['file_data']
-            # Czasami baza zwraca memoryview zamiast bytes, konwertujemy:
             if isinstance(dane, memoryview):
                 return dane.tobytes()
             return dane
-            
         return None
     except Exception as e:
-        # Nie pokazujemy błędu użytkownikowi, po prostu zwracamy None (brak pliku)
+        st.error(f"BŁĄD ODCZYTU PLIKU Z BAZY: {e}")
         return None
-
+    
 def usun_plik_z_bazy(conn, file_name):
     try:
         with conn.session as s:
             s.execute(text(f"DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"), {"name": file_name})
             s.commit()
-        st.success(f"Plik '{file_name}' został usunięty z bazy.")
+        st.success(f"Usunięto plik '{file_name}'.")
         time.sleep(1)
         st.rerun()
     except Exception as e:
-        st.error(f"Błąd podczas usuwania pliku z bazy: {e}")
+        st.error(f"Błąd usuwania: {e}")
 
 # --- OSTATECZNA WERSJA CZYSZCZENIA (Z TWARDĄ BLOKADĄ FIRM) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
