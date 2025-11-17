@@ -338,39 +338,36 @@ def zapisz_plik_w_bazie(conn, file_name, file_bytes):
         st.error(f"BŁĄD ZAPISU: {e}")
 
 # --- NAPRAWIONA FUNKCJA ODCZYTU (BEZ CACHE) ---
-# Usunęliśmy @st.cache_data, bo powoduje błędy przy danych binarnych
-def wczytaj_plik_z_bazy(_conn, file_name):
+# --- NAPRAWIONA FUNKCJA ODCZYTU (BEZ CACHE) ---
+# Usunęliśmy @st.cache_data, bo powoduje błędy serializacji przy połączeniu z bazą
+def wczytaj_plik_z_bazy(conn, file_name):
     try:
-        # Sprawdzamy czy tabela w ogóle istnieje (zabezpieczenie)
-        test = _conn.query(f"SELECT to_regclass('{NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}')")
+        # 1. Sprawdzamy czy tabela w ogóle istnieje (zabezpieczenie)
+        # Używamy prostego zapytania SQL
+        test_query = f"SELECT to_regclass('{NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}')"
+        test = conn.query(test_query)
+        
         if test.empty or test.iloc[0,0] is None:
-            # Cicha weryfikacja - jeśli tabeli nie ma, po prostu zwróć None
+            # Tabela nie istnieje - zwracamy None bez błędu (użytkownik po prostu nie ma pliku)
             return None
 
-        # Pobieramy dane
-        df = _conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
+        # 2. Pobieramy dane pliku
+        query = f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"
+        df = conn.query(query, params={"name": file_name})
         
         if not df.empty:
             dane = df.iloc[0]['file_data']
-            # Konwersja memoryview na bytes (kluczowe dla PostgreSQL)
+            # Ważne: Postgres czasem zwraca "memoryview" zamiast "bytes", musimy to zamienić
             if isinstance(dane, memoryview):
                 return dane.tobytes()
             return dane
+            
         return None
+        
     except Exception as e:
+        # Jeśli coś pójdzie nie tak, wypisz błąd na czerwono
         st.error(f"BŁĄD ODCZYTU PLIKU Z BAZY: {e}")
         return None
-    
-def usun_plik_z_bazy(conn, file_name):
-    try:
-        with conn.session as s:
-            s.execute(text(f"DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"), {"name": file_name})
-            s.commit()
-        st.success(f"Usunięto plik '{file_name}'.")
-        time.sleep(1)
-        st.rerun()
-    except Exception as e:
-        st.error(f"Błąd usuwania: {e}")
 
 # --- OSTATECZNA WERSJA CZYSZCZENIA (Z TWARDĄ BLOKADĄ FIRM) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
