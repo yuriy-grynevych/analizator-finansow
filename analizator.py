@@ -341,30 +341,39 @@ def usun_plik_z_bazy(conn, file_name):
     except Exception as e:
         st.error(f"Błąd podczas usuwania pliku z bazy: {e}")
 
-# --- NOWA, BEZPIECZNA FUNKCJA DO CZYSZCZENIA KLUCZY (Z POPRAWKĄ) ---
+# --- POPRAWIONA FUNKCJA CZYSZCZENIA KLUCZY (SCALA SPACJE) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
+    
     def clean_key(key):
         if key == 'nan' or not key: 
             return 'Brak Identyfikatora'
         
-        key = key.strip().strip('"') # Wyczyść najpierw
+        # 1. Usuwamy spacje i myślniki - to scala "PZ 682UX" w "PZ682UX"
+        key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         
-        if key.startswith("("):
-            return key
+        if not key_nospace:
+             return 'Brak Identyfikatora'
 
-        # Wyciąga numer rejestracyjny (szuka czegoś co wygląda jak PO6UA33 lub WGM34791)
-        match = re.search(r'([A-Z]{2,3}[A-Z0-9]{4,5})', key, flags=re.IGNORECASE)
-        if match:
-            return match.group(1).upper()
+        if key_nospace.startswith("("):
+            return key # Zwraca np. (Koszty Ogólne)
             
-        match = re.search(r'([A-Z0-9]{4,})', key) 
-        if match:
-            return match.group(1).upper().strip()
+        # 2. Szukamy wzorca rejestracji w scalonym ciągu
+        # Szukamy ciągu liter i cyfr (min 5 znaków), np. WGM34791 lub 682UX
+        match = re.search(r'([A-Z0-9]{5,10})', key_nospace)
         
-        if not key:
-            return 'Brak Identyfikatora'
-        return key.upper() 
+        if match:
+            found = match.group(1)
+            # Dodatkowe sprawdzenie - czy to nie jest E100 (na wszelki wypadek)
+            if found in ['E100', 'EUROWAG']:
+                return 'Brak Identyfikatora'
+            return found
+            
+        # Jeśli nic nie znalazł, ale ciąg jest alfanumeryczny i ma cyfry (np. krótki numer)
+        if any(char.isdigit() for char in key_nospace):
+             return key_nospace
+             
+        return 'Brak Identyfikatora'
             
     return s_str.apply(clean_key)
 
@@ -464,41 +473,64 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None          
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-    def is_vehicle_line(line):
-        if not line or line == 'nan':
-            return False
-        # Sprawdzenie czy linia zawiera tylko dozwolone znaki (litery, cyfry, spacje, +, i)
-        if not re.fullmatch(r'^[A-Z0-9\sIi+]+$', line.strip(), flags=re.IGNORECASE):
-            return False 
-            
-        words = re.split(r'[\s+Ii]+', line) 
-        if not words: return False
+  # --- ZMODYFIKOWANA FUNKCJA WYKRYWANIA LINII Z POJAZDEM ---
+def is_vehicle_line(line):
+    if not line or line == 'nan':
+        return False
+    
+    # Czyścimy linię ze śmieci, żeby łatwiej szukać
+    line_clean = str(line).strip().upper()
+    
+    # 1. SZYBKA CZARNA LISTA - słowa, które wyglądają jak nr rej, ale są firmami
+    BLACKLIST = ['E100', 'EUROWAG', 'VISA', 'MASTER', 'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 'PKO', 'SANTANDER', 'ING']
+    
+    # Jeśli cała linia to tylko słowo z czarnej listy -> ODRZUĆ
+    if line_clean in BLACKLIST:
+        return False
+
+    # Dzielimy linię na słowa (po spacjach, plusach, " i ")
+    words = re.split(r'[\s+Ii]+', line_clean) 
+    if not words: return False
+    
+    has_vehicle_word = False
+    
+    for word in words:
+        if not word: continue
+        word = word.replace("-", "") # Usuwamy myślniki do sprawdzenia
         
-        has_vehicle_word = False
-        for word in words:
-            if not word: continue
+        # Jeśli słowo jest na czarnej liście -> ignoruj to słowo i idź dalej
+        if word in BLACKLIST:
+            continue
+        
+        # WARUNEK: Rejestracja ciężarówki ma zazwyczaj minimum 5 znaków (np. 682UX, WGM1234)
+        # E100 ma 4 znaki -> więc ten warunek to wyeliminuje
+        if len(word) < 5:
+            continue
+        
+        # 2. Przypadek: Słowo wygląda jak rejestracja
+        # Musi mieć litery ORAZ cyfry.
+        if re.match(r'^[A-Z0-9]+$', word):
+            ma_litery = any(c.isalpha() for c in word)
+            ma_cyfry = any(c.isdigit() for c in word)
             
-            # 1. Przypadek: słowo ma 3 lub więcej cyfr (np. 123, 34791) - to na pewno nr boczny lub rejestracja
-            if re.search(r'\d{3,}', word): 
+            if ma_litery and ma_cyfry:
                 has_vehicle_word = True
                 break
             
-            # 2. Przypadek: Wygląda jak rejestracja (2-3 litery + 4-5 znaków)
-            # POPRAWKA: Dodajemy warunek, że MUSI zawierać chociaż jedną cyfrę
-            if re.fullmatch(r'[A-Z]{2,3}[A-Z0-9]{4,5}', word, flags=re.IGNORECASE): 
-                if any(char.isdigit() for char in word): # <--- TO JEST KLUCZOWA ZMIANA
-                    has_vehicle_word = True
-                    break
+            # Wyjątek dla numerów bocznych (same cyfry, ale długie, np. 102030)
+            if word.isdigit() and len(word) >= 4:
+                has_vehicle_word = True
+                break
+
+    if not has_vehicle_word:
+        return False
         
-        if not has_vehicle_word:
+    # Dodatkowe zabezpieczenie przed długimi nazwami firm (np. "PRZEDSIĘBIORSTWO")
+    for word in words:
+        if len(word) > 10: 
             return False
             
-        # Dodatkowe zabezpieczenie: jeśli słowo jest za długie (np. długa nazwa firmy), to nie pojazd
-        for word in words:
-            if word and len(word) > 10: 
-                return False
-                
-        return True
+    return True
 
     for index, row in df.iterrows():
         try:
