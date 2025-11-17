@@ -664,14 +664,22 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_do_uzycia = 0.0
             kwota_netto_do_uzycia = 0.0
             
-    # --- 5. AGREGACJA WYNIKÓW (ZABEZPIECZENIE ZWROTU) ---
+    # --- 5. AGREGACJA WYNIKÓW (Z KOSMETYKĄ NAZW) ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych w pliku dla wybranego okresu ({data_start} - {data_stop}).")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
+
+    # 1. Najpierw czyścimy klucze (to tutaj TRUCK24SP zamienia się w "Brak Identyfikatora")
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
     
+    # 2. KOSMETYKA: Zmieniamy brzydkie "Brak Identyfikatora" na "Koszty Ogólne"
+    # Dzięki temu na raporcie będzie to wyglądać profesjonalnie
+    maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
+    df_wyniki.loc[maska_brak, 'pojazd_clean'] = '(Koszty/Przychody Ogólne)'
+    
+    # 3. Grupujemy dane (już z nową, ładną nazwą)
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
     df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
     df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().abs().to_frame('koszty_inne_brutto')
