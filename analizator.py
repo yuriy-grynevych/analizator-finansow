@@ -262,16 +262,22 @@ def setup_database(conn):
         s.commit()
 
 def setup_file_database(conn):
+    """Tworzy tabelę od nowa, aby upewnić się, że ma Primary Key"""
     with conn.session as s:
+        # 1. Najpierw usuwamy starą tabelę (jeśli jest źle zrobiona)
+        s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}"))
+        s.commit()
+        
+        # 2. Tworzymy ją na czysto z poprawnym kluczem
         s.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (
+            CREATE TABLE {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (
                 file_name VARCHAR(255) PRIMARY KEY,
                 file_data BYTEA,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """))
         s.commit()
-        st.success(f"Tabela '{NAZWA_TABELI_PLIKOW}' jest gotowa.")
+    st.success(f"Tabela '{NAZWA_TABELI_PLIKOW}' została naprawiona i stworzona na nowo!")
 
 def wyczysc_duplikaty(conn):
     st.write("Czyszczenie duplikatów...")
@@ -304,30 +310,51 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, typ=None):
     return df
 
 def zapisz_plik_w_bazie(conn, file_name, file_bytes):
+    """Zapisuje plik binarnie. Usuwa stary wpis przed dodaniem nowego, co jest bezpieczniejsze."""
     try:
-        with conn.session as s:
-            s.execute(text(f"""
-                INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (file_name, file_data)
-                VALUES (:name, :data)
-                ON CONFLICT (file_name) DO UPDATE
-                SET file_data = :data, uploaded_at = CURRENT_TIMESTAMP;
-            """), {"name": file_name, "data": file_bytes})
-            s.commit()
-        st.success(f"Plik '{file_name}' został zapisany w bazie danych!")
-        time.sleep(1) 
-        st.rerun()
-    except Exception as e:
-        st.error(f"Błąd podczas zapisu pliku do bazy: {e}")
+        # Upewniamy się, że mamy bajty
+        if not isinstance(file_bytes, bytes):
+            file_bytes = file_bytes.getvalue()
 
+        with conn.session as s:
+            # 1. Najpierw usuń stary plik o tej nazwie (zamiast ON CONFLICT)
+            # To rozwiązuje problemy z kompatybilnością niektórych baz SQL
+            s.execute(text(f"DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"), {"name": file_name})
+            
+            # 2. Wstaw nowy plik
+            s.execute(text(f"""
+                INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} (file_name, file_data, uploaded_at)
+                VALUES (:name, :data, CURRENT_TIMESTAMP)
+            """), {"name": file_name, "data": file_bytes})
+            
+            s.commit()
+            
+        st.success(f"Plik '{file_name}' został pomyślnie zapisany w bazie!")
+        time.sleep(1)
+        st.rerun()
+        
+    except Exception as e:
+        st.error(f"Błąd krytyczny podczas zapisu pliku: {e}")
 @st.cache_data(ttl=60) 
 def wczytaj_plik_z_bazy(_conn, file_name):
     try:
-        result = _conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
-        if not result.empty:
-            return result.iloc[0]['file_data']
+        # Używamy raw SQL connection dla pewności przy pobieraniu BYTEA
+        query = text(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name")
+        
+        # Streamlit `conn.query` zwraca DataFrame, ale dla BYTEA lepiej użyć sesji lub bezpośredniego wykonania
+        # Tutaj użyjemy standardowego conn.query, bo Streamlit dobrze radzi sobie z odczytem
+        df = _conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
+        
+        if not df.empty:
+            dane = df.iloc[0]['file_data']
+            # Czasami baza zwraca memoryview zamiast bytes, konwertujemy:
+            if isinstance(dane, memoryview):
+                return dane.tobytes()
+            return dane
+            
         return None
     except Exception as e:
-        st.warning(f"Nie udało się wczytać pliku (tabela może nie istnieć). Błąd: {e}")
+        # Nie pokazujemy błędu użytkownikowi, po prostu zwracamy None (brak pliku)
         return None
 
 def usun_plik_z_bazy(conn, file_name):
