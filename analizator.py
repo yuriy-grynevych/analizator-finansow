@@ -341,7 +341,7 @@ def usun_plik_z_bazy(conn, file_name):
     except Exception as e:
         st.error(f"Błąd podczas usuwania pliku z bazy: {e}")
 
-# --- POPRAWIONA FUNKCJA CZYSZCZENIA KLUCZY (SCALA SPACJE) ---
+# --- ULEPSZONA FUNKCJA CZYSZCZENIA (USUWA PREFIKS "PL" Z EUROWAGU) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
     
@@ -349,34 +349,39 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         if key == 'nan' or not key: 
             return 'Brak Identyfikatora'
         
-        # 1. Usuwamy spacje i myślniki - to scala "PZ 682UX" w "PZ682UX"
+        # 1. Usuwamy spacje, myślniki i cudzysłowy
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
+        
+        # --- NOWOŚĆ: LOGIKA DLA "PL" ---
+        # Jeśli numer zaczyna się od "PL" i jest długi (powyżej 8 znaków),
+        # to znaczy, że Eurowag dokleił prefiks kraju do polskiej rejestracji (np. PLZPL12345).
+        # Standardowa rejestracja z Płocka (PL 12345) ma max 7-8 znaków po sklejeniu.
+        if key_nospace.startswith("PL") and len(key_nospace) > 8:
+            key_nospace = key_nospace[2:] # Ucinamy pierwsze dwa znaki (PL)
         
         if not key_nospace:
              return 'Brak Identyfikatora'
 
         if key_nospace.startswith("("):
-            return key # Zwraca np. (Koszty Ogólne)
+            return key 
             
-        # 2. Szukamy wzorca rejestracji w scalonym ciągu
-        # Szukamy ciągu liter i cyfr (min 5 znaków), np. WGM34791 lub 682UX
-        match = re.search(r'([A-Z0-9]{5,10})', key_nospace)
+        # 2. Szukamy wzorca rejestracji (ciąg liter i cyfr)
+        match = re.search(r'([A-Z0-9]{4,12})', key_nospace)
         
         if match:
             found = match.group(1)
-            # Dodatkowe sprawdzenie - czy to nie jest E100 (na wszelki wypadek)
-            if found in ['E100', 'EUROWAG']:
+            # Dodatkowe filtrowanie, żeby nie łapać nazw systemów
+            if found in ['E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD']:
                 return 'Brak Identyfikatora'
             return found
             
-        # Jeśli nic nie znalazł, ale ciąg jest alfanumeryczny i ma cyfry (np. krótki numer)
+        # Jeśli nic nie znalazł regexem, ale ma cyfry, to zwracamy co jest
         if any(char.isdigit() for char in key_nospace):
              return key_nospace
              
         return 'Brak Identyfikatora'
             
     return s_str.apply(clean_key)
-
 # --- NOWA FUNKCJA PRZYGOTOWUJĄCA DANE PALIWOWE ---
 def przygotuj_dane_paliwowe(dane_z_bazy):
     if dane_z_bazy.empty:
