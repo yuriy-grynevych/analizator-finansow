@@ -341,8 +341,7 @@ def usun_plik_z_bazy(conn, file_name):
     except Exception as e:
         st.error(f"Błąd podczas usuwania pliku z bazy: {e}")
 
-# --- ULEPSZONA FUNKCJA CZYSZCZENIA (USUWA PREFIKS "PL" Z EUROWAGU) ---
-# --- ULEPSZONA FUNKCJA CZYSZCZENIA (POPRAWKA DLA KRÓTSZYCH NAZW TYPU PLTRUCK5) ---
+# --- OSTATECZNA WERSJA CZYSZCZENIA (Z TWARDĄ BLOKADĄ FIRM) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
     
@@ -353,10 +352,19 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         # 1. Usuwamy spacje, myślniki i cudzysłowy
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         
-        # --- POPRAWIONA LOGIKA DLA "PL" ---
-        # Standardowa polska tablica (np. PL12345) ma 7 znaków.
-        # Wszystko co zaczyna się na PL i ma WIĘCEJ niż 7 znaków (czyli 8 i w górę),
-        # traktujemy jako doklejony prefiks kraju (np. PLTRUCK5 -> TRUCK5).
+        # --- BLOKADA FIRM (Hardcoded Blacklist) ---
+        # Te słowa są usuwane BEZWARUNKOWO, nawet jak wyglądają jak rejestracja.
+        FIRMY_DO_USUNIECIA = [
+            'TRUCK24SP', 'TRUCK24', 'EDENRED', 'MARMAR', 'SANTANDER', 
+            'LEASING', 'PZU', 'WARTA', 'INTERCARS', 'EUROWAG', 'E100'
+        ]
+        
+        # Sprawdzamy czy klucz ZAWIERA którąś z zakazanych nazw
+        for firma in FIRMY_DO_USUNIECIA:
+            if firma in key_nospace:
+                return 'Brak Identyfikatora'
+
+        # --- LOGIKA "PL" (dla długich ciągów powyżej 7 znaków) ---
         if key_nospace.startswith("PL") and len(key_nospace) > 7:
             key_nospace = key_nospace[2:] # Ucinamy pierwsze dwa znaki (PL)
         
@@ -366,17 +374,17 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         if key_nospace.startswith("("):
             return key 
             
-        # 2. Szukamy wzorca rejestracji (ciąg liter i cyfr)
+        # 2. Szukamy wzorca rejestracji
         match = re.search(r'([A-Z0-9]{4,12})', key_nospace)
         
         if match:
             found = match.group(1)
-            # Dodatkowe filtrowanie nazw systemów
-            if found in ['E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD']:
+            # Ostatnie sito - czy to co znaleźliśmy nie jest na liście zakazanej?
+            if found in FIRMY_DO_USUNIECIA:
                 return 'Brak Identyfikatora'
             return found
             
-        # Jeśli nic nie znalazł regexem, ale ma cyfry, to zwracamy co jest
+        # Jeśli nic nie znalazł regexem, ale ma cyfry
         if any(char.isdigit() for char in key_nospace):
              return key_nospace
              
