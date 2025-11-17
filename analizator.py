@@ -464,18 +464,18 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     TYP_KWOTY_NETTO = 'Suma Wartosc_NettoPoRabacie'
     
     # --- 2. POBIERANIE KURSÓW WALUT ---
+   # --- 2. POBIERANIE KURSÓW WALUT ---
     try:
         kurs_eur_pln_nbp = pobierz_kurs_eur_pln()
         if not kurs_eur_pln_nbp:
-            st.error("Nie udało się pobrać kursu EUR/PLN z NBP. Przetwarzanie przerwane.")
+            st.error("Nie udało się pobrać kursu EUR/PLN z NBP.")
             return None, None
-        
+            
+        # --- DODAJ TĘ LINIJKĘ ŻEBY WIDZIEĆ KURS ---
+        st.info(f"ℹ️ Przeliczam waluty po bieżącym kursie średnim NBP: 1 EUR = {kurs_eur_pln_nbp:.4f} PLN")
+        # ------------------------------------------
+
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
-        mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-    except Exception as e:
-        st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
-        return None, None
-    
     # --- 3. WCZYTANIE PLIKU ---
     try:
         df = pd.read_excel(przeslany_plik_bytes, 
