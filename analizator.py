@@ -403,12 +403,9 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     return dane_z_bazy, mapa_kursow
 
 # --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 15.0 - POPRAWKA BŁĘDU .fillna) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (KOMPLETNA I POPRAWIONA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
-    # Możesz włączyć DEBUG usuwając komentarze
-    # st.write(f"--- DEBUG (V15): Rozpoczynam przetwarzanie pliku...")
-    # st.write(f"--- DEBUG (V15): Szukany okres: {data_start} do {data_stop}")
-
     # --- 1. MAPOWANIE WALUT ---
     MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
@@ -427,14 +424,12 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
-        # st.write(f"--- DEBUG (V15): Pobrane kursy do EUR: {mapa_kursow}")
     except Exception as e:
         st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     # --- 3. WCZYTANIE PLIKU ---
     try:
-        # st.write("--- DEBUG (V15): Wczytuję arkusz 'pojazdy' z nagłówkiem wielopoziomowym [7, 8]...")
         df = pd.read_excel(przeslany_plik_bytes, 
                            sheet_name='pojazdy', 
                            engine='openpyxl', 
@@ -458,87 +453,83 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = kurs
         
-        # st.write(f"--- DEBUG (V15): Znalezione kolumny BRUTTO do przeliczenia: {list(MAPA_BRUTTO_DO_KURSU.keys())}")
-        # st.write(f"--- DEBUG (V15): Znalezione kolumny NETTO do przeliczenia: {list(MAPA_NETTO_DO_KURSU.keys())}")
-        
     except Exception as e:
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
         return None, None
 
-    # --- 4. LOGIKA PARSOWANIA (NOWA STATE MACHINE) ---
+    # --- 4. LOGIKA PARSOWANIA (POPRAWIONA IDENTYFIKACJA POJAZDÓW) ---
     wyniki = []
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None          
+    aktualna_data = None           
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-  # --- ZMODYFIKOWANA FUNKCJA WYKRYWANIA LINII Z POJAZDEM ---
-def is_vehicle_line(line):
-    if not line or line == 'nan':
-        return False
-    
-    # Czyścimy linię ze śmieci, żeby łatwiej szukać
-    line_clean = str(line).strip().upper()
-    
-    # 1. SZYBKA CZARNA LISTA - słowa, które wyglądają jak nr rej, ale są firmami
-    BLACKLIST = ['E100', 'EUROWAG', 'VISA', 'MASTER', 'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 'PKO', 'SANTANDER', 'ING']
-    
-    # Jeśli cała linia to tylko słowo z czarnej listy -> ODRZUĆ
-    if line_clean in BLACKLIST:
-        return False
+    # --- FUNKCJA WEWNĘTRZNA: CZY TO POJAZD? ---
+    def is_vehicle_line(line):
+        if not line or line == 'nan':
+            return False
+        
+        # Czyścimy linię ze śmieci, żeby łatwiej szukać
+        line_clean = str(line).strip().upper()
+        
+        # 1. CZARNA LISTA - słowa, które wyglądają jak nr rej, ale są firmami
+        BLACKLIST = ['E100', 'EUROWAG', 'VISA', 'MASTER', 'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 'PKO', 'SANTANDER', 'ING']
+        
+        # Jeśli cała linia to tylko słowo z czarnej listy -> ODRZUĆ
+        if line_clean in BLACKLIST:
+            return False
 
-    # Dzielimy linię na słowa (po spacjach, plusach, " i ")
-    words = re.split(r'[\s+Ii]+', line_clean) 
-    if not words: return False
-    
-    has_vehicle_word = False
-    
-    for word in words:
-        if not word: continue
-        word = word.replace("-", "") # Usuwamy myślniki do sprawdzenia
+        # Dzielimy linię na słowa (po spacjach, plusach, " i ")
+        words = re.split(r'[\s+Ii]+', line_clean) 
+        if not words: return False
         
-        # Jeśli słowo jest na czarnej liście -> ignoruj to słowo i idź dalej
-        if word in BLACKLIST:
-            continue
+        has_vehicle_word = False
         
-        # WARUNEK: Rejestracja ciężarówki ma zazwyczaj minimum 5 znaków (np. 682UX, WGM1234)
-        # E100 ma 4 znaki -> więc ten warunek to wyeliminuje
-        if len(word) < 5:
-            continue
-        
-        # 2. Przypadek: Słowo wygląda jak rejestracja
-        # Musi mieć litery ORAZ cyfry.
-        if re.match(r'^[A-Z0-9]+$', word):
-            ma_litery = any(c.isalpha() for c in word)
-            ma_cyfry = any(c.isdigit() for c in word)
+        for word in words:
+            if not word: continue
+            word = word.replace("-", "") # Usuwamy myślniki do sprawdzenia
             
-            if ma_litery and ma_cyfry:
-                has_vehicle_word = True
-                break
+            # Jeśli słowo jest na czarnej liście -> ignoruj to słowo
+            if word in BLACKLIST:
+                continue
             
-            # Wyjątek dla numerów bocznych (same cyfry, ale długie, np. 102030)
-            if word.isdigit() and len(word) >= 4:
-                has_vehicle_word = True
-                break
+            # WARUNEK: Rejestracja ciężarówki ma zazwyczaj minimum 5 znaków (np. 682UX, WGM1234)
+            # E100 ma 4 znaki -> więc ten warunek to wyeliminuje
+            if len(word) < 5:
+                continue
+            
+            # 2. Przypadek: Słowo wygląda jak rejestracja (Musi mieć litery ORAZ cyfry)
+            if re.match(r'^[A-Z0-9]+$', word):
+                ma_litery = any(c.isalpha() for c in word)
+                ma_cyfry = any(c.isdigit() for c in word)
+                
+                if ma_litery and ma_cyfry:
+                    has_vehicle_word = True
+                    break
+                
+                # Wyjątek dla numerów bocznych (same cyfry, ale długie, np. 102030)
+                if word.isdigit() and len(word) >= 4:
+                    has_vehicle_word = True
+                    break
 
-    if not has_vehicle_word:
-        return False
-        
-    # Dodatkowe zabezpieczenie przed długimi nazwami firm (np. "PRZEDSIĘBIORSTWO")
-    for word in words:
-        if len(word) > 10: 
+        if not has_vehicle_word:
             return False
             
-    return True
+        # Dodatkowe zabezpieczenie przed długimi nazwami firm
+        for word in words:
+            if len(word) > 10: 
+                return False
+                
+        return True
 
+    # --- GŁÓWNA PĘTLA PRZETWARZANIA WIERSZY ---
     for index, row in df.iterrows():
         try:
             etykieta_wiersza = str(row[kolumna_etykiet_tuple]).strip()
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
-            # *** POCZĄTEK POPRAWKI BŁĘDU .fillna ***
             for col_tuple, kurs in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
                     kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
@@ -550,12 +541,10 @@ def is_vehicle_line(line):
                     kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
                     if pd.isna(kwota_val): kwota_val = 0.0
                     kwota_netto_eur += kwota_val * kurs
-            # *** KONIEC POPRAWKI BŁĘDU .fillna ***
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
-            # st.write(f"--- DEBUG (V15): Błąd w wierszu {index}, pomijam. Błąd: {e_row}")
             continue 
 
         # BLOK 1: Szukanie daty
@@ -594,7 +583,7 @@ def is_vehicle_line(line):
             else:
                 continue 
 
-        # *** POPRAWIONY BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent) ***
+        # BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent)
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
             if is_vehicle_line(etykieta_wiersza):
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+|\s*\+\s*', etykieta_wiersza, flags=re.IGNORECASE)
@@ -627,7 +616,6 @@ def is_vehicle_line(line):
                 opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
             
             for pojazd in pojazdy_do_zapisu:
-                # st.write(f"--- DEBUG (V15): ZAPISUJĘ WPIS -> DATA: {aktualna_data}, POJAZD: {pojazd}, KONTRAHENT: {aktualny_kontrahent}, ETYKIETA: {etykieta_do_uzycia}")
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
@@ -647,10 +635,9 @@ def is_vehicle_line(line):
             kwota_brutto_do_uzycia = 0.0
             kwota_netto_do_uzycia = 0.0
             
-    # --- 5. AGREGACJA WYNIKÓW ---
+    # --- 5. AGREGACJA WYNIKÓW (ZABEZPIECZENIE ZWROTU) ---
     if not wyniki:
-        st.warning(f"Nie znaleziono żadnych danych o przychodach/kosztach w pliku dla wybranego okresu ({data_start} - {data_stop}).")
-        # st.info("--- DEBUG (V15): Jeśli widzisz ten komunikat, spróbuj wybrać szerszy zakres dat.")
+        st.warning(f"Nie znaleziono żadnych danych w pliku dla wybranego okresu ({data_start} - {data_stop}).")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
@@ -663,10 +650,8 @@ def is_vehicle_line(line):
 
     df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
     
-    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} pasujących wpisów.")
+    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów.")
     return df_agregacja, df_wyniki
-
-
 # --- FUNKCJA main() (ZE ZMIANAMI) ---
 def main_app():
     
