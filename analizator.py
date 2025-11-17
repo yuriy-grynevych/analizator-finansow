@@ -1058,7 +1058,12 @@ def main_app():
                     else:
                         combined_details = pd.concat(lista_df_szczegolow).sort_values(by='data', ascending=False)
                         
+                        # --- POPRAWKA: RESET INDEKSU ABY UNIKNĄĆ DUPLIKATÓW ---
+                        combined_details = combined_details.reset_index(drop=True)
+                        # ------------------------------------------------------
+
                         def koloruj_kwoty(val):
+                            if pd.isna(val): return ''
                             color = 'red' if val < 0 else 'green'
                             return f'color: {color}'
                         
