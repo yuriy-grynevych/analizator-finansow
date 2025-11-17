@@ -365,6 +365,16 @@ def wczytaj_plik_z_bazy(conn, file_name):
     except Exception as e:
         st.error(f"BŁĄD ODCZYTU PLIKU Z BAZY: {e}")
         return None
+def usun_plik_z_bazy(conn, file_name):
+    try:
+        with conn.session as s:
+            s.execute(text(f"DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"), {"name": file_name})
+            s.commit()
+        st.success(f"Plik '{file_name}' został usunięty z bazy.")
+        time.sleep(1)
+        st.rerun()
+    except Exception as e:
+        st.error(f"Błąd podczas usuwania pliku z bazy: {e}")
 # --- OSTATECZNA WERSJA CZYSZCZENIA (Z TWARDĄ BLOKADĄ FIRM) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
