@@ -337,38 +337,34 @@ def zapisz_plik_w_bazie(conn, file_name, file_bytes):
     except Exception as e:
         st.error(f"BŁĄD ZAPISU: {e}")
 
-# --- NAPRAWIONA FUNKCJA ODCZYTU (BEZ CACHE) ---
-# --- NAPRAWIONA FUNKCJA ODCZYTU (BEZ CACHE) ---
-# Usunęliśmy @st.cache_data, bo powoduje błędy serializacji przy połączeniu z bazą
+# --- POPRAWIONA FUNKCJA ODCZYTU (BEZ DEKORATORA CACHE!) ---
 def wczytaj_plik_z_bazy(conn, file_name):
     try:
-        # 1. Sprawdzamy czy tabela w ogóle istnieje (zabezpieczenie)
-        # Używamy prostego zapytania SQL
-        test_query = f"SELECT to_regclass('{NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}')"
-        test = conn.query(test_query)
-        
-        if test.empty or test.iloc[0,0] is None:
-            # Tabela nie istnieje - zwracamy None bez błędu (użytkownik po prostu nie ma pliku)
-            return None
+        # Używamy sesji bezpośrednio, aby uniknąć problemów z DataFrame i Pandas
+        with conn.session as s:
+            # Najpierw sprawdzamy czy tabela istnieje (dla bezpieczeństwa)
+            exists = s.execute(text(f"SELECT to_regclass('{NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}')")).scalar()
+            if not exists:
+                return None
 
-        # 2. Pobieramy dane pliku
-        query = f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"
-        df = conn.query(query, params={"name": file_name})
-        
-        if not df.empty:
-            dane = df.iloc[0]['file_data']
-            # Ważne: Postgres czasem zwraca "memoryview" zamiast "bytes", musimy to zamienić
-            if isinstance(dane, memoryview):
-                return dane.tobytes()
-            return dane
+            # Pobieramy plik
+            result = s.execute(
+                text(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name"), 
+                {"name": file_name}
+            ).fetchone()
             
-        return None
-        
+            if result:
+                dane = result[0]
+                # Konwersja memoryview na bytes (dla pewności)
+                if isinstance(dane, memoryview):
+                    return dane.tobytes()
+                return dane
+                
+            return None
+            
     except Exception as e:
-        # Jeśli coś pójdzie nie tak, wypisz błąd na czerwono
         st.error(f"BŁĄD ODCZYTU PLIKU Z BAZY: {e}")
         return None
-
 # --- OSTATECZNA WERSJA CZYSZCZENIA (Z TWARDĄ BLOKADĄ FIRM) ---
 def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
