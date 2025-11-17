@@ -471,22 +471,31 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None           
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-    # --- FUNKCJA WEWNĘTRZNA: CZY TO POJAZD? ---
+   # --- ZAKTUALIZOWANA FUNKCJA WEWNĘTRZNA: CZY TO POJAZD? ---
     def is_vehicle_line(line):
         if not line or line == 'nan':
             return False
         
-        # Czyścimy linię ze śmieci, żeby łatwiej szukać
+        # Czyścimy linię ze śmieci
         line_clean = str(line).strip().upper()
         
-        # 1. CZARNA LISTA - słowa, które wyglądają jak nr rej, ale są firmami
-        BLACKLIST = ['E100', 'EUROWAG', 'VISA', 'MASTER', 'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 'PKO', 'SANTANDER', 'ING']
+        # 1. ROZSZERZONA CZARNA LISTA - słowa i fragmenty nazw firm
+        # Dodano: TRUCK24SP, LEASING, FINANCE, SERWIS, SPOLKA, GROUP itd.
+        BLACKLIST = [
+            'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 
+            'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
+            'PKO', 'SANTANDER', 'ING', 'ALIOR', 'MILLENIUM',
+            'TRUCK24SP', 'EDENRED', 'INTERCARS', 'MARMAR',
+            'LEASING', 'FINANCE', 'UBER', 'BOLT', 'FREE',
+            'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
+            'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS'
+        ]
         
-        # Jeśli cała linia to tylko słowo z czarnej listy -> ODRZUĆ
+        # Jeśli cała linia jest na czarnej liście
         if line_clean in BLACKLIST:
             return False
 
-        # Dzielimy linię na słowa (po spacjach, plusach, " i ")
+        # Dzielimy linię na słowa
         words = re.split(r'[\s+Ii]+', line_clean) 
         if not words: return False
         
@@ -494,18 +503,24 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         
         for word in words:
             if not word: continue
-            word = word.replace("-", "") # Usuwamy myślniki do sprawdzenia
+            word = word.replace("-", "")
             
-            # Jeśli słowo jest na czarnej liście -> ignoruj to słowo
-            if word in BLACKLIST:
+            # Jeśli słowo jest na czarnej liście -> pomiń je
+            # Sprawdzamy też, czy słowo nie zawiera nazwy z czarnej listy (np. TRUCK24SPOLKA)
+            is_blacklisted = False
+            for bad_word in BLACKLIST:
+                if bad_word in word:
+                    is_blacklisted = True
+                    break
+            if is_blacklisted:
                 continue
             
-            # WARUNEK: Rejestracja ciężarówki ma zazwyczaj minimum 5 znaków (np. 682UX, WGM1234)
-            # E100 ma 4 znaki -> więc ten warunek to wyeliminuje
+            # WARUNEK: Rejestracja ma zazwyczaj min 5 znaków.
+            # Wyjątek: Jeśli Twoje pojazdy nazywają się np. TRUCK1 (6 znaków), to przejdą.
             if len(word) < 5:
                 continue
             
-            # 2. Przypadek: Słowo wygląda jak rejestracja (Musi mieć litery ORAZ cyfry)
+            # 2. Przypadek: Słowo wygląda jak rejestracja (Litery + Cyfry)
             if re.match(r'^[A-Z0-9]+$', word):
                 ma_litery = any(c.isalpha() for c in word)
                 ma_cyfry = any(c.isdigit() for c in word)
@@ -514,7 +529,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                     has_vehicle_word = True
                     break
                 
-                # Wyjątek dla numerów bocznych (same cyfry, ale długie, np. 102030)
+                # Wyjątek dla samych cyfr (nr boczne > 4 znaki)
                 if word.isdigit() and len(word) >= 4:
                     has_vehicle_word = True
                     break
@@ -522,9 +537,9 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         if not has_vehicle_word:
             return False
             
-        # Dodatkowe zabezpieczenie przed długimi nazwami firm
+        # Zabezpieczenie: nazwy firm są zazwyczaj długie
         for word in words:
-            if len(word) > 10: 
+            if len(word) > 12: # Zwiększyłem lekko limit, ale długie tasiemce odrzucamy
                 return False
                 
         return True
