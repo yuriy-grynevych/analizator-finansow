@@ -467,30 +467,38 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     def is_vehicle_line(line):
         if not line or line == 'nan':
             return False
+        # Sprawdzenie czy linia zawiera tylko dozwolone znaki (litery, cyfry, spacje, +, i)
         if not re.fullmatch(r'^[A-Z0-9\sIi+]+$', line.strip(), flags=re.IGNORECASE):
             return False 
+            
         words = re.split(r'[\s+Ii]+', line) 
         if not words: return False
         
         has_vehicle_word = False
         for word in words:
             if not word: continue
+            
+            # 1. Przypadek: słowo ma 3 lub więcej cyfr (np. 123, 34791) - to na pewno nr boczny lub rejestracja
             if re.search(r'\d{3,}', word): 
                 has_vehicle_word = True
                 break
+            
+            # 2. Przypadek: Wygląda jak rejestracja (2-3 litery + 4-5 znaków)
+            # POPRAWKA: Dodajemy warunek, że MUSI zawierać chociaż jedną cyfrę
             if re.fullmatch(r'[A-Z]{2,3}[A-Z0-9]{4,5}', word, flags=re.IGNORECASE): 
-                has_vehicle_word = True
-                break
+                if any(char.isdigit() for char in word): # <--- TO JEST KLUCZOWA ZMIANA
+                    has_vehicle_word = True
+                    break
         
         if not has_vehicle_word:
             return False
             
+        # Dodatkowe zabezpieczenie: jeśli słowo jest za długie (np. długa nazwa firmy), to nie pojazd
         for word in words:
             if word and len(word) > 10: 
                 return False
                 
         return True
-
 
     for index, row in df.iterrows():
         try:
