@@ -450,8 +450,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (W WERSJI 15.0 - POPRAWKA BŁĘDU .fillna) ---
-# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (KOMPLETNA I POPRAWIONA) ---
+# --- FUNKCJA PARSOWANIA 'analiza.xlsx' (WERSJA FINALNA - KOMPLETNA) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # --- 1. MAPOWANIE WALUT ---
@@ -464,18 +463,21 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     TYP_KWOTY_NETTO = 'Suma Wartosc_NettoPoRabacie'
     
     # --- 2. POBIERANIE KURSÓW WALUT ---
-   # --- 2. POBIERANIE KURSÓW WALUT ---
     try:
         kurs_eur_pln_nbp = pobierz_kurs_eur_pln()
         if not kurs_eur_pln_nbp:
-            st.error("Nie udało się pobrać kursu EUR/PLN z NBP.")
+            st.error("Nie udało się pobrać kursu EUR/PLN z NBP. Przetwarzanie przerwane.")
             return None, None
-            
-        # --- DODAJ TĘ LINIJKĘ ŻEBY WIDZIEĆ KURS ---
+        
+        # INFO O KURSIE DLA UŻYTKOWNIKA
         st.info(f"ℹ️ Przeliczam waluty po bieżącym kursie średnim NBP: 1 EUR = {kurs_eur_pln_nbp:.4f} PLN")
-        # ------------------------------------------
-
+        
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
+        mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
+    except Exception as e:
+        st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
+        return None, None
+    
     # --- 3. WCZYTANIE PLIKU ---
     try:
         df = pd.read_excel(przeslany_plik_bytes, 
@@ -505,7 +507,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
         return None, None
 
-    # --- 4. LOGIKA PARSOWANIA (POPRAWIONA IDENTYFIKACJA POJAZDÓW) ---
+    # --- 4. LOGIKA PARSOWANIA ---
     wyniki = []
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
@@ -513,16 +515,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None           
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
-   # --- ZAKTUALIZOWANA FUNKCJA WEWNĘTRZNA: CZY TO POJAZD? ---
+    # --- FUNKCJA WEWNĘTRZNA: CZY TO POJAZD? ---
     def is_vehicle_line(line):
         if not line or line == 'nan':
             return False
         
-        # Czyścimy linię ze śmieci
         line_clean = str(line).strip().upper()
         
-        # 1. ROZSZERZONA CZARNA LISTA - słowa i fragmenty nazw firm
-        # Dodano: TRUCK24SP, LEASING, FINANCE, SERWIS, SPOLKA, GROUP itd.
+        # CZARNA LISTA FIRM I SŁÓW KLUCZOWYCH
         BLACKLIST = [
             'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 
             'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
@@ -533,11 +533,9 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS'
         ]
         
-        # Jeśli cała linia jest na czarnej liście
         if line_clean in BLACKLIST:
             return False
 
-        # Dzielimy linię na słowa
         words = re.split(r'[\s+Ii]+', line_clean) 
         if not words: return False
         
@@ -547,8 +545,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             if not word: continue
             word = word.replace("-", "")
             
-            # Jeśli słowo jest na czarnej liście -> pomiń je
-            # Sprawdzamy też, czy słowo nie zawiera nazwy z czarnej listy (np. TRUCK24SPOLKA)
             is_blacklisted = False
             for bad_word in BLACKLIST:
                 if bad_word in word:
@@ -557,12 +553,9 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             if is_blacklisted:
                 continue
             
-            # WARUNEK: Rejestracja ma zazwyczaj min 5 znaków.
-            # Wyjątek: Jeśli Twoje pojazdy nazywają się np. TRUCK1 (6 znaków), to przejdą.
             if len(word) < 5:
                 continue
             
-            # 2. Przypadek: Słowo wygląda jak rejestracja (Litery + Cyfry)
             if re.match(r'^[A-Z0-9]+$', word):
                 ma_litery = any(c.isalpha() for c in word)
                 ma_cyfry = any(c.isdigit() for c in word)
@@ -571,7 +564,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                     has_vehicle_word = True
                     break
                 
-                # Wyjątek dla samych cyfr (nr boczne > 4 znaki)
                 if word.isdigit() and len(word) >= 4:
                     has_vehicle_word = True
                     break
@@ -579,15 +571,15 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         if not has_vehicle_word:
             return False
             
-        # Zabezpieczenie: nazwy firm są zazwyczaj długie
         for word in words:
-            if len(word) > 12: # Zwiększyłem lekko limit, ale długie tasiemce odrzucamy
+            if len(word) > 12: 
                 return False
                 
         return True
 
-    # --- GŁÓWNA PĘTLA PRZETWARZANIA WIERSZY ---
+    # --- GŁÓWNA PĘTLA ---
     for index, row in df.iterrows():
+        # TUTAJ BYŁ TWÓJ BŁĄD - BRAKOWAŁO BLOKU EXCEPT
         try:
             etykieta_wiersza = str(row[kolumna_etykiet_tuple]).strip()
             kwota_brutto_eur = 0.0
@@ -608,7 +600,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
         except Exception as e_row:
-            continue 
+            continue # Pomijamy wiersze z błędami odczytu
 
         # BLOK 1: Szukanie daty
         if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)) or date_regex.match(etykieta_wiersza):
@@ -622,7 +614,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             ostatnia_etykieta_pojazdu = None
             continue
 
-        # BLOK 2: Wiersz z etykietą (np. Faktura VAT)
+        # BLOK 2: Wiersz z etykietą
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY:
             if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
                 ostatnia_etykieta_pojazdu = etykieta_wiersza
@@ -636,7 +628,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             else:
                 continue 
 
-        # BLOK 3: Wiersz z kwotą (pusta etykieta)
+        # BLOK 3: Wiersz z kwotą
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_laczna != 0.0:
             if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
@@ -646,7 +638,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             else:
                 continue 
 
-        # BLOK 4: Wiersz kontekstowy (Pojazd lub Kontrahent)
+        # BLOK 4: Wiersz kontekstowy
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
             if is_vehicle_line(etykieta_wiersza):
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+|\s*\+\s*', etykieta_wiersza, flags=re.IGNORECASE)
@@ -698,12 +690,35 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_do_uzycia = 0.0
             kwota_netto_do_uzycia = 0.0
             
-    # --- 5. AGREGACJA WYNIKÓW (Z KOSMETYKĄ NAZW) ---
+    # --- AGREGACJA I CZYSZCZENIE FINALNE ---
     if not wyniki:
         st.warning(f"Nie znaleziono żadnych danych w pliku dla wybranego okresu ({data_start} - {data_stop}).")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
+    
+    # BRUTALNY FILTR - OSTATNIA DESKA RATUNKU
+    CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
+    for smiec in CZARNA_LISTA_FINALNA:
+        maska = df_wyniki['pojazd_oryg'].astype(str).str.upper().str.contains(smiec, na=False)
+        df_wyniki.loc[maska, 'pojazd_oryg'] = '(Koszty/Przychody Ogólne)'
+
+    df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
+    
+    # ZAMIANA "Brak Identyfikatora" na ładniejszą nazwę
+    maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
+    df_wyniki.loc[maska_brak, 'pojazd_clean'] = '(Koszty/Przychody Ogólne)'
+    
+    # GRUPOWANIE
+    df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+    df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().abs().to_frame('koszty_inne_brutto')
+    df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().abs().to_frame('koszty_inne_netto')
+
+    df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
+    
+    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów.")
+    return df_agregacja, df_wyniki
 
     # 1. Najpierw czyścimy klucze (to tutaj TRUCK24SP zamienia się w "Brak Identyfikatora")
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
