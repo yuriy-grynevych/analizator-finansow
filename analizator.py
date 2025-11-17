@@ -337,18 +337,22 @@ def zapisz_plik_w_bazie(conn, file_name, file_bytes):
     except Exception as e:
         st.error(f"BŁĄD ZAPISU: {e}")
 
-@st.cache_data(ttl=0) # Wyłączamy cache dla testów
+# --- NAPRAWIONA FUNKCJA ODCZYTU (BEZ CACHE) ---
+# Usunęliśmy @st.cache_data, bo powoduje błędy przy danych binarnych
 def wczytaj_plik_z_bazy(_conn, file_name):
     try:
-        # Sprawdzamy czy tabela w ogóle istnieje
+        # Sprawdzamy czy tabela w ogóle istnieje (zabezpieczenie)
         test = _conn.query(f"SELECT to_regclass('{NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}')")
         if test.empty or test.iloc[0,0] is None:
-            st.error(f"Tabela '{NAZWA_TABELI_PLIKOW}' NIE ISTNIEJE w bazie! Wejdź w Panel Admina i utwórz ją.")
+            # Cicha weryfikacja - jeśli tabeli nie ma, po prostu zwróć None
             return None
 
+        # Pobieramy dane
         df = _conn.query(f"SELECT file_data FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW} WHERE file_name = :name", params={"name": file_name})
+        
         if not df.empty:
             dane = df.iloc[0]['file_data']
+            # Konwersja memoryview na bytes (kluczowe dla PostgreSQL)
             if isinstance(dane, memoryview):
                 return dane.tobytes()
             return dane
