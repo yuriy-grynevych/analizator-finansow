@@ -32,13 +32,16 @@ VAT_RATES = {
 }
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
+# POPRAWKA: Usunięto 'Korekta faktury VAT zakupu' z przychodów
 ETYKIETY_PRZYCHODOW = [
-    'Faktura VAT sprzedaży', 'Korekta faktury VAT zakupu', 'Przychód wewnętrzny'
+    'Faktura VAT sprzedaży', 'Przychód wewnętrzny'
 ]
-# ZMODYFIKOWANO: Lista kosztów z analizy jest teraz ignorowana w kodzie, ale zostawiam definicję żeby nie psuć referencji
+
+# ZMODYFIKOWANO: Lista kosztów (ignorowana w logice, ale tutaj definiowana)
+# Dodano tu 'Korekta faktury VAT zakupu', żeby była traktowana jako koszt/inny
 ETYKIETY_KOSZTOW_INNYCH = [
-    'Faktura VAT zakupu', 'Korekta faktury VAT sprzedaży', 'Art. biurowe', 
-    'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
+    'Faktura VAT zakupu', 'Korekta faktury VAT sprzedaży', 'Korekta faktury VAT zakupu', 
+    'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
     'Giełda', 'Księgowość', 'Leasing', 'Mandaty', 'Obsługa prawna', 
     'Ogłoszenie', 'Poczta Polska', 'Program', 'Prowizje', 
     'Rozliczanie kierowców', 'Rozliczenie VAT EUR', 'Serwis', 'Szkolenia BHP', 
@@ -658,11 +661,19 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
 
             pojazdy_do_zapisu = []
             
-            # --- ZMIANA 1: JEŚLI NIE MA AUTA, POMIŃ ---
-            if not lista_aktualnych_pojazdow:
-                continue # Ignorujemy transakcje bez przypisanego pojazdu
-            else:
+            # --- ZMIANA: LOGIKA PRZYPISYWANIA ---
+            # 1. Jeśli wykryto pojazdy (np. w tytule "Auto DW1234") -> Używamy ich
+            if lista_aktualnych_pojazdow:
                 pojazdy_do_zapisu = lista_aktualnych_pojazdow
+            
+            # 2. Jeśli NIE ma pojazdu, ale to PRZYCHÓD i mamy KONTRAHENTA 
+            # -> Przypisujemy do Kontrahenta (traktując firmę jako źródło przychodu)
+            elif etykieta_do_uzycia in ETYKIETY_PRZYCHODOW and aktualny_kontrahent and aktualny_kontrahent != "nan":
+                pojazdy_do_zapisu = [aktualny_kontrahent]
+            
+            # 3. W przeciwnym razie (koszty bez auta, inne bez auta) -> POMIŃ
+            else:
+                continue
             
             liczba_pojazdow = len(pojazdy_do_zapisu)
             podz_kwota_brutto = kwota_brutto_do_uzycia / liczba_pojazdow
@@ -675,7 +686,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 kontrahent_do_zapisu = aktualny_kontrahent
             
             for pojazd in pojazdy_do_zapisu:
-                # --- ZMIANA 2: TYLKO PRZYCHODY ---
+                # --- TYLKO PRZYCHODY ---
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     wyniki.append({
                         'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
@@ -711,7 +722,14 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
     
     # Usuwamy te, które po czyszczeniu stały się "Brak Identyfikatora"
-    df_wyniki = df_wyniki[df_wyniki['pojazd_clean'] != 'Brak Identyfikatora']
+    # df_wyniki = df_wyniki[df_wyniki['pojazd_clean'] != 'Brak Identyfikatora']
+    # ZMIANA: Zostawiamy "Brak Identyfikatora" jeśli jest to przychód, bo może to być po prostu Kontrahent
+    # (bezpieczne_czyszczenie_klucza zamienia np. "KUEHNE+NAGEL" na "Brak Identyfikatora" przez blacklistę firm)
+    # Musimy przywrócić oryginalną nazwę jeśli clean zwrócił 'Brak', a to jest przychód od firmy
+    
+    maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
+    df_wyniki.loc[maska_brak, 'pojazd_clean'] = df_wyniki.loc[maska_brak, 'pojazd_oryg']
+    
     
     # GRUPOWANIE
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
