@@ -1061,9 +1061,34 @@ def main_app():
                 if df_analiza_raw is not None and not df_analiza_raw.empty:
                     st.write("### 🏢 Przychody wg Kontrahentów")
                     df_chart = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
+                    
                     if not df_chart.empty:
+                        # Wykres
                         chart_data = df_chart.groupby('kontrahent')['kwota_brutto_eur'].sum().sort_values(ascending=False)
                         st.bar_chart(chart_data)
+                        
+                        # --- NOWY FILTR KONTRAHENTOW (TABELA) ---
+                        st.write("#### 🕵️ Szczegóły przychodów wg Kontrahenta")
+                        lista_kontrahentow = sorted(df_chart['kontrahent'].unique().tolist())
+                        wybrany_kontrahent_view = st.multiselect("Wybierz kontrahentów do tabeli:", lista_kontrahentow)
+                        
+                        if wybrany_kontrahent_view:
+                            df_show = df_chart[df_chart['kontrahent'].isin(wybrany_kontrahent_view)]
+                            st.dataframe(
+                                df_show[['data', 'pojazd_clean', 'opis', 'kwota_netto_eur', 'kwota_brutto_eur']].style.format({
+                                    'kwota_netto_eur': '{:,.2f} EUR', 
+                                    'kwota_brutto_eur': '{:,.2f} EUR'
+                                }),
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "data": st.column_config.DateColumn("Data"),
+                                    "pojazd_clean": "Pojazd",
+                                    "opis": "Opis",
+                                    "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)"),
+                                    "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)")
+                                }
+                            )
                     else:
                         st.info("Brak danych przychodowych do wyświetlenia wykresu.")
                     st.divider()
@@ -1076,7 +1101,7 @@ def main_app():
                 lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc.index.unique())
                 
                 wybrany_pojazd_rent = st.selectbox(
-                    "Wybierz pojazd do analizy:", 
+                    "Wybierz pojazd do analizy (Pełny Rachunek Zysków/Strat):", 
                     lista_pojazdow_rent,
                     key='wybrany_pojazd_rent'
                 )
