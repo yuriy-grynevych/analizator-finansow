@@ -52,6 +52,31 @@ ETYKIETY_IGNOROWANE = [
 ]
 WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKIETY_IGNOROWANE
 
+# --- KONFIGURACJA FILTRÓW (ZAKAZANE POJAZDY) ---
+# Lista znormalizowana (bez spacji, wielkie litery)
+ZAKAZANE_POJAZDY_LISTA = [
+    'TRUCK1', 'TRUCK2', 'TRUCK3', 'TRUCK4', 'TRUCK5',
+    'PTU0001', 'PTU0002'
+]
+
+# --- FUNKCJA FILTRUJĄCA ---
+def czy_zakazany_pojazd(nazwa):
+    """
+    Sprawdza czy nazwa pojazdu znajduje się na liście zakazanych.
+    Ignoruje spacje, myślniki i wielkość liter.
+    """
+    if not nazwa: return False
+    # Normalizacja: usuwamy spacje i myślniki, zamieniamy na UPPERCASE
+    n = str(nazwa).upper().replace(" ", "").replace("-", "")
+    
+    for zakazany in ZAKAZANE_POJAZDY_LISTA:
+        # Sprawdzamy czy znormalizowana nazwa ZAWIERA zakazany ciąg
+        # Np. "AUTO TRUCK 1" -> "AUTOTRUCK1" zawiera "TRUCK1" -> True
+        if zakazany in n:
+            return True
+    return False
+
+
 # --- FUNKCJE NBP ---
 @st.cache_data
 def pobierz_kurs_eur_pln():
@@ -701,10 +726,10 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     df_wyniki = pd.DataFrame(wyniki)
     
     CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
-    # --- DODANY NOWY FILTR GLOBALNY DO CZYSZCZENIA PLIKU EXCEL ---
-    DODATKOWY_FILTR = ['TRUCK1', 'TRUCK2', 'TRUCK3','TRUCK4','TRUCK5','TRUCK','PTU0001', 'PTU0002']
-    CZARNA_LISTA_FINALNA.extend(DODATKOWY_FILTR)
-    # ------------------------------------------------------------
+    
+    # --- FILTROWANIE RAW DATAFRAME (UŻYWAJĄC ZNORMALIZOWANEJ FUNKCJI) ---
+    maska_zakazana = df_wyniki['pojazd_oryg'].apply(czy_zakazany_pojazd)
+    df_wyniki = df_wyniki[~maska_zakazana]
     
     for smiec in CZARNA_LISTA_FINALNA:
         maska = df_wyniki['pojazd_oryg'].astype(str).str.upper().str.contains(smiec, na=False)
@@ -768,6 +793,9 @@ def main_app():
                 pojazdy_paliwo = set(df_fuel_raw['identyfikator_clean'].unique())
             
             wszystkie_pojazdy = sorted(list(pojazdy_subiekt.union(pojazdy_paliwo)))
+            
+            # --- FILTRACJA CZARNEJ LISTY Z EXCELA (UŻYWAMY FUNKCJI) ---
+            wszystkie_pojazdy = [p for p in wszystkie_pojazdy if not czy_zakazany_pojazd(p)]
             
             # 3. Pętla po pojazdach - osobne arkusze
             for pojazd in wszystkie_pojazdy:
@@ -1132,6 +1160,10 @@ def main_app():
                             if dane_przygotowane_rent.empty:
                                 df_koszty_baza_agg = pd.DataFrame(columns=['koszty_baza_netto', 'koszty_baza_brutto'])
                             else:
+                                # --- FILTROWANIE BAZY DANYCH (KOSZTY) ---
+                                maska_baza = dane_przygotowane_rent['identyfikator_clean'].apply(czy_zakazany_pojazd)
+                                dane_przygotowane_rent = dane_przygotowane_rent[~maska_baza]
+                                
                                 df_koszty_baza_agg = dane_przygotowane_rent.groupby('identyfikator_clean').agg(
                                     koszty_baza_netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                     koszty_baza_brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
@@ -1167,11 +1199,10 @@ def main_app():
                                 df_rentownosc = df_rentownosc.merge(df_kontrahenci_mapa, left_index=True, right_index=True, how='left').fillna('Brak danych')
                             # -----------------------------------------------
 
-                            # --- NOWY FILTR GLOBALNY DLA WYNIKÓW RENTOWNOŚCI ---
-                            BLACKLIST_RENTOWNOSC = ['TRUCK 1', 'TRUCK 2', 'PTU0001', 'PTU0002']
-                            for black_item in BLACKLIST_RENTOWNOSC:
-                                df_rentownosc = df_rentownosc[~df_rentownosc.index.astype(str).str.upper().str.contains(black_item)]
-                            # ---------------------------------------------------
+                            # --- FILTRACJA KOŃCOWA W TABELI WYNIKÓW ---
+                            # (Dla pewności, bo index to nazwa pojazdu)
+                            maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd)
+                            df_rentownosc = df_rentownosc[~maska_index]
 
                             df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'] = (
                                 df_rentownosc['przychody_brutto'] - 
@@ -1192,11 +1223,11 @@ def main_app():
                 st.subheader("Wyniki dla wybranego okresu")
                 
                 df_analiza_raw = st.session_state.get('dane_analizy_raw')
-                # Filtrowanie danych raw dla wykresów/tabel szczegółowych
+                
+                # --- FILTR RAW DATA (DLA WYKRESÓW) Z NORMALIZACJĄ ---
                 if df_analiza_raw is not None and not df_analiza_raw.empty:
-                    BLACKLIST_WYKRESY = ['TRUCK 1', 'TRUCK 2', 'PTU0001', 'PTU0002']
-                    for b_item in BLACKLIST_WYKRESY:
-                         df_analiza_raw = df_analiza_raw[~df_analiza_raw['pojazd_clean'].astype(str).str.upper().str.contains(b_item)]
+                    maska_raw = df_analiza_raw['pojazd_clean'].apply(czy_zakazany_pojazd)
+                    df_analiza_raw = df_analiza_raw[~maska_raw]
 
                 if df_analiza_raw is not None and not df_analiza_raw.empty:
                     
@@ -1409,6 +1440,11 @@ def main_app():
                 # --- ZMODYFIKOWANE POBIERANIE PLIKU ---
                 dane_bazy_raw_export = st.session_state.get('dane_bazy_raw')
                 
+                # Filtrowanie exportu bazy
+                if dane_bazy_raw_export is not None and not dane_bazy_raw_export.empty:
+                     maska_baza_exp = dane_bazy_raw_export['identyfikator_clean'].apply(czy_zakazany_pojazd)
+                     dane_bazy_raw_export = dane_bazy_raw_export[~maska_baza_exp]
+
                 excel_data = to_excel_extended(df_rentownosc_display, df_analiza_raw, dane_bazy_raw_export)
                 
                 st.download_button(
