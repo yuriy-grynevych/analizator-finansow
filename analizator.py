@@ -701,6 +701,11 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     df_wyniki = pd.DataFrame(wyniki)
     
     CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
+    # --- DODANY NOWY FILTR GLOBALNY DO CZYSZCZENIA PLIKU EXCEL ---
+    DODATKOWY_FILTR = ['TRUCK 1', 'TRUCK 2', 'PTU0001', 'PTU0002']
+    CZARNA_LISTA_FINALNA.extend(DODATKOWY_FILTR)
+    # ------------------------------------------------------------
+    
     for smiec in CZARNA_LISTA_FINALNA:
         maska = df_wyniki['pojazd_oryg'].astype(str).str.upper().str.contains(smiec, na=False)
         df_wyniki = df_wyniki[~maska]
@@ -1153,18 +1158,20 @@ def main_app():
                             
                             # --- DODAWANIE KONTRAHENTA DO TABELI GŁÓWNEJ ---
                             if df_analiza_raw is not None and not df_analiza_raw.empty:
-                                # Tworzymy mapę: Pojazd -> Lista Kontrahentów (po przecinku)
-                                # Filtrujemy 'Brak Kontrahenta' żeby nie zaśmiecać, chyba że to jedyne co jest
                                 def zlacz_kontrahentow(x):
                                     unikalne = sorted(list(set([k for k in x if k and k != "Brak Kontrahenta"])))
                                     if not unikalne: return "Brak danych"
                                     return ", ".join(unikalne)
 
                                 df_kontrahenci_mapa = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kontrahent'].apply(zlacz_kontrahentow).to_frame('Główny Kontrahent')
-                                
-                                # Dołączamy do głównej tabeli
                                 df_rentownosc = df_rentownosc.merge(df_kontrahenci_mapa, left_index=True, right_index=True, how='left').fillna('Brak danych')
                             # -----------------------------------------------
+
+                            # --- NOWY FILTR GLOBALNY DLA WYNIKÓW RENTOWNOŚCI ---
+                            BLACKLIST_RENTOWNOSC = ['TRUCK 1', 'TRUCK 2', 'PTU0001', 'PTU0002']
+                            for black_item in BLACKLIST_RENTOWNOSC:
+                                df_rentownosc = df_rentownosc[~df_rentownosc.index.astype(str).str.upper().str.contains(black_item)]
+                            # ---------------------------------------------------
 
                             df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'] = (
                                 df_rentownosc['przychody_brutto'] - 
@@ -1185,6 +1192,12 @@ def main_app():
                 st.subheader("Wyniki dla wybranego okresu")
                 
                 df_analiza_raw = st.session_state.get('dane_analizy_raw')
+                # Filtrowanie danych raw dla wykresów/tabel szczegółowych
+                if df_analiza_raw is not None and not df_analiza_raw.empty:
+                    BLACKLIST_WYKRESY = ['TRUCK 1', 'TRUCK 2', 'PTU0001', 'PTU0002']
+                    for b_item in BLACKLIST_WYKRESY:
+                         df_analiza_raw = df_analiza_raw[~df_analiza_raw['pojazd_clean'].astype(str).str.upper().str.contains(b_item)]
+
                 if df_analiza_raw is not None and not df_analiza_raw.empty:
                     
                     # --- ZAKŁADKI DLA WYKRESÓW ---
