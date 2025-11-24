@@ -735,9 +735,25 @@ def main_app():
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             # 1. Arkusz Podsumowania
-            df_summary.to_excel(writer, sheet_name='Podsumowanie')
             
-            # Pobierz unikalne pojazdy ze wszystkich źródeł
+            # Przygotowanie danych do podsumowania
+            # Reset indexu, żeby Pojazd stał się kolumną
+            summary_to_write = df_summary.reset_index().rename(columns={'index': 'Pojazd'})
+            
+            # Dodanie kolumny Lp. na początku
+            summary_to_write.insert(0, 'Lp.', range(1, 1 + len(summary_to_write)))
+            
+            # Przeniesienie kolumny "Główny Kontrahent" (jeśli istnieje) za "Pojazd"
+            if 'Główny Kontrahent' in summary_to_write.columns:
+                cols = list(summary_to_write.columns)
+                cols.remove('Główny Kontrahent')
+                # Wstawienie po 'Pojazd' (który jest na indeksie 1, bo 0 to Lp.)
+                cols.insert(2, 'Główny Kontrahent')
+                summary_to_write = summary_to_write[cols]
+
+            summary_to_write.to_excel(writer, sheet_name='Podsumowanie', index=False)
+            
+            # 2. Pobierz unikalne pojazdy ze wszystkich źródeł
             pojazdy_subiekt = set()
             if df_subiekt_raw is not None and not df_subiekt_raw.empty:
                 pojazdy_subiekt = set(df_subiekt_raw['pojazd_clean'].unique())
@@ -748,7 +764,7 @@ def main_app():
             
             wszystkie_pojazdy = sorted(list(pojazdy_subiekt.union(pojazdy_paliwo)))
             
-            # 2. Pętla po pojazdach - osobne arkusze
+            # 3. Pętla po pojazdach - osobne arkusze
             for pojazd in wszystkie_pojazdy:
                 # Nazwa arkusza (Excel limit 31 znaków i niedozwolone znaki)
                 safe_name = re.sub(r'[\\/*?:\[\]]', '', str(pojazd))[:30]
@@ -812,7 +828,10 @@ def main_app():
 
             # Arkusz Podsumowania
             summary = df_revenues.groupby('kontrahent')[['kwota_netto_eur', 'kwota_brutto_eur']].sum().sort_values(by='kwota_brutto_eur', ascending=False)
-            summary.to_excel(writer, sheet_name='Podsumowanie')
+            # Dodanie Lp. do podsumowania
+            summary = summary.reset_index()
+            summary.insert(0, 'Lp.', range(1, 1 + len(summary)))
+            summary.to_excel(writer, sheet_name='Podsumowanie', index=False)
 
             # Arkusze per kontrahent
             unique_contractors = sorted(df_revenues['kontrahent'].unique())
@@ -1132,6 +1151,21 @@ def main_app():
                                 how='outer'
                             ).fillna(0)
                             
+                            # --- DODAWANIE KONTRAHENTA DO TABELI GŁÓWNEJ ---
+                            if df_analiza_raw is not None and not df_analiza_raw.empty:
+                                # Tworzymy mapę: Pojazd -> Lista Kontrahentów (po przecinku)
+                                # Filtrujemy 'Brak Kontrahenta' żeby nie zaśmiecać, chyba że to jedyne co jest
+                                def zlacz_kontrahentow(x):
+                                    unikalne = sorted(list(set([k for k in x if k and k != "Brak Kontrahenta"])))
+                                    if not unikalne: return "Brak danych"
+                                    return ", ".join(unikalne)
+
+                                df_kontrahenci_mapa = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kontrahent'].apply(zlacz_kontrahentow).to_frame('Główny Kontrahent')
+                                
+                                # Dołączamy do głównej tabeli
+                                df_rentownosc = df_rentownosc.merge(df_kontrahenci_mapa, left_index=True, right_index=True, how='left').fillna('Brak danych')
+                            # -----------------------------------------------
+
                             df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'] = (
                                 df_rentownosc['przychody_brutto'] - 
                                 df_rentownosc['koszty_inne_brutto'] - 
@@ -1330,12 +1364,20 @@ def main_app():
                 col_sum2.metric(label="SUMA ŁĄCZNA (ZYSK/STRATA NETTO)", value=f"{zysk_laczny_netto:,.2f} EUR")
                 
                 st.subheader("Podsumowanie dla wszystkich pojazdów")
-                df_rentownosc_display = df_rentownosc[[
+                
+                # Przygotowanie danych do wyświetlenia (z kontrahentem)
+                kolumny_do_wyswietlenia = [
                     'przychody_netto', 'przychody_brutto', 
                     'koszty_inne_netto', 'koszty_inne_brutto',
                     'koszty_baza_netto', 'koszty_baza_brutto',
                     'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR'
-                ]].rename(columns={
+                ]
+                
+                # Dodajemy kontrahenta jeśli istnieje
+                if 'Główny Kontrahent' in df_rentownosc.columns:
+                    kolumny_do_wyswietlenia.insert(0, 'Główny Kontrahent')
+
+                df_rentownosc_display = df_rentownosc[kolumny_do_wyswietlenia].rename(columns={
                     'przychody_netto': 'Przychód Netto (Subiekt)',
                     'przychody_brutto': 'Przychód Brutto (Subiekt)',
                     'koszty_inne_netto': 'Koszty Inne Netto (Subiekt)',
@@ -1347,7 +1389,7 @@ def main_app():
                 })
                 
                 st.dataframe(
-                    df_rentownosc_display.style.format("{:,.2f} EUR"),
+                    df_rentownosc_display.style.format("{:,.2f} EUR", subset=df_rentownosc_display.columns.difference(['Główny Kontrahent'])),
                     use_container_width=True
                 )
                 
@@ -1357,7 +1399,7 @@ def main_app():
                 excel_data = to_excel_extended(df_rentownosc_display, df_analiza_raw, dane_bazy_raw_export)
                 
                 st.download_button(
-                    label="Pobierz kompletny raport rentowności jako Excel (.xlsx)",
+                    label="📥 Pobierz kompletny raport rentowności (pojazdy) jako Excel (.xlsx)",
                     data=excel_data,
                     file_name=f"raport_rentownosc_{data_start_rent}_do_{data_stop_rent}.xlsx",
                     mime="application/vnd.ms-excel"
