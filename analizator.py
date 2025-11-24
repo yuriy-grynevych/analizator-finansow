@@ -752,6 +752,7 @@ def main_app():
             for pojazd in wszystkie_pojazdy:
                 # Nazwa arkusza (Excel limit 31 znaków i niedozwolone znaki)
                 safe_name = re.sub(r'[\\/*?:\[\]]', '', str(pojazd))[:30]
+                if not safe_name: safe_name = "Unknown"
                 
                 dfs_to_concat = []
                 
@@ -759,13 +760,18 @@ def main_app():
                 if df_subiekt_raw is not None and not df_subiekt_raw.empty:
                     sub_data = df_subiekt_raw[df_subiekt_raw['pojazd_clean'] == pojazd].copy()
                     if not sub_data.empty:
+                        
+                        # Zabezpieczenie przed starym cache
+                        kwota_org_col = sub_data.get('kwota_org', sub_data['kwota_brutto_eur'])
+                        waluta_org_col = sub_data.get('waluta_org', 'EUR')
+
                         # Formatowanie
                         sub_formatted = pd.DataFrame({
                             'Data': sub_data['data'],
                             'Rodzaj': 'Przychód',
                             'Opis': sub_data['opis'],
-                            'Kwota Oryginalna': sub_data['kwota_org'],
-                            'Waluta': sub_data['waluta_org'],
+                            'Kwota Oryginalna': kwota_org_col,
+                            'Waluta': waluta_org_col,
                             'Kwota EUR (Netto)': sub_data['kwota_netto_eur'],
                             'Kwota EUR (Brutto)': sub_data['kwota_brutto_eur']
                         })
@@ -793,6 +799,46 @@ def main_app():
                     
         return output.getvalue()
     
+    # --- NOWA FUNKCJA EKSPORTU KONTRAHENTÓW ---
+    @st.cache_data
+    def to_excel_contractors(df_analiza_raw):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Filtruj tylko przychody
+            df_revenues = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
+            
+            if df_revenues.empty:
+                return output.getvalue()
+
+            # Arkusz Podsumowania
+            summary = df_revenues.groupby('kontrahent')[['kwota_netto_eur', 'kwota_brutto_eur']].sum().sort_values(by='kwota_brutto_eur', ascending=False)
+            summary.to_excel(writer, sheet_name='Podsumowanie')
+
+            # Arkusze per kontrahent
+            unique_contractors = sorted(df_revenues['kontrahent'].unique())
+            for kontrahent in unique_contractors:
+                # Sanityzacja nazwy arkusza
+                safe_name = re.sub(r'[\\/*?:\[\]]', '', str(kontrahent))[:30]
+                if not safe_name: safe_name = "Unknown"
+
+                # Dane dla kontrahenta
+                sub_data = df_revenues[df_revenues['kontrahent'] == kontrahent].copy()
+
+                # Formatowanie
+                formatted = pd.DataFrame({
+                    'Data': sub_data['data'],
+                    'Pojazd': sub_data['pojazd_clean'], 
+                    'Opis': sub_data['opis'],
+                    'Kwota Oryginalna': sub_data.get('kwota_org', 0.0), 
+                    'Waluta': sub_data.get('waluta_org', 'EUR'),
+                    'Kwota EUR (Netto)': sub_data['kwota_netto_eur'],
+                    'Kwota EUR (Brutto)': sub_data['kwota_brutto_eur']
+                }).sort_values(by='Data')
+
+                formatted.to_excel(writer, sheet_name=safe_name, index=False)
+
+        return output.getvalue()
+
     tab_admin, tab_raport, tab_rentownosc = st.tabs([
         "⚙️ Panel Admina",
         "📊 Raport Paliw/Opłat", 
@@ -919,7 +965,6 @@ def main_app():
                             columny_do_pokazania = ['Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 'Litry (Diesel)', 'Litry (AdBlue)']
                             formatowanie = {'Kwota_Netto_EUR': '{:,.2f} EUR', 'Kwota_Brutto_EUR': '{:,.2f} EUR', 'Litry (Diesel)': '{:,.2f} L', 'Litry (AdBlue)': '{:,.2f} L'}
                             st.dataframe(podsumowanie_paliwo[columny_do_pokazania].style.format(formatowanie), use_container_width=True)
-                            # --- USUNIĘTO STARE TO_EXCEL, BY NIE MIESZAĆ ---
                             
                             st.divider()
                             st.subheader("Szczegóły transakcji paliwowych")
@@ -1122,6 +1167,16 @@ def main_app():
                             lista_kontrahentow = sorted(df_chart_kontr['kontrahent'].unique().tolist())
                             wybrany_kontrahent_view = st.multiselect("Wybierz kontrahentów:", lista_kontrahentow)
                             
+                            # === NOWY PRZYCISK POBIERANIA DLA KONTRAHENTÓW ===
+                            excel_contractors = to_excel_contractors(df_analiza_raw)
+                            st.download_button(
+                                label="📥 Pobierz raport przychodów wg Kontrahentów (Excel)",
+                                data=excel_contractors,
+                                file_name=f"raport_kontrahenci_{data_start_rent}_do_{data_stop_rent}.xlsx",
+                                mime="application/vnd.ms-excel"
+                            )
+                            # ==================================================
+                            
                             if wybrany_kontrahent_view:
                                 df_show = df_chart_kontr[df_chart_kontr['kontrahent'].isin(wybrany_kontrahent_view)]
                                 st.dataframe(
@@ -1219,6 +1274,11 @@ def main_app():
                     if df_analiza_raw is not None and not df_analiza_raw.empty:
                         subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
                         if not subiekt_details.empty:
+                            
+                            # Zabezpieczenie przed starym cache
+                            kwota_org_col = subiekt_details.get('kwota_org', subiekt_details['kwota_brutto_eur'])
+                            waluta_org_col = subiekt_details.get('waluta_org', 'EUR')
+
                             subiekt_formatted = subiekt_details[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
                             lista_df_szczegolow.append(subiekt_formatted)
 
