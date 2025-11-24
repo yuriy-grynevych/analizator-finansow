@@ -5,8 +5,8 @@ import re
 import streamlit as st
 import time
 from datetime import date
-from sqlalchemy import text 
-import io 
+from sqlalchemy import text
+import io
 
 # --- USTAWIENIA STRONY ---
 st.set_page_config(page_title="Analizator Wydatków", layout="wide")
@@ -17,19 +17,21 @@ hide_streamlit_style = """
             footer {visibility: hidden;}
             </style>
             """
-st.markdown(hide_streamlit_style, unsafe_allow_html=True) 
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- PARAMETRY TABELI ---
 NAZWA_TABELI = "transactions"
-NAZWA_TABELI_PLIKOW = "saved_files" 
+NAZWA_TABELI_PLIKOW = "saved_files"
 NAZWA_SCHEMATU = "public"
 # WAŻNE: Streamlit sam pobierze dane z secrets z sekcji [connections.db]
-NAZWA_POLACZENIA_DB = "db" 
+NAZWA_POLACZENIA_DB = "db"
 
 # --- SŁOWNIK VAT ---
 VAT_RATES = {
     "PL": 0.23, "DE": 0.19, "CZ": 0.21, "AT": 0.20, "FR": 0.20,
     "DK": 0.25, "NL": 0.21, "BE": 0.21, "ES": 0.21, "IT": 0.22,
+    "LT": 0.21, "LV": 0.21, "EE": 0.20, "SK": 0.20, "HU": 0.27,
+    "RO": 0.19, "BG": 0.20, "SI": 0.22, "HR": 0.25, "SE": 0.25
 }
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
@@ -53,7 +55,6 @@ ETYKIETY_IGNOROWANE = [
 WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKIETY_IGNOROWANE
 
 # --- KONFIGURACJA FILTRÓW (ZAKAZANE POJAZDY) ---
-# Lista słów kluczowych do usunięcia (bez spacji)
 ZAKAZANE_POJAZDY_LISTA = [
     'TRUCK',       # Usuwa TRUCK, TRUCK 1, TRUCK 2, TRUCK 5 itd.
     'HEROSTALSP',
@@ -66,16 +67,9 @@ ZAKAZANE_POJAZDY_LISTA = [
 
 # --- FUNKCJA FILTRUJĄCA ---
 def czy_zakazany_pojazd(nazwa):
-    """
-    Sprawdza czy nazwa pojazdu znajduje się na liście zakazanych.
-    Ignoruje spacje, myślniki i wielkość liter.
-    """
     if not nazwa: return False
-    # Normalizacja: usuwamy spacje i myślniki, zamieniamy na UPPERCASE
     n = str(nazwa).upper().replace(" ", "").replace("-", "")
-    
     for zakazany in ZAKAZANE_POJAZDY_LISTA:
-        # Sprawdzamy czy znormalizowana nazwa ZAWIERA zakazany ciąg
         if zakazany in n:
             return True
     return False
@@ -171,6 +165,12 @@ def normalizuj_eurowag(df_eurowag):
     df_out['waluta'] = df_eurowag['Waluta']
     df_out['ilosc'] = pd.to_numeric(df_eurowag['Ilość'], errors='coerce')
     
+    # Dodanie Kraju
+    if 'Kraj' in df_eurowag.columns:
+        df_out['kraj'] = df_eurowag['Kraj'].str.upper().str.strip()
+    else:
+        df_out['kraj'] = 'Nieznany'
+
     kategorie = df_eurowag.apply(lambda row: kategoryzuj_transakcje(row, 'Eurowag'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -192,6 +192,12 @@ def normalizuj_e100_PL(df_e100):
     df_out['waluta'] = df_e100['Waluta']
     df_out['ilosc'] = pd.to_numeric(df_e100['Ilość'], errors='coerce')
     
+    # Dodanie Kraju
+    if 'Kraj' in df_e100.columns:
+        df_out['kraj'] = df_e100['Kraj'].str.upper().str.strip()
+    else:
+        df_out['kraj'] = 'PL' # Domyślnie dla pliku PL
+
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_PL'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -212,6 +218,12 @@ def normalizuj_e100_EN(df_e100):
     
     df_out['waluta'] = df_e100['Currency']
     df_out['ilosc'] = pd.to_numeric(df_e100['Quantity'], errors='coerce')
+
+    # Dodanie Kraju
+    if 'Country' in df_e100.columns:
+        df_out['kraj'] = df_e100['Country'].str.upper().str.strip()
+    else:
+        df_out['kraj'] = 'Nieznany'
 
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_EN'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
@@ -276,6 +288,9 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
 # --- FUNKCJE BAZY DANYCH (POSTGRESQL) ---
 def setup_database(conn):
     with conn.session as s:
+        # Usuwamy starą tabelę aby dodać kolumnę kraj
+        s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI}"))
+        
         s.execute(text(f"""
             CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
                 id SERIAL PRIMARY KEY,
@@ -287,7 +302,8 @@ def setup_database(conn):
                 ilosc FLOAT,
                 produkt VARCHAR(255),
                 typ VARCHAR(50), 
-                zrodlo VARCHAR(50)
+                zrodlo VARCHAR(50),
+                kraj VARCHAR(50)
             );
         """))
         s.commit()
@@ -447,6 +463,11 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
         return dane_z_bazy, None
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
+    
+    # Upewnij się, że kolumna kraj istnieje
+    if 'kraj' not in dane_z_bazy.columns:
+        dane_z_bazy['kraj'] = 'Nieznany'
+    
     kurs_eur = pobierz_kurs_eur_pln()
     if not kurs_eur: return None, None
     unikalne_waluty = dane_z_bazy['waluta'].unique()
@@ -523,7 +544,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None            
+    aktualna_data = None             
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     def is_vehicle_line(line):
@@ -918,7 +939,7 @@ def main_app():
             if st.button("1. Stwórz tabelę 'transactions' (tylko raz!)"):
                 with st.spinner("Tworzenie tabeli..."):
                     setup_database(conn)
-                st.success("Tabela 'transactions' jest gotowa.")
+                st.success("Tabela 'transactions' jest gotowa. (Jeśli dodawałeś nowe kolumny, stare dane zostały usunięte).")
         
         with col2_admin:
             st.subheader("Baza Danych Plików")
@@ -1004,6 +1025,32 @@ def main_app():
                             st.info("Brak danych o paliwie w tym okresie.")
                         else:
                             st.subheader("Wydatki na Paliwo (Diesel + AdBlue)")
+                            
+                            # --- SEKCJA: WYDATKI WG KRAJU ---
+                            st.markdown("### 🗺️ Wydatki paliwowe wg Kraju")
+                            
+                            if 'kraj' not in df_paliwo.columns:
+                                st.error("Brak kolumny 'kraj' w danych. Upewnij się, że tabela w bazie została utworzona na nowo w Panelu Admina.")
+                            else:
+                                df_kraje = df_paliwo.groupby('kraj').agg(
+                                    Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                                    Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                                ).sort_values(by='Suma_Brutto', ascending=False)
+                                
+                                df_kraje['VAT'] = df_kraje['Suma_Brutto'] - df_kraje['Suma_Netto']
+                                df_kraje = df_kraje[['Suma_Netto', 'VAT', 'Suma_Brutto']] # Zmiana kolejności
+                                
+                                # Wykres
+                                st.bar_chart(df_kraje['Suma_Brutto'])
+                                
+                                # Tabela
+                                st.dataframe(
+                                    df_kraje.style.format("{:,.2f} EUR"), 
+                                    use_container_width=True
+                                )
+                                st.divider()
+                            # -----------------------------------
+
                             filtr_paliwo = st.text_input("Filtruj pojazd:", key="filtr_paliwo").upper()
                             podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
                                 Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
@@ -1028,9 +1075,9 @@ def main_app():
                             wybrany_pojazd_paliwo = st.selectbox("Wybierz identyfikator:", lista_pojazdow_paliwo)
                             if wybrany_pojazd_paliwo != "--- Wybierz pojazd ---":
                                 df_szczegoly = df_paliwo[df_paliwo['identyfikator_clean'] == wybrany_pojazd_paliwo].sort_values(by='data_transakcji_dt', ascending=False)
-                                df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'produkt', 'ilosc', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'produkt', 'kraj', 'ilosc', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
                                 st.dataframe(
-                                    df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'kraj': 'Kraj', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
                                     use_container_width=True, hide_index=True,
                                     column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Litry": st.column_config.NumberColumn(format="%.2f L"),}
                                 )
@@ -1055,9 +1102,9 @@ def main_app():
                             wybrany_pojazd_oplaty = st.selectbox("Wybierz identyfikator:", lista_pojazdow_oplaty, key="select_oplaty")
                             if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
                                 df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
-                                df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
                                 st.dataframe(
-                                    df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
                                     use_container_width=True, hide_index=True,
                                     column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
                                 )
@@ -1082,9 +1129,9 @@ def main_app():
                             wybrany_pojazd_inne = st.selectbox("Wybierz identyfikator:", lista_pojazdow_inne, key="select_inne")
                             if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
                                 df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
-                                df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
                                 st.dataframe(
-                                    df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
                                     use_container_width=True, hide_index=True,
                                     column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
                                 )
@@ -1446,8 +1493,8 @@ def main_app():
                 
                 # Filtrowanie exportu bazy
                 if dane_bazy_raw_export is not None and not dane_bazy_raw_export.empty:
-                     maska_baza_exp = dane_bazy_raw_export['identyfikator_clean'].apply(czy_zakazany_pojazd)
-                     dane_bazy_raw_export = dane_bazy_raw_export[~maska_baza_exp]
+                      maska_baza_exp = dane_bazy_raw_export['identyfikator_clean'].apply(czy_zakazany_pojazd)
+                      dane_bazy_raw_export = dane_bazy_raw_export[~maska_baza_exp]
 
                 excel_data = to_excel_extended(df_rentownosc_display, df_analiza_raw, dane_bazy_raw_export)
                 
@@ -1461,9 +1508,9 @@ def main_app():
         except Exception as e:
             if "does not exist" in str(e):
                  if NAZWA_TABELI_PLIKOW in str(e):
-                     st.warning("Tabela do zapisywania plików nie istnieje. Przejdź do 'Panelu Admina' i kliknij '2. Stwórz tabelę saved_files'.")
+                      st.warning("Tabela do zapisywania plików nie istnieje. Przejdź do 'Panelu Admina' i kliknij '2. Stwórz tabelę saved_files'.")
                  else:
-                     st.warning("Baza danych transakcji jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
+                      st.warning("Baza danych transakcji jest pusta lub nie została jeszcze utworzona. Przejdź do 'Panelu Admina', aby ją zainicjować.")
             else:
                  st.error(f"Wystąpił nieoczekiwany błąd w zakładce raportu: {e}")
                  st.exception(e) 
