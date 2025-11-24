@@ -702,7 +702,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     
     CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
     # --- DODANY NOWY FILTR GLOBALNY DO CZYSZCZENIA PLIKU EXCEL ---
-    DODATKOWY_FILTR = ['TRUCK 1', 'TRUCK 2', 'PTU0001', 'PTU0002']
+    DODATKOWY_FILTR = ['TRUCK1', 'TRUCK2', 'TRUCK3','TRUCK4','TRUCK5','TRUCK','PTU0001', 'PTU0002']
     CZARNA_LISTA_FINALNA.extend(DODATKOWY_FILTR)
     # ------------------------------------------------------------
     
