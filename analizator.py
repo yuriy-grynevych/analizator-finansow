@@ -53,10 +53,15 @@ ETYKIETY_IGNOROWANE = [
 WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKIETY_IGNOROWANE
 
 # --- KONFIGURACJA FILTRÓW (ZAKAZANE POJAZDY) ---
-# Lista znormalizowana (bez spacji, wielkie litery)
+# Lista słów kluczowych do usunięcia (bez spacji)
 ZAKAZANE_POJAZDY_LISTA = [
-    'TRUCK1', 'TRUCK2', 'TRUCK3', 'TRUCK4', 'TRUCK5',
-    'PTU0001', 'PTU0002'
+    'TRUCK',       # Usuwa TRUCK, TRUCK 1, TRUCK 2, TRUCK 5 itd.
+    'HEROSTALSP',
+    'KUEHNE',
+    'GRUPAKAPITA',
+    'REGRINDSP',
+    'PTU0001',     # Konkretne PTU
+    'PTU0002'
 ]
 
 # --- FUNKCJA FILTRUJĄCA ---
@@ -71,7 +76,6 @@ def czy_zakazany_pojazd(nazwa):
     
     for zakazany in ZAKAZANE_POJAZDY_LISTA:
         # Sprawdzamy czy znormalizowana nazwa ZAWIERA zakazany ciąg
-        # Np. "AUTO TRUCK 1" -> "AUTOTRUCK1" zawiera "TRUCK1" -> True
         if zakazany in n:
             return True
     return False
