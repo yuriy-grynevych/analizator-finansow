@@ -544,15 +544,13 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None             
+    aktualna_data = None              
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
+    # --- Funkcja pomocnicza is_vehicle_line (bez zmian) ---
     def is_vehicle_line(line):
-        if not line or line == 'nan':
-            return False
-        
+        if not line or line == 'nan': return False
         line_clean = str(line).strip().upper()
-        
         BLACKLIST = [
             'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 
             'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
@@ -562,50 +560,34 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
             'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS'
         ]
-        
-        if line_clean in BLACKLIST:
-            return False
-
+        if line_clean in BLACKLIST: return False
         words = re.split(r'[\s+Ii]+', line_clean) 
         if not words: return False
-        
         has_vehicle_word = False
-        
         for word in words:
             if not word: continue
             word = word.replace("-", "")
-            
             is_blacklisted = False
             for bad_word in BLACKLIST:
                 if bad_word in word:
                     is_blacklisted = True
                     break
-            if is_blacklisted:
-                continue
-            
-            if len(word) < 5:
-                continue
-            
+            if is_blacklisted: continue
+            if len(word) < 5: continue
             if re.match(r'^[A-Z0-9]+$', word):
                 ma_litery = any(c.isalpha() for c in word)
                 ma_cyfry = any(c.isdigit() for c in word)
-                
                 if ma_litery and ma_cyfry:
                     has_vehicle_word = True
                     break
-                
                 if word.isdigit() and len(word) >= 4:
                     has_vehicle_word = True
                     break
-
-        if not has_vehicle_word:
-            return False
-            
+        if not has_vehicle_word: return False
         for word in words:
-            if len(word) > 12: 
-                return False
-                
+            if len(word) > 12: return False
         return True
+    # -----------------------------------------------------
 
     for index, row in df.iterrows():
         try:
@@ -613,7 +595,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
             
-            # Zmienne do przechwycenia oryginału (bierzemy pierwszy napotkany niezerowy)
             znaleziona_waluta = "EUR"
             znaleziona_kwota_org = 0.0
             found_orig = False
@@ -660,7 +641,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                     kwota_netto_do_uzycia = kwota_netto_eur
                     kwota_brutto_do_uzycia = kwota_brutto_eur
                     
-                    # Przekazujemy znalezione waluty do zmiennych tymczasowych
                     waluta_do_uzycia = znaleziona_waluta
                     kwota_org_do_uzycia = znaleziona_kwota_org
                     
@@ -703,20 +683,20 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             
             # LOGIKA PRZYPISYWANIA:
             if lista_aktualnych_pojazdow:
+                # To gwarantuje, że bierzemy tylko te koszty, które mają przypisany pojazd!
                 pojazdy_do_zapisu = lista_aktualnych_pojazdow
             
-            # Jeśli przychód i brak auta -> przypisz do kontrahenta
+            # Jeśli przychód i brak auta -> przypisz do kontrahenta (tylko dla przychodów)
             elif etykieta_do_uzycia in ETYKIETY_PRZYCHODOW and aktualny_kontrahent and aktualny_kontrahent != "nan":
                 pojazdy_do_zapisu = [aktualny_kontrahent]
             
+            # Jeśli nie ma pojazdu (i nie jest to przychód przypisany do kontrahenta) -> POMIŃ
             else:
                 continue
             
             liczba_pojazdow = len(pojazdy_do_zapisu)
             podz_kwota_brutto = kwota_brutto_do_uzycia / liczba_pojazdow
             podz_kwota_netto = kwota_netto_do_uzycia / liczba_pojazdow
-            
-            # Podział kwoty oryginalnej
             podz_kwota_org = kwota_org_do_uzycia / liczba_pojazdow
             
             opis_transakcji = etykieta_do_uzycia
@@ -726,14 +706,23 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
                 kontrahent_do_zapisu = aktualny_kontrahent
             
             for pojazd in pojazdy_do_zapisu:
+                typ_transakcji = None
+                
                 if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
+                    typ_transakcji = 'Przychód (Subiekt)'
+                elif etykieta_do_uzycia in ETYKIETY_KOSZTOW_INNYCH:
+                    typ_transakcji = 'Koszt (Subiekt)'
+                
+                if typ_transakcji:
                     wyniki.append({
-                        'data': aktualna_data, 'pojazd_oryg': pojazd, 'opis': opis_transakcji,
-                        'typ': 'Przychód (Subiekt)', 'zrodlo': 'Subiekt',
+                        'data': aktualna_data, 
+                        'pojazd_oryg': pojazd, 
+                        'opis': opis_transakcji,
+                        'typ': typ_transakcji, 
+                        'zrodlo': 'Subiekt',
                         'kwota_brutto_eur': podz_kwota_brutto,
                         'kwota_netto_eur': podz_kwota_netto,
                         'kontrahent': kontrahent_do_zapisu,
-                        # NOWE POLA
                         'kwota_org': podz_kwota_org,
                         'waluta_org': waluta_do_uzycia
                     })
@@ -745,14 +734,13 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             kwota_org_do_uzycia = 0.0
             
     if not wyniki:
-        st.warning(f"Nie znaleziono żadnych PRZYCHODÓW w pliku dla wybranego okresu ({data_start} - {data_stop}).")
+        st.warning(f"Nie znaleziono żadnych danych w pliku dla wybranego okresu ({data_start} - {data_stop}).")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
     
     CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
     
-    # --- FILTROWANIE RAW DATAFRAME (UŻYWAJĄC ZNORMALIZOWANEJ FUNKCJI) ---
     maska_zakazana = df_wyniki['pojazd_oryg'].apply(czy_zakazany_pojazd)
     df_wyniki = df_wyniki[~maska_zakazana]
     
@@ -769,17 +757,18 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
     df_wyniki.loc[maska_brak, 'pojazd_clean'] = df_wyniki.loc[maska_brak, 'pojazd_oryg']
     
+    # --- AGREGACJA (TERAZ UWZGLĘDNIA TEŻ KOSZTY Z SUBIEKTA) ---
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
     df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
     
-    df_koszty = pd.DataFrame(columns=['koszty_inne_brutto'])
-    df_koszty_netto = pd.DataFrame(columns=['koszty_inne_netto'])
+    # Tutaj zmiana: agregujemy 'Koszt (Subiekt)' zamiast tworzyć pustą tabelę
+    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
+    df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
 
     df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
     
-    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów przychodowych.")
+    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów (przychody + koszty pojazdów).")
     return df_agregacja, df_wyniki
-
 # --- FUNKCJA main() ---
 def main_app():
     
