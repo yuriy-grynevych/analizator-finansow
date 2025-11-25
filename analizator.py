@@ -23,7 +23,6 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 NAZWA_TABELI = "transactions"
 NAZWA_TABELI_PLIKOW = "saved_files"
 NAZWA_SCHEMATU = "public"
-# WAŻNE: Streamlit sam pobierze dane z secrets z sekcji [connections.db]
 NAZWA_POLACZENIA_DB = "db"
 
 # --- SŁOWNIK VAT ---
@@ -35,23 +34,40 @@ VAT_RATES = {
 }
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
+# Zaktualizowane listy zgodnie z prośbą o pobieranie wszystkich faktur
+
 ETYKIETY_PRZYCHODOW = [
-    'Faktura VAT sprzedaży', 'Przychód wewnętrzny'
+    'Faktura VAT sprzedaży', 
+    'Przychód wewnętrzny', 
+    'Rachunek sprzedaży',
+    'Korekta faktury VAT sprzedaży',
+    'Paragon'
 ]
 
 ETYKIETY_KOSZTOW_INNYCH = [
-    'Faktura VAT zakupu', 'Korekta faktury VAT sprzedaży', 'Korekta faktury VAT zakupu', 
+    'Faktura VAT zakupu', 
+    'Korekta faktury VAT zakupu', 
+    'Rachunek zakupu',
+    # Kategorie, które wcześniej mogły być ignorowane, a teraz chcemy je widzieć jeśli są w Subiekcie:
+    'Tankowanie', 'Paliwo', 'Opłata drogowa', 'Opłaty drogowe',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
     'Giełda', 'Księgowość', 'Leasing', 'Mandaty', 'Obsługa prawna', 
     'Ogłoszenie', 'Poczta Polska', 'Program', 'Prowizje', 
     'Rozliczanie kierowców', 'Rozliczenie VAT EUR', 'Serwis', 'Szkolenia BHP', 
     'Tachograf', 'USŁ. HOTELOWA', 'Usługi telekomunikacyjne', 'Wykup auta', 
-    'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta'
+    'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta', 'Części', 'Myjnia'
 ]
+
+# Zgodnie z życzeniem - ignorujemy tylko to co nie jest fakturą/kosztem
 ETYKIETY_IGNOROWANE = [
-    'Opłata drogowa', 'Opłata drogowa DK', 'Tankowanie', 'Suma końcowa', 'Nr pojazdu',
-    'Zamówienie od klienta', 'Wydanie zewnętrzne'
+    'Zamówienie od klienta', # To ma być ignorowane
+    'Wydanie zewnętrzne',    # To zazwyczaj magazyn, nie finanse
+    'Oferta', 
+    'Proforma',
+    'Suma końcowa', 
+    'Nr pojazdu'
 ]
+
 WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKIETY_IGNOROWANE
 
 # --- KONFIGURACJA FILTRÓW (ZAKAZANE POJAZDY) ---
@@ -73,7 +89,6 @@ def czy_zakazany_pojazd(nazwa):
         if zakazany in n:
             return True
     return False
-
 
 # --- FUNKCJE NBP ---
 @st.cache_data
@@ -196,7 +211,7 @@ def normalizuj_e100_PL(df_e100):
     if 'Kraj' in df_e100.columns:
         df_out['kraj'] = df_e100['Kraj'].str.upper().str.strip()
     else:
-        df_out['kraj'] = 'PL' # Domyślnie dla pliku PL
+        df_out['kraj'] = 'PL' 
 
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_PL'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
@@ -288,7 +303,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki):
 # --- FUNKCJE BAZY DANYCH (POSTGRESQL) ---
 def setup_database(conn):
     with conn.session as s:
-        # Usuwamy starą tabelę aby dodać kolumnę kraj
         s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI}"))
         
         s.execute(text(f"""
@@ -309,7 +323,6 @@ def setup_database(conn):
         s.commit()
 
 def setup_file_database(conn):
-    """Niszczy starą tabelę i tworzy nową poprawną."""
     try:
         with conn.session as s:
             s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI_PLIKOW}"))
@@ -544,13 +557,15 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None              
+    aktualna_data = None               
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     # --- Funkcja pomocnicza is_vehicle_line (bez zmian) ---
     def is_vehicle_line(line):
         if not line or line == 'nan': return False
         line_clean = str(line).strip().upper()
+        # Filtrujemy NAZWY firm, ale nie frazy typu "Tankowanie" czy "Paliwo", 
+        # bo one mogą być w Subiekcie przypisane do auta
         BLACKLIST = [
             'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 
             'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
@@ -622,6 +637,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         except Exception as e_row:
             continue 
 
+        # 1. Sprawdzanie czy to Data
         if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)) or date_regex.match(etykieta_wiersza):
             if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)):
                 aktualna_data = row[kolumna_etykiet_tuple].date()
@@ -633,23 +649,26 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             ostatnia_etykieta_pojazdu = None
             continue
 
+        # 2. Sprawdzanie czy to etykieta kosztowa/przychodowa (np. Faktura VAT zakupu)
         elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY:
-            if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
-                ostatnia_etykieta_pojazdu = etykieta_wiersza
-                if kwota_laczna != 0.0:
-                    etykieta_do_uzycia = ostatnia_etykieta_pojazdu
-                    kwota_netto_do_uzycia = kwota_netto_eur
-                    kwota_brutto_do_uzycia = kwota_brutto_eur
-                    
-                    waluta_do_uzycia = znaleziona_waluta
-                    kwota_org_do_uzycia = znaleziona_kwota_org
-                    
-                    ostatnia_etykieta_pojazdu = None 
-                else:
-                    continue
-            else:
-                continue 
+            if etykieta_wiersza in ETYKIETY_IGNOROWANE:
+                continue # Pomijamy np. Zamówienia od klienta
 
+            # Jeśli to etykieta, którą chcemy (Faktura VAT zakupu, Tankowanie z Subiekta itp.)
+            ostatnia_etykieta_pojazdu = etykieta_wiersza
+            if kwota_laczna != 0.0:
+                etykieta_do_uzycia = ostatnia_etykieta_pojazdu
+                kwota_netto_do_uzycia = kwota_netto_eur
+                kwota_brutto_do_uzycia = kwota_brutto_eur
+                
+                waluta_do_uzycia = znaleziona_waluta
+                kwota_org_do_uzycia = znaleziona_kwota_org
+                
+                ostatnia_etykieta_pojazdu = None 
+            else:
+                continue
+
+        # 3. Jeśli pusty wiersz (lub 'nan'), ale jest kwota (np. podsumowanie pod kategorią)
         elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_laczna != 0.0:
             if ostatnia_etykieta_pojazdu: 
                 etykieta_do_uzycia = ostatnia_etykieta_pojazdu
@@ -663,6 +682,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
             else:
                 continue 
 
+        # 4. Sprawdzanie czy to Pojazd
         elif etykieta_wiersza != 'nan' and etykieta_wiersza:
             if is_vehicle_line(etykieta_wiersza):
                 lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+|\s*\+\s*', etykieta_wiersza, flags=re.IGNORECASE)
@@ -674,6 +694,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         else:
             continue 
 
+        # --- ZAPISYWANIE WYNIKÓW ---
         if 'etykieta_do_uzycia' in locals() and etykieta_do_uzycia:
             
             if not aktualna_data: continue 
@@ -681,16 +702,15 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
 
             pojazdy_do_zapisu = []
             
-            # LOGIKA PRZYPISYWANIA:
+            # Jeśli mamy wykryty pojazd w sekcji
             if lista_aktualnych_pojazdow:
-                # To gwarantuje, że bierzemy tylko te koszty, które mają przypisany pojazd!
                 pojazdy_do_zapisu = lista_aktualnych_pojazdow
             
             # Jeśli przychód i brak auta -> przypisz do kontrahenta (tylko dla przychodów)
             elif etykieta_do_uzycia in ETYKIETY_PRZYCHODOW and aktualny_kontrahent and aktualny_kontrahent != "nan":
                 pojazdy_do_zapisu = [aktualny_kontrahent]
             
-            # Jeśli nie ma pojazdu (i nie jest to przychód przypisany do kontrahenta) -> POMIŃ
+            # Zmiana: Jeśli to koszt (np. Paliwo w Subiekcie dla elektryka) i nie ma pojazdu, pomijamy.
             else:
                 continue
             
@@ -831,13 +851,17 @@ def main_app():
                         # Formatowanie
                         sub_formatted = pd.DataFrame({
                             'Data': sub_data['data'],
-                            'Rodzaj': 'Przychód',
+                            'Rodzaj': sub_data['typ'], # Przychód lub Koszt (Subiekt)
                             'Opis': sub_data['opis'],
                             'Kwota Oryginalna': kwota_org_col,
                             'Waluta': waluta_org_col,
                             'Kwota EUR (Netto)': sub_data['kwota_netto_eur'],
                             'Kwota EUR (Brutto)': sub_data['kwota_brutto_eur']
                         })
+                        
+                        # Dla kosztów z subiekta dajemy minus, żeby w Excelu było ładnie widać
+                        sub_formatted.loc[sub_formatted['Rodzaj'] == 'Koszt (Subiekt)', ['Kwota Oryginalna', 'Kwota EUR (Netto)', 'Kwota EUR (Brutto)']] *= -1
+                        
                         dfs_to_concat.append(sub_formatted)
                         
                 # Dane z Paliwa/Opłat (Koszty)
