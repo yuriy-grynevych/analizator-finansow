@@ -784,41 +784,66 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # Ta metoda grupuje po miesiącu i kontrahencie. 
     # Jeśli wykryje korektę w danej grupie, wyrzuca wszystkie zwykłe faktury z tej grupy.
     
-    def zaawansowane_czyszczenie_korekt(df):
-        if df.empty: return df
-        
-        # Tworzymy kolumnę pomocniczą Rok-Miesiąc
-        try:
-            df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
-        except:
-            return df 
+  # --- ZAAWANSOWANE CZYSZCZENIE KOREKT (POPRAWIONA WERSJA) ---
+def zaawansowane_czyszczenie_korekt(df):
+    if df.empty: return df
+    
+    # Tworzymy kolumnę pomocniczą Rok-Miesiąc dla grupowania
+    try:
+        df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
+    except:
+        return df 
 
-        indices_to_drop = []
+    indices_to_drop = []
+    
+    # Grupujemy: Pojazd + Kontrahent + Miesiąc
+    # Sprawdzamy transakcje w obrębie tego samego miesiąca i tej samej firmy
+    grouped = df.groupby(['pojazd_clean', 'kontrahent', 'temp_month'])
+    
+    for name, group in grouped:
+        # Pobieramy wszystkie opisy z danej grupy jako listę stringów
+        opisy_w_grupie = [str(x) for x in group['opis'].unique()]
         
-        # Grupujemy: Pojazd + Kontrahent + Miesiąc
-        grouped = df.groupby(['pojazd_clean', 'kontrahent', 'temp_month'])
+        # --- LOGIKA DLA ZAKUPU (Koszty) ---
+        # Sprawdzamy, czy w tej grupie występuje jakakolwiek korekta zakupu
+        ma_korekte_zak = any('Korekta faktury VAT zakupu' in op for op in opisy_w_grupie)
         
-        for name, group in grouped:
-            opisy_w_grupie = group['opis'].unique()
-            
-            # --- LOGIKA DLA ZAKUPU ---
-            ma_korekte_zak = any('Korekta faktury VAT zakupu' in str(op) for op in opisy_w_grupie)
-            if ma_korekte_zak:
-                # Znajdź indeksy zwykłych faktur zakupu i oznacz do usunięcia
-                faktury_idx = group[group['opis'].str.contains('Faktura VAT zakupu', na=False)].index
-                indices_to_drop.extend(faktury_idx)
-            
-            # --- LOGIKA DLA SPRZEDAŻY ---
-            ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in str(op) for op in opisy_w_grupie)
-            if ma_korekte_sprz:
-                # Znajdź indeksy zwykłych faktur sprzedaży i oznacz do usunięcia
-                faktury_sprz_idx = group[group['opis'].str.contains('Faktura VAT sprzedaży', na=False)].index
-                indices_to_drop.extend(faktury_sprz_idx)
+        if ma_korekte_zak:
+            # Jeśli jest korekta, szukamy oryginałów do usunięcia
+            for idx, row in group.iterrows():
+                opis_wiersza = str(row['opis'])
+                
+                # WAŻNE: Nie usuwamy samej korekty!
+                if 'Korekta faktury VAT zakupu' in opis_wiersza:
+                    continue
+                
+                # TUTAJ ZMIANA: Usuwamy "Faktura VAT zakupu", "Rachunek zakupu" ORAZ "Serwis"
+                if ('Faktura VAT zakupu' in opis_wiersza or 
+                    'Serwis' in opis_wiersza or 
+                    'Rachunek zakupu' in opis_wiersza):
+                    indices_to_drop.append(idx)
+        
+        # --- LOGIKA DLA SPRZEDAŻY (Przychody) ---
+        ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in op for op in opisy_w_grupie)
+        
+        if ma_korekte_sprz:
+             for idx, row in group.iterrows():
+                opis_wiersza = str(row['opis'])
+                
+                if 'Korekta faktury VAT sprzedaży' in opis_wiersza:
+                    continue
+                
+                # Usuwamy oryginały sprzedaży
+                if 'Faktura VAT sprzedaży' in opis_wiersza or 'Rachunek sprzedaży' in opis_wiersza:
+                    indices_to_drop.append(idx)
 
-        # Usuwamy wiersze
-        df_clean = df.drop(indices_to_drop)
+    # Usuwamy namierzone wiersze (oryginały, które mają korekty)
+    df_clean = df.drop(indices_to_drop)
+    
+    # Sprzątamy po sobie (usuwamy kolumnę pomocniczą)
+    if 'temp_month' in df_clean.columns:
         return df_clean.drop(columns=['temp_month'])
-
+    return df_clean
     df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
 
     # --- AGREGACJA ---
