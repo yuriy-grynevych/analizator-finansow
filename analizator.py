@@ -844,7 +844,22 @@ def zaawansowane_czyszczenie_korekt(df):
     if 'temp_month' in df_clean.columns:
         return df_clean.drop(columns=['temp_month'])
     return df_clean
+    # 1. Wywołanie funkcji czyszczącej
     df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
+
+    # 2. Agregacja danych (sumowanie dla rentowności)
+    df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+    df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+    
+    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
+    df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
+
+    df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
+    
+    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów (przychody + koszty pojazdów).")
+    
+    # 3. Finalny zwrot wyników (Kluczowe dla naprawy błędu)
+    return df_agregacja, df_wyniki
 
     # --- AGREGACJA ---
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
