@@ -780,11 +780,45 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
     df_wyniki.loc[maska_brak, 'pojazd_clean'] = df_wyniki.loc[maska_brak, 'pojazd_oryg']
     
-    # --- AGREGACJA (TERAZ UWZGLĘDNIA TEŻ KOSZTY Z SUBIEKTA) ---
+    # --- LOGIKA KOREKT (NOWOŚĆ) ---
+    # Cel: Jeśli dla danego pojazdu, kontrahenta i daty istnieje "Korekta...",
+    # usuń zwykłą "Fakturę...", aby uniknąć dublowania kosztów.
+    
+    def usun_dublowane_faktury_przy_korektach(df):
+        if df.empty: return df
+        
+        # Tworzymy unikalną grupę
+        cols_group = ['data', 'pojazd_clean', 'kontrahent']
+        
+        def filter_group(group):
+            typy_w_grupie = group['opis'].unique() # 'opis' zawiera nazwę dokumentu
+            
+            # 1. KOSZTY
+            ma_fakture_zak = any('Faktura VAT zakupu' in t for t in typy_w_grupie)
+            ma_korekte_zak = any('Korekta faktury VAT zakupu' in t for t in typy_w_grupie)
+            
+            if ma_fakture_zak and ma_korekte_zak:
+                # Usuwamy zwykłe faktury, zostawiamy korekty
+                return group[~group['opis'].str.contains('Faktura VAT zakupu', na=False)]
+            
+            # 2. PRZYCHODY (opcjonalnie, analogicznie)
+            ma_fakture_sprz = any('Faktura VAT sprzedaży' in t for t in typy_w_grupie)
+            ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in t for t in typy_w_grupie)
+            
+            if ma_fakture_sprz and ma_korekte_sprz:
+                return group[~group['opis'].str.contains('Faktura VAT sprzedaży', na=False)]
+                
+            return group
+
+        df_filtered = df.groupby(cols_group, group_keys=False).apply(filter_group)
+        return df_filtered
+
+    df_wyniki = usun_dublowane_faktury_przy_korektach(df_wyniki)
+
+    # --- AGREGACJA ---
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
     df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
     
-    # Tutaj zmiana: agregujemy 'Koszt (Subiekt)' zamiast tworzyć pustą tabelę
     df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
     df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
 
