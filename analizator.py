@@ -34,7 +34,6 @@ VAT_RATES = {
 }
 
 # --- LISTY DO PARSOWANIA PLIKU 'analiza.xlsx' ---
-# Zaktualizowane listy zgodnie z prośbą o pobieranie wszystkich faktur
 
 ETYKIETY_PRZYCHODOW = [
     'Faktura VAT sprzedaży', 
@@ -44,12 +43,16 @@ ETYKIETY_PRZYCHODOW = [
     'Paragon'
 ]
 
+# UWAGA: Przeniosłem tu Tankowanie i Opłaty, żeby Subiekt je łapał (np. dla elektryków)
 ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu', 
     'Korekta faktury VAT zakupu', 
     'Rachunek zakupu',
-    # Kategorie, które wcześniej mogły być ignorowane, a teraz chcemy je widzieć jeśli są w Subiekcie:
-    'Tankowanie', 'Paliwo', 'Opłata drogowa', 'Opłaty drogowe',
+    'Tankowanie',         # Ważne: teraz traktowane jako koszt z Subiekta
+    'Paliwo',
+    'Opłata drogowa',     # Ważne: teraz traktowane jako koszt z Subiekta
+    'Opłaty drogowe',
+    'Opłata drogowa DK',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
     'Giełda', 'Księgowość', 'Leasing', 'Mandaty', 'Obsługa prawna', 
     'Ogłoszenie', 'Poczta Polska', 'Program', 'Prowizje', 
@@ -58,10 +61,10 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta', 'Części', 'Myjnia'
 ]
 
-# Zgodnie z życzeniem - ignorujemy tylko to co nie jest fakturą/kosztem
+# Ignorujemy tylko dokumenty magazynowe/oferty/zamówienia
 ETYKIETY_IGNOROWANE = [
-    'Zamówienie od klienta', # To ma być ignorowane
-    'Wydanie zewnętrzne',    # To zazwyczaj magazyn, nie finanse
+    'Zamówienie od klienta', 
+    'Wydanie zewnętrzne',   
     'Oferta', 
     'Proforma',
     'Suma końcowa', 
@@ -72,12 +75,12 @@ WSZYSTKIE_ZNANE_ETYKIETY = ETYKIETY_PRZYCHODOW + ETYKIETY_KOSZTOW_INNYCH + ETYKI
 
 # --- KONFIGURACJA FILTRÓW (ZAKAZANE POJAZDY) ---
 ZAKAZANE_POJAZDY_LISTA = [
-    'TRUCK',       # Usuwa TRUCK, TRUCK 1, TRUCK 2, TRUCK 5 itd.
+    'TRUCK',       
     'HEROSTALSP',
     'KUEHNE',
     'GRUPAKAPITA',
     'REGRINDSP',
-    'PTU0001',     # Konkretne PTU
+    'PTU0001',     
     'PTU0002'
 ]
 
@@ -1420,8 +1423,16 @@ def main_app():
                             # Zabezpieczenie przed starym cache
                             kwota_org_col = subiekt_details.get('kwota_org', subiekt_details['kwota_brutto_eur'])
                             waluta_org_col = subiekt_details.get('waluta_org', 'EUR')
-
-                            subiekt_formatted = subiekt_details[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
+                            
+                            # --- NOWA LOGIKA KOLOROWANIA (NEGACJA KOSZTÓW) ---
+                            subiekt_formatted = subiekt_details.copy()
+                            # Sprawdzamy czy to koszt i zamieniamy na minus, żeby świeciło na czerwono
+                            mask_koszt = subiekt_formatted['typ'] == 'Koszt (Subiekt)'
+                            subiekt_formatted.loc[mask_koszt, 'kwota_netto_eur'] = -subiekt_formatted.loc[mask_koszt, 'kwota_netto_eur'].abs()
+                            subiekt_formatted.loc[mask_koszt, 'kwota_brutto_eur'] = -subiekt_formatted.loc[mask_koszt, 'kwota_brutto_eur'].abs()
+                            
+                            # Wybieramy kolumny
+                            subiekt_formatted = subiekt_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
                             lista_df_szczegolow.append(subiekt_formatted)
 
                     if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
