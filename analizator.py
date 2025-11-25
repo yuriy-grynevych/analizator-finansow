@@ -542,19 +542,23 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     aktualna_data = None              
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
 
-    # --- Definicja is_vehicle_line (wklejona wewnątrz dla porządku) ---
+    # --- Wewnątrz funkcji przetworz_plik_analizy ---
     def is_vehicle_line(line):
         if not line or line == 'nan': return False
         line_clean = str(line).strip().upper()
-        # Słowa które wykluczają, że to pojazd (np. nazwy firm, banków)
+        
+        # --- ROZSZERZONA CZARNA LISTA ---
         BLACKLIST = [
             'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
             'PKO', 'SANTANDER', 'ING', 'ALIOR', 'MILLENIUM', 'TRUCK24SP', 'EDENRED', 'INTERCARS', 'MARMAR',
             'LEASING', 'FINANCE', 'UBER', 'BOLT', 'FREE', 'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
-            'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS', 'HOLDING', 'VFS', 'FINANSOWE'
+            'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS', 'HOLDING', 'VFS', 'FINANSOWE',
+            'FAKTURA', 'VAT', 'ZAKUPU', 'SPRZEDAZY', 'KOREKTA' # <--- DODAŁEM TE SŁOWA
         ]
+        
         if line_clean in BLACKLIST: return False
         
+        # (reszta funkcji bez zmian...)
         # Pojazd zazwyczaj jest krótki (np. WPR0103U) i ma cyfry
         words = re.split(r'[\s+Ii]+', line_clean) 
         has_vehicle_word = False
