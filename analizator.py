@@ -487,7 +487,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy):
     
     return dane_z_bazy, mapa_kursow
 
-# --- PARSOWANIE ANALIZY (Wersja obsługująca zagnieżdżenia Subiekta) ---
+# --- PARSOWANIE ANALIZY (ZAPISYWANIE WALUTY I ORYGINAŁU) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     MAPA_WALUT_PLIKU = {
@@ -501,198 +501,246 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     try:
         kurs_eur_pln_nbp = pobierz_kurs_eur_pln()
         if not kurs_eur_pln_nbp:
-            st.error("Nie udało się pobrać kursu EUR/PLN z NBP.")
+            st.error("Nie udało się pobrać kursu EUR/PLN z NBP. Przetwarzanie przerwane.")
             return None, None
+        
+        st.info(f"ℹ️ Przeliczam waluty po bieżącym kursie średnim NBP: 1 EUR = {kurs_eur_pln_nbp:.4f} PLN")
         
         lista_iso_walut = list(MAPA_WALUT_PLIKU.values())
         mapa_kursow = pobierz_wszystkie_kursy(lista_iso_walut, kurs_eur_pln_nbp)
     except Exception as e:
-        st.error(f"Błąd kursów walut: {e}")
+        st.error(f"Błąd podczas pobierania kursów walut NBP: {e}")
         return None, None
     
     try:
-        # Wczytanie pliku
-        df = pd.read_excel(przeslany_plik_bytes, sheet_name='pojazdy', engine='openpyxl', header=[7, 8]) 
+        df = pd.read_excel(przeslany_plik_bytes, 
+                           sheet_name='pojazdy', 
+                           engine='openpyxl', 
+                           header=[7, 8]) 
+        
         kolumna_etykiet_tuple = df.columns[0]
         
-        # Mapowanie kolumn z kwotami
         MAPA_BRUTTO_DO_KURSU = {}
         MAPA_NETTO_DO_KURSU = {}
         
         for col_waluta, col_typ in df.columns:
-            if col_waluta in MAPA_WALUT_PLIKU:
+            if col_waluta in MAPA_WALUT_PLIKU and col_typ == TYP_KWOTY_BRUTTO:
                 iso_code = MAPA_WALUT_PLIKU[col_waluta]
                 kurs = mapa_kursow.get(iso_code, 0.0)
                 if iso_code == 'EUR': kurs = 1.0
-                
-                if col_typ == TYP_KWOTY_BRUTTO:
-                    MAPA_BRUTTO_DO_KURSU[(col_waluta, col_typ)] = (kurs, iso_code)
-                elif col_typ == TYP_KWOTY_NETTO:
-                    MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = (kurs, iso_code)
+                MAPA_BRUTTO_DO_KURSU[(col_waluta, col_typ)] = (kurs, iso_code)
+            
+            if col_waluta in MAPA_WALUT_PLIKU and col_typ == TYP_KWOTY_NETTO:
+                iso_code = MAPA_WALUT_PLIKU[col_waluta]
+                kurs = mapa_kursow.get(iso_code, 0.0)
+                if iso_code == 'EUR': kurs = 1.0
+                MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = (kurs, iso_code)
         
     except Exception as e:
-        st.error(f"Błąd pliku Excel: {e}")
+        st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
         return None, None
 
     wyniki = []
-    
-    # Zmienne stanu (Pamięć pętli)
     lista_aktualnych_pojazdow = [] 
-    aktualny_kontrahent = "Nieokreślony"
+    aktualny_kontrahent = None 
+    ostatnia_etykieta_pojazdu = None
     aktualna_data = None              
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
-
-    # --- Wewnątrz funkcji przetworz_plik_analizy ---
+    
+    # --- Funkcja pomocnicza is_vehicle_line (bez zmian) ---
     def is_vehicle_line(line):
         if not line or line == 'nan': return False
         line_clean = str(line).strip().upper()
-        
-        # --- ROZSZERZONA CZARNA LISTA ---
         BLACKLIST = [
-            'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
-            'PKO', 'SANTANDER', 'ING', 'ALIOR', 'MILLENIUM', 'TRUCK24SP', 'EDENRED', 'INTERCARS', 'MARMAR',
-            'LEASING', 'FINANCE', 'UBER', 'BOLT', 'FREE', 'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
-            'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS', 'HOLDING', 'VFS', 'FINANSOWE',
-            'FAKTURA', 'VAT', 'ZAKUPU', 'SPRZEDAZY', 'KOREKTA' # <--- DODAŁEM TE SŁOWA
+            'E100', 'EUROWAG', 'VISA', 'MASTER', 'MASTERCARD', 
+            'ORLEN', 'LOTOS', 'BP', 'SHELL', 'UTA', 'DKV', 
+            'PKO', 'SANTANDER', 'ING', 'ALIOR', 'MILLENIUM',
+            'TRUCK24SP', 'EDENRED', 'INTERCARS', 'MARMAR',
+            'LEASING', 'FINANCE', 'UBER', 'BOLT', 'FREE',
+            'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
+            'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS'
         ]
-        
         if line_clean in BLACKLIST: return False
-        
-        # (reszta funkcji bez zmian...)
-        # Pojazd zazwyczaj jest krótki (np. WPR0103U) i ma cyfry
         words = re.split(r'[\s+Ii]+', line_clean) 
+        if not words: return False
         has_vehicle_word = False
         for word in words:
             if not word: continue
-            word_clean = word.replace("-", "")
-            
-            # Jeśli słowo z czarnej listy jest częścią (np. ALIORBANK), odrzuć
-            if any(bad in word_clean for bad in BLACKLIST): continue
-            
-            # Logika wykrywania tablicy/nr bocznego
-            if re.match(r'^[A-Z0-9]+$', word_clean) and len(word_clean) >= 4 and len(word_clean) <= 10:
-                has_vehicle_word = True
-                break
-                
-        return has_vehicle_word
-    # ------------------------------------------------------------------
+            word = word.replace("-", "")
+            is_blacklisted = False
+            for bad_word in BLACKLIST:
+                if bad_word in word:
+                    is_blacklisted = True
+                    break
+            if is_blacklisted: continue
+            if len(word) < 5: continue
+            if re.match(r'^[A-Z0-9]+$', word):
+                ma_litery = any(c.isalpha() for c in word)
+                ma_cyfry = any(c.isdigit() for c in word)
+                if ma_litery and ma_cyfry:
+                    has_vehicle_word = True
+                    break
+                if word.isdigit() and len(word) >= 4:
+                    has_vehicle_word = True
+                    break
+        if not has_vehicle_word: return False
+        for word in words:
+            if len(word) > 12: return False
+        return True
+    # -----------------------------------------------------
 
     for index, row in df.iterrows():
         try:
             etykieta_wiersza = str(row[kolumna_etykiet_tuple]).strip()
-            
-            # 1. Przeliczanie kwot dla tego wiersza
             kwota_brutto_eur = 0.0
             kwota_netto_eur = 0.0
+            
             znaleziona_waluta = "EUR"
             znaleziona_kwota_org = 0.0
             found_orig = False
 
             for col_tuple, (kurs, iso_code) in MAPA_BRUTTO_DO_KURSU.items():
                 if pd.notna(row[col_tuple]):
-                    val = pd.to_numeric(row[col_tuple], errors='coerce')
-                    if pd.notna(val) and val != 0:
-                        kwota_brutto_eur += val * kurs
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
+                    
+                    if kwota_val != 0.0:
+                        kwota_brutto_eur += kwota_val * kurs
                         if not found_orig:
                             znaleziona_waluta = iso_code
-                            znaleziona_kwota_org = val
+                            znaleziona_kwota_org = kwota_val
                             found_orig = True
             
             for col_tuple, (kurs, iso_code) in MAPA_NETTO_DO_KURSU.items():
                  if pd.notna(row[col_tuple]):
-                    val = pd.to_numeric(row[col_tuple], errors='coerce')
-                    if pd.notna(val):
-                        kwota_netto_eur += val * kurs
+                    kwota_val = pd.to_numeric(row[col_tuple], errors='coerce')
+                    if pd.isna(kwota_val): kwota_val = 0.0
+                    kwota_netto_eur += kwota_val * kurs
             
             kwota_laczna = kwota_brutto_eur if kwota_brutto_eur != 0 else kwota_netto_eur
 
-        except:
+        except Exception as e_row:
             continue 
 
-        # 2. Wykrywanie DATY (resetuje stan pojazdu, bo data jest najwyżej w hierarchii Subiekta w niektórych widokach, 
-        # ale w widoku "Wg Pojazdów" data jest niżej. Tutaj zakładamy widok: Data -> Pojazd LUB Pojazd -> Data)
-        # UWAGA: W Twoim pliku struktura to Pojazd -> Kontrahent -> Dokument -> Kategoria.
-        # Data zazwyczaj jest gdzieś indziej lub w kolumnie obok.
-        if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)):
-             aktualna_data = row[kolumna_etykiet_tuple].date()
-             continue
-        elif date_regex.match(etykieta_wiersza):
-             try: aktualna_data = pd.to_datetime(etykieta_wiersza).date()
-             except: pass
-             continue
-
-        # 3. Logika hierarchii
-        if etykieta_wiersza == 'nan' or not etykieta_wiersza:
+        if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)) or date_regex.match(etykieta_wiersza):
+            if isinstance(row[kolumna_etykiet_tuple], (pd.Timestamp, date)):
+                aktualna_data = row[kolumna_etykiet_tuple].date()
+            else:
+                try: aktualna_data = pd.to_datetime(etykieta_wiersza).date()
+                except: pass
+            lista_aktualnych_pojazdow = [] 
+            aktualny_kontrahent = None
+            ostatnia_etykieta_pojazdu = None
             continue
 
-        # Czy to jest POJAZD? (np. WPR0103U)
-        if is_vehicle_line(etykieta_wiersza):
-            lista_aktualnych_pojazdow = [etykieta_wiersza] # Nowy pojazd, czyścimy listę
-            aktualny_kontrahent = "Nieokreślony" # Reset kontrahenta
+        elif etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY:
+            if etykieta_wiersza not in ETYKIETY_IGNOROWANE:
+                ostatnia_etykieta_pojazdu = etykieta_wiersza
+                if kwota_laczna != 0.0:
+                    etykieta_do_uzycia = ostatnia_etykieta_pojazdu
+                    kwota_netto_do_uzycia = kwota_netto_eur
+                    kwota_brutto_do_uzycia = kwota_brutto_eur
+                    
+                    waluta_do_uzycia = znaleziona_waluta
+                    kwota_org_do_uzycia = znaleziona_kwota_org
+                    
+                    ostatnia_etykieta_pojazdu = None 
+                else:
+                    continue
+            else:
+                continue 
+
+        elif (etykieta_wiersza == 'nan' or not etykieta_wiersza) and kwota_laczna != 0.0:
+            if ostatnia_etykieta_pojazdu: 
+                etykieta_do_uzycia = ostatnia_etykieta_pojazdu
+                kwota_netto_do_uzycia = kwota_netto_eur
+                kwota_brutto_do_uzycia = kwota_brutto_eur
+                
+                waluta_do_uzycia = znaleziona_waluta
+                kwota_org_do_uzycia = znaleziona_kwota_org
+                
+                ostatnia_etykieta_pojazdu = None 
+            else:
+                continue 
+
+        elif etykieta_wiersza != 'nan' and etykieta_wiersza:
+            if is_vehicle_line(etykieta_wiersza):
+                lista_aktualnych_pojazdow = re.split(r'\s+i\s+|\s+I\s+|\s*\+\s*', etykieta_wiersza, flags=re.IGNORECASE)
+                lista_aktualnych_pojazdow = [p.strip() for p in lista_aktualnych_pojazdow if p.strip()]
+            else:
+                aktualny_kontrahent = etykieta_wiersza.strip('"')
             continue
         
-        # Czy to znana ETYKIETA KOSZTOWA/PRZYCHODOWA? (np. Leasing, Faktura VAT zakupu, Tankowanie)
-        if etykieta_wiersza in WSZYSTKIE_ZNANE_ETYKIETY:
-            
-            # Jeśli ignorowana (np. Suma końcowa), pomiń
-            if etykieta_wiersza in ETYKIETY_IGNOROWANE:
-                continue
-                
-            # Jeśli ma kwotę, to znaczy że to KONKRETNY WPIS (np. Leasing 7993.77)
-            if kwota_laczna != 0.0:
-                
-                # Sprawdź datę (jeśli nie znaleziono w wierszu, użyj z filtra raportu lub dzisiejszą - workaround)
-                data_transakcji = aktualna_data if aktualna_data else data_start
-                if not (data_start <= data_transakcji <= data_stop):
-                    continue
+        else:
+            continue 
 
-                # Decyzja: Przychód czy Koszt
+        if 'etykieta_do_uzycia' in locals() and etykieta_do_uzycia:
+            
+            if not aktualna_data: continue 
+            if not (data_start <= aktualna_data <= data_stop): continue 
+
+            pojazdy_do_zapisu = []
+            
+            # LOGIKA PRZYPISYWANIA:
+            if lista_aktualnych_pojazdow:
+                # To gwarantuje, że bierzemy tylko te koszty, które mają przypisany pojazd!
+                pojazdy_do_zapisu = lista_aktualnych_pojazdow
+            
+            # Jeśli przychód i brak auta -> przypisz do kontrahenta (tylko dla przychodów)
+            elif etykieta_do_uzycia in ETYKIETY_PRZYCHODOW and aktualny_kontrahent and aktualny_kontrahent != "nan":
+                pojazdy_do_zapisu = [aktualny_kontrahent]
+            
+            # Jeśli nie ma pojazdu (i nie jest to przychód przypisany do kontrahenta) -> POMIŃ
+            else:
+                continue
+            
+            liczba_pojazdow = len(pojazdy_do_zapisu)
+            podz_kwota_brutto = kwota_brutto_do_uzycia / liczba_pojazdow
+            podz_kwota_netto = kwota_netto_do_uzycia / liczba_pojazdow
+            podz_kwota_org = kwota_org_do_uzycia / liczba_pojazdow
+            
+            opis_transakcji = etykieta_do_uzycia
+            kontrahent_do_zapisu = "Brak Kontrahenta"
+            if aktualny_kontrahent and aktualny_kontrahent != "nan":
+                opis_transakcji = f"{etykieta_do_uzycia} - {aktualny_kontrahent}"
+                kontrahent_do_zapisu = aktualny_kontrahent
+            
+            for pojazd in pojazdy_do_zapisu:
                 typ_transakcji = None
-                if etykieta_wiersza in ETYKIETY_PRZYCHODOW:
+                
+                if etykieta_do_uzycia in ETYKIETY_PRZYCHODOW:
                     typ_transakcji = 'Przychód (Subiekt)'
-                elif etykieta_wiersza in ETYKIETY_KOSZTOW_INNYCH:
+                elif etykieta_do_uzycia in ETYKIETY_KOSZTOW_INNYCH:
                     typ_transakcji = 'Koszt (Subiekt)'
                 
-                # Zapisz jeśli mamy pojazd i typ
-                if typ_transakcji and lista_aktualnych_pojazdow:
-                    liczba = len(lista_aktualnych_pojazdow)
-                    opis = etykieta_wiersza
-                    if aktualny_kontrahent and aktualny_kontrahent != "Nieokreślony":
-                        opis = f"{etykieta_wiersza} ({aktualny_kontrahent})"
-                    
-                    for pojazd in lista_aktualnych_pojazdow:
-                        wyniki.append({
-                            'data': data_transakcji,
-                            'pojazd_oryg': pojazd,
-                            'opis': opis,
-                            'typ': typ_transakcji,
-                            'zrodlo': 'Subiekt',
-                            'kwota_brutto_eur': kwota_brutto_eur / liczba,
-                            'kwota_netto_eur': kwota_netto_eur / liczba,
-                            'kontrahent': aktualny_kontrahent,
-                            'kwota_org': znaleziona_kwota_org / liczba,
-                            'waluta_org': znaleziona_waluta
-                        })
-            else:
-                # Jeśli kwota == 0 (np. nagłówek "Faktura VAT zakupu"), to nic nie robimy,
-                # ale pętla idzie dalej w dół do "Leasing" gdzie będzie kwota.
-                pass
-            continue
+                if typ_transakcji:
+                    wyniki.append({
+                        'data': aktualna_data, 
+                        'pojazd_oryg': pojazd, 
+                        'opis': opis_transakcji,
+                        'typ': typ_transakcji, 
+                        'zrodlo': 'Subiekt',
+                        'kwota_brutto_eur': podz_kwota_brutto,
+                        'kwota_netto_eur': podz_kwota_netto,
+                        'kontrahent': kontrahent_do_zapisu,
+                        'kwota_org': podz_kwota_org,
+                        'waluta_org': waluta_do_uzycia
+                    })
             
-        # Jeśli to nie pojazd i nie znana etykieta, to prawdopodobnie KONTRAHENT (np. VFS USŁUGI...)
-        # Zakładamy, że kontrahent jest długim napisem
-        if len(etykieta_wiersza) > 3 and not is_vehicle_line(etykieta_wiersza):
-            aktualny_kontrahent = etykieta_wiersza.strip('"')
-            continue
-
+            del etykieta_do_uzycia
+            kwota_brutto_do_uzycia = 0.0
+            kwota_netto_do_uzycia = 0.0
+            waluta_do_uzycia = "EUR"
+            kwota_org_do_uzycia = 0.0
+            
     if not wyniki:
-        st.warning(f"Nie znaleziono żadnych danych w pliku dla wybranego okresu.")
+        st.warning(f"Nie znaleziono żadnych danych w pliku dla wybranego okresu ({data_start} - {data_stop}).")
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
     
-    # Filtrowanie zakazanych pojazdów i śmieci
     CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
+    
     maska_zakazana = df_wyniki['pojazd_oryg'].apply(czy_zakazany_pojazd)
     df_wyniki = df_wyniki[~maska_zakazana]
     
@@ -701,23 +749,27 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
         df_wyniki = df_wyniki[~maska]
 
     if df_wyniki.empty:
-         st.warning("Wszystkie znalezione transakcje zostały odfiltrowane.")
+         st.warning("Wszystkie znalezione transakcje zostały odfiltrowane (brak poprawnego pojazdu).")
          return None, None
 
     df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['pojazd_oryg'])
     
-    # Agregacja
+    maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
+    df_wyniki.loc[maska_brak, 'pojazd_clean'] = df_wyniki.loc[maska_brak, 'pojazd_oryg']
+    
+    # --- AGREGACJA (TERAZ UWZGLĘDNIA TEŻ KOSZTY Z SUBIEKTA) ---
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
     df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+    
+    # Tutaj zmiana: agregujemy 'Koszt (Subiekt)' zamiast tworzyć pustą tabelę
     df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
     df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
 
     df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
     
-    st.success(f"Przetworzono {len(df_wyniki)} transakcji z Subiekta (w tym Leasing, Tankowania itp.).")
+    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów (przychody + koszty pojazdów).")
     return df_agregacja, df_wyniki
-
-
+# --- FUNKCJA main() ---
 def main_app():
     
     st.title("Analizator Wydatków Floty") 
