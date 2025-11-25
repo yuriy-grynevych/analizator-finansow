@@ -784,66 +784,56 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     # Ta metoda grupuje po miesiącu i kontrahencie. 
     # Jeśli wykryje korektę w danej grupie, wyrzuca wszystkie zwykłe faktury z tej grupy.
     
-  # --- ZAAWANSOWANE CZYSZCZENIE KOREKT (POPRAWIONA WERSJA) ---
-def zaawansowane_czyszczenie_korekt(df):
-    if df.empty: return df
-    
-    # Tworzymy kolumnę pomocniczą Rok-Miesiąc dla grupowania
-    try:
-        df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
-    except:
-        return df 
+ # --- ZAAWANSOWANE CZYSZCZENIE KOREKT (POPRAWIONA WERSJA) ---
+    def zaawansowane_czyszczenie_korekt(df):
+        if df.empty: return df
+        
+        # Tworzymy kolumnę pomocniczą Rok-Miesiąc
+        try:
+            df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
+        except:
+            return df 
 
-    indices_to_drop = []
-    
-    # Grupujemy: Pojazd + Kontrahent + Miesiąc
-    # Sprawdzamy transakcje w obrębie tego samego miesiąca i tej samej firmy
-    grouped = df.groupby(['pojazd_clean', 'kontrahent', 'temp_month'])
-    
-    for name, group in grouped:
-        # Pobieramy wszystkie opisy z danej grupy jako listę stringów
-        opisy_w_grupie = [str(x) for x in group['opis'].unique()]
+        indices_to_drop = []
         
-        # --- LOGIKA DLA ZAKUPU (Koszty) ---
-        # Sprawdzamy, czy w tej grupie występuje jakakolwiek korekta zakupu
-        ma_korekte_zak = any('Korekta faktury VAT zakupu' in op for op in opisy_w_grupie)
+        # Grupujemy: Pojazd + Kontrahent + Miesiąc
+        grouped = df.groupby(['pojazd_clean', 'kontrahent', 'temp_month'])
         
-        if ma_korekte_zak:
-            # Jeśli jest korekta, szukamy oryginałów do usunięcia
-            for idx, row in group.iterrows():
-                opis_wiersza = str(row['opis'])
-                
-                # WAŻNE: Nie usuwamy samej korekty!
-                if 'Korekta faktury VAT zakupu' in opis_wiersza:
-                    continue
-                
-                # TUTAJ ZMIANA: Usuwamy "Faktura VAT zakupu", "Rachunek zakupu" ORAZ "Serwis"
-                if ('Faktura VAT zakupu' in opis_wiersza or 
-                    'Serwis' in opis_wiersza or 
-                    'Rachunek zakupu' in opis_wiersza):
-                    indices_to_drop.append(idx)
-        
-        # --- LOGIKA DLA SPRZEDAŻY (Przychody) ---
-        ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in op for op in opisy_w_grupie)
-        
-        if ma_korekte_sprz:
-             for idx, row in group.iterrows():
-                opis_wiersza = str(row['opis'])
-                
-                if 'Korekta faktury VAT sprzedaży' in opis_wiersza:
-                    continue
-                
-                # Usuwamy oryginały sprzedaży
-                if 'Faktura VAT sprzedaży' in opis_wiersza or 'Rachunek sprzedaży' in opis_wiersza:
-                    indices_to_drop.append(idx)
+        for name, group in grouped:
+            opisy_w_grupie = [str(x) for x in group['opis'].unique()]
+            
+            # --- LOGIKA DLA ZAKUPU ---
+            ma_korekte_zak = any('Korekta faktury VAT zakupu' in op for op in opisy_w_grupie)
+            
+            if ma_korekte_zak:
+                for idx, row in group.iterrows():
+                    opis_wiersza = str(row['opis'])
+                    if 'Korekta faktury VAT zakupu' in opis_wiersza:
+                        continue
+                    # Tutaj jest poprawka uwzględniająca SERWIS
+                    if ('Faktura VAT zakupu' in opis_wiersza or 
+                        'Serwis' in opis_wiersza or 
+                        'Rachunek zakupu' in opis_wiersza):
+                        indices_to_drop.append(idx)
+            
+            # --- LOGIKA DLA SPRZEDAŻY ---
+            ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in op for op in opisy_w_grupie)
+            
+            if ma_korekte_sprz:
+                 for idx, row in group.iterrows():
+                    opis_wiersza = str(row['opis'])
+                    if 'Korekta faktury VAT sprzedaży' in opis_wiersza:
+                        continue
+                    if 'Faktura VAT sprzedaży' in opis_wiersza or 'Rachunek sprzedaży' in opis_wiersza:
+                        indices_to_drop.append(idx)
 
-    # Usuwamy namierzone wiersze (oryginały, które mają korekty)
-    df_clean = df.drop(indices_to_drop)
+        df_clean = df.drop(indices_to_drop)
+        if 'temp_month' in df_clean.columns:
+            return df_clean.drop(columns=['temp_month'])
+        return df_clean
+
+    # --- TO JEST CZĘŚĆ, KTÓREJ PRAWDOPODOBNIE BRAKUJE ---
     
-    # Sprzątamy po sobie (usuwamy kolumnę pomocniczą)
-    if 'temp_month' in df_clean.columns:
-        return df_clean.drop(columns=['temp_month'])
-    return df_clean
     # 1. Wywołanie funkcji czyszczącej
     df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
 
@@ -860,7 +850,6 @@ def zaawansowane_czyszczenie_korekt(df):
     
     # 3. Finalny zwrot wyników (Kluczowe dla naprawy błędu)
     return df_agregacja, df_wyniki
-
     # --- AGREGACJA ---
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
     df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
