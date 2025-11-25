@@ -40,7 +40,8 @@ ETYKIETY_PRZYCHODOW = [
     'Przychód wewnętrzny', 
     'Rachunek sprzedaży',
     'Korekta faktury VAT sprzedaży',
-    'Paragon'
+    'Paragon',
+    'Paragon imienny'
 ]
 
 ETYKIETY_KOSZTOW_INNYCH = [
@@ -57,7 +58,8 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Ogłoszenie', 'Poczta Polska', 'Program', 'Prowizje', 
     'Rozliczanie kierowców', 'Rozliczenie VAT EUR', 'Serwis', 'Szkolenia BHP', 
     'Tachograf', 'USŁ. HOTELOWA', 'Usługi telekomunikacyjne', 'Wykup auta', 
-    'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta', 'Części', 'Myjnia'
+    'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta', 'Części', 'Myjnia',
+    'Ubezpieczenie'
 ]
 
 ETYKIETY_IGNOROWANE = [
@@ -778,48 +780,46 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop):
     maska_brak = df_wyniki['pojazd_clean'] == 'Brak Identyfikatora'
     df_wyniki.loc[maska_brak, 'pojazd_clean'] = df_wyniki.loc[maska_brak, 'pojazd_oryg']
     
-    # --- LOGIKA KOREKT (POPRAWIONA - GRUPOWANIE PO MIESIĄCU) ---
+    # --- ZAAWANSOWANE CZYSZCZENIE KOREKT (NOWA METODA) ---
+    # Ta metoda grupuje po miesiącu i kontrahencie. 
+    # Jeśli wykryje korektę w danej grupie, wyrzuca wszystkie zwykłe faktury z tej grupy.
     
-    def usun_dublowane_faktury_przy_korektach(df):
+    def zaawansowane_czyszczenie_korekt(df):
         if df.empty: return df
         
         # Tworzymy kolumnę pomocniczą Rok-Miesiąc
         try:
-            df['okres_pomocniczy'] = pd.to_datetime(df['data']).dt.to_period('M')
+            df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
         except:
             return df 
 
-        # Grupowanie: Pojazd + Kontrahent + Miesiąc (zamiast konkretnego dnia)
-        cols_group = ['okres_pomocniczy', 'pojazd_clean', 'kontrahent']
+        indices_to_drop = []
         
-        def filter_group(group):
-            typy_w_grupie = group['opis'].unique()
-            
-            # 1. KOSZTY
-            ma_fakture_zak = any('Faktura VAT zakupu' in str(t) for t in typy_w_grupie)
-            ma_korekte_zak = any('Korekta faktury VAT zakupu' in str(t) for t in typy_w_grupie)
-            
-            if ma_fakture_zak and ma_korekte_zak:
-                # Jeśli jest korekta w tym miesiącu od tego kontrahenta, wywalamy zwykłą fakturę
-                return group[~group['opis'].str.contains('Faktura VAT zakupu', na=False)]
-            
-            # 2. PRZYCHODY
-            ma_fakture_sprz = any('Faktura VAT sprzedaży' in str(t) for t in typy_w_grupie)
-            ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in str(t) for t in typy_w_grupie)
-            
-            if ma_fakture_sprz and ma_korekte_sprz:
-                return group[~group['opis'].str.contains('Faktura VAT sprzedaży', na=False)]
-                
-            return group
-
-        df_filtered = df.groupby(cols_group, group_keys=False).apply(filter_group)
+        # Grupujemy: Pojazd + Kontrahent + Miesiąc
+        grouped = df.groupby(['pojazd_clean', 'kontrahent', 'temp_month'])
         
-        if 'okres_pomocniczy' in df_filtered.columns:
-            df_filtered = df_filtered.drop(columns=['okres_pomocniczy'])
+        for name, group in grouped:
+            opisy_w_grupie = group['opis'].unique()
             
-        return df_filtered
+            # --- LOGIKA DLA ZAKUPU ---
+            ma_korekte_zak = any('Korekta faktury VAT zakupu' in str(op) for op in opisy_w_grupie)
+            if ma_korekte_zak:
+                # Znajdź indeksy zwykłych faktur zakupu i oznacz do usunięcia
+                faktury_idx = group[group['opis'].str.contains('Faktura VAT zakupu', na=False)].index
+                indices_to_drop.extend(faktury_idx)
+            
+            # --- LOGIKA DLA SPRZEDAŻY ---
+            ma_korekte_sprz = any('Korekta faktury VAT sprzedaży' in str(op) for op in opisy_w_grupie)
+            if ma_korekte_sprz:
+                # Znajdź indeksy zwykłych faktur sprzedaży i oznacz do usunięcia
+                faktury_sprz_idx = group[group['opis'].str.contains('Faktura VAT sprzedaży', na=False)].index
+                indices_to_drop.extend(faktury_sprz_idx)
 
-    df_wyniki = usun_dublowane_faktury_przy_korektach(df_wyniki)
+        # Usuwamy wiersze
+        df_clean = df.drop(indices_to_drop)
+        return df_clean.drop(columns=['temp_month'])
+
+    df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
 
     # --- AGREGACJA ---
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
