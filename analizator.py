@@ -29,7 +29,8 @@ NAZWA_POLACZENIA_DB = "db"
 FIRMY = ["HOLIER", "UNIX-TRANS"]
 
 # --- KONFIGURACJA DLA UNIX-TRANS ---
-UNIX_FLOTA = ['NOL935C', 'WPR9685N', 'WGM8463A', 'WPR9335N']
+# POPRAWKA: Dodano NOL0935C (z zerem) aby łapać paliwo z Holiera
+UNIX_FLOTA = ['NOL935C', 'NOL0935C', 'WPR9685N', 'WGM8463A', 'WPR9335N']
 UNIX_DATA_START = date(2025, 10, 1)
 
 # --- SŁOWNIK VAT ---
@@ -54,9 +55,9 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu', 
     'Korekta faktury VAT zakupu', 
     'Rachunek zakupu',
-    'Tankowanie',           
+    'Tankowanie',            
     'Paliwo',
-    'Opłata drogowa',       
+    'Opłata drogowa',        
     'Opłaty drogowe',
     'Opłata drogowa DK',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
@@ -70,7 +71,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
 
 ETYKIETY_IGNOROWANE = [
     'Zamówienie od klienta', 
-    'Wydanie zewnętrzne',    
+    'Wydanie zewnętrzne',     
     'Oferta', 
     'Proforma',
     'Suma końcowa', 
@@ -269,35 +270,42 @@ def normalizuj_e100_EN(df_e100, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
+# POPRAWIONA FUNKCJA NORMALIZACJI FAKTUROWNI
 def normalizuj_fakturownia(df_fakt, firma_tag):
-    # --- NAPRAWA KOLUMN PRZY ZŁYM KODOWANIU ---
-    # Mapujemy luźne nazwy na poprawne
-    new_cols = {}
-    for c in df_fakt.columns:
-        c_lower = c.lower()
-        if 'sprzedaj' in c_lower and 'nip' not in c_lower:
-            new_cols[c] = 'Sprzedający'
-        elif 'nip' in c_lower and 'sprzed' in c_lower:
-            new_cols[c] = 'NIP sprzedającego'
-        elif 'data wyst' in c_lower:
-            new_cols[c] = 'Data wystawienia'
-        elif 'warto' in c_lower and 'netto' in c_lower and 'pln' not in c_lower:
-            new_cols[c] = 'Wartość netto'
-        elif 'warto' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower:
-            new_cols[c] = 'Wartość brutto'
-    df_fakt.rename(columns=new_cols, inplace=True)
+    # Robimy kopię, aby nie psuć oryginału
+    df = df_fakt.copy()
     
-    # !!! KLUCZOWA POPRAWKA: USUWANIE DUPLIKATÓW KOLUMN !!!
-    # Jeśli przez błędy kodowania zmapowaliśmy dwie różne kolumny na "Data wystawienia",
-    # ta linia zostawi tylko jedną, co naprawi błąd "arg must be a list..."
-    df_fakt = df_fakt.loc[:, ~df_fakt.columns.duplicated()]
-    # ---------------------------------------------------
+    # Mapa nazw kolumn (obsługa różnych wariantów nagłówków)
+    col_map = {}
+    for c in df.columns:
+        c_lower = str(c).lower().strip()
+        if 'cena' in c_lower and 'netto' in c_lower and 'pln' not in c_lower:
+            col_map[c] = 'Cena netto'
+        elif 'cena' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower:
+            col_map[c] = 'Cena brutto'
+        elif 'ilość' in c_lower or 'ilosc' in c_lower:
+            col_map[c] = 'Ilość'
+        elif 'warto' in c_lower and 'netto' in c_lower and 'pln' not in c_lower and 'wal' not in c_lower:
+            col_map[c] = 'Wartość netto'
+        elif 'warto' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower and 'wal' not in c_lower:
+            col_map[c] = 'Wartość brutto'
+        elif 'sprzedaj' in c_lower and 'nip' not in c_lower:
+            col_map[c] = 'Sprzedający'
+        elif 'nip' in c_lower and 'sprzed' in c_lower:
+            col_map[c] = 'NIP sprzedającego'
+        elif 'data wyst' in c_lower:
+            col_map[c] = 'Data wystawienia'
+        elif 'waluta' in c_lower:
+             col_map[c] = 'Waluta'
+
+    df.rename(columns=col_map, inplace=True)
+    df = df.loc[:, ~df.columns.duplicated()]
 
     df_out = pd.DataFrame()
-    df_out['data_transakcji'] = pd.to_datetime(df_fakt['Data wystawienia'], errors='coerce')
+    df_out['data_transakcji'] = pd.to_datetime(df['Data wystawienia'], errors='coerce')
     
     def znajdz_pojazd(row):
-        cols_to_search = ['Uwagi', 'Nr zamówienia', 'Opis', 'Dodatkowe pole na pozycjach faktury']
+        cols_to_search = ['Uwagi', 'Nr zamówienia', 'Opis', 'Dodatkowe pole na pozycjach faktury', 'Produkt/usługa']
         text_full = ""
         for col in cols_to_search:
             if col in row and pd.notna(row[col]):
@@ -306,29 +314,47 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
         match = re.search(r'\b[A-Z]{2,3}[\s-]?[0-9A-Z]{4,5}\b', text_full.upper())
         if match:
             found = match.group(0).replace(" ", "").replace("-", "")
-            if found not in ['POLSKA', 'PRZELEW', 'BANK', 'FAKTURA']:
+            if found not in ['POLSKA', 'PRZELEW', 'BANK', 'FAKTURA', 'TRANS', 'LOGISTICS']:
                 return found
         return 'Brak Pojazdu'
 
-    df_out['identyfikator'] = df_fakt.apply(znajdz_pojazd, axis=1)
-    
-    df_out['kwota_netto'] = pd.to_numeric(df_fakt['Wartość netto'], errors='coerce')
-    df_out['kwota_brutto'] = pd.to_numeric(df_fakt['Wartość brutto'], errors='coerce')
-    df_out['waluta'] = df_fakt['Waluta']
+    df_out['identyfikator'] = df.apply(znajdz_pojazd, axis=1)
+
+    # --- KLUCZOWA POPRAWKA KWOT ---
+    if 'Cena netto' in df.columns and 'Ilość' in df.columns:
+        cena_netto = pd.to_numeric(df['Cena netto'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
+        ilosc = pd.to_numeric(df['Ilość'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
+        
+        df_out['kwota_netto'] = cena_netto * ilosc
+        
+        if 'Cena brutto' in df.columns:
+            cena_brutto = pd.to_numeric(df['Cena brutto'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
+            df_out['kwota_brutto'] = cena_brutto * ilosc
+        else:
+            # Fallback - jeśli brak ceny brutto, używamy netto (orientacyjnie, vat i tak wyjdzie w księgowości)
+            df_out['kwota_brutto'] = df_out['kwota_netto'] 
+    else:
+        # To jest eksport listy faktur (tylko nagłówki)
+        df_out['kwota_netto'] = pd.to_numeric(df['Wartość netto'].astype(str).str.replace(',', '.'), errors='coerce')
+        df_out['kwota_brutto'] = pd.to_numeric(df['Wartość brutto'].astype(str).str.replace(',', '.'), errors='coerce')
+
+    df_out['waluta'] = df.get('Waluta', 'PLN')
     df_out['ilosc'] = 1.0 
     
-    if 'Kraj' in df_fakt.columns:
-        df_out['kraj'] = df_fakt['Kraj'].fillna('PL')
+    if 'Kraj' in df.columns:
+        df_out['kraj'] = df['Kraj'].fillna('PL')
     else:
         df_out['kraj'] = 'PL'
 
-    kategorie = df_fakt.apply(lambda row: kategoryzuj_transakcje(row, 'Fakturownia'), axis=1)
+    kategorie = df.apply(lambda row: kategoryzuj_transakcje(row, 'Fakturownia'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie] 
     df_out['produkt'] = [kat[1] for kat in kategorie]
     df_out['zrodlo'] = 'Fakturownia'
     df_out['firma'] = firma_tag
 
-    df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
+    df_out = df_out.dropna(subset=['data_transakcji'])
+    df_out = df_out[df_out['kwota_brutto'] != 0]
+    
     return df_out
 
 # --- WCZYTYWANIE PLIKÓW (PANCERNA WERSJA DLA CSV/XLS) ---
@@ -359,11 +385,11 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                     col_e100 = df_e100.columns
                     if 'Numer samochodu' in col_e100 and 'Kwota' in col_e100:
-                        st.write("   -> Wykryto format E100 (Polski - Excel)")
+                        st.write("    -> Wykryto format E100 (Polski - Excel)")
                         lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100, wybrana_firma_upload))
                         sukces_pliku = True
                     elif 'Car registration number' in col_e100 and 'Sum' in col_e100:
-                        st.write("   -> Wykryto format E100 (Angielski - Excel)")
+                        st.write("    -> Wykryto format E100 (Angielski - Excel)")
                         lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100, wybrana_firma_upload))
                         sukces_pliku = True
                 
@@ -372,13 +398,13 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     cols = df_check.columns
                     # Eurowag / Fakturownia Excel
                     if 'Data i godzina' in cols and ('Posiadacz karty' in cols or 'Artykuł' in cols):
-                         st.write("   -> Wykryto format Eurowag (Excel)")
+                         st.write("    -> Wykryto format Eurowag (Excel)")
                          if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
                          lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
                          sukces_pliku = True
                     # Sprawdźmy "luźniej", czy to Fakturownia
                     elif any('Sprzedaj' in c for c in cols) and any('Nabywca' in c for c in cols):
-                         st.write("   -> Wykryto format Fakturownia (Prawdziwy Excel)")
+                         st.write("    -> Wykryto format Fakturownia (Prawdziwy Excel)")
                          lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
                          sukces_pliku = True
             except Exception:
@@ -415,7 +441,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     
                     if is_fakt: 
                         df_csv = temp_df
-                        st.write(f"   -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
+                        st.write(f"    -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
                         break
                 except Exception:
                     continue
@@ -423,7 +449,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 break
         
         if df_csv is not None:
-            st.write("   -> Wykryto format Fakturownia (CSV)")
+            st.write("    -> Wykryto format Fakturownia (CSV)")
             lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
             sukces_pliku = True
 
@@ -437,7 +463,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
             if dfs_html:
                 df_html = dfs_html[0]
                 if any('Sprzedaj' in c for c in df_html.columns):
-                    st.write("   -> Wczytano jako HTML (Fake XLS)")
+                    st.write("    -> Wczytano jako HTML (Fake XLS)")
                     lista_df_zunifikowanych.append(normalizuj_fakturownia(df_html, wybrana_firma_upload))
                     sukces_pliku = True
         except Exception:
@@ -629,25 +655,27 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
-    # --- FILTR DLA UNIX-TRANS ---
+    # --- POPRAWIONY FILTR DLA UNIX-TRANS ---
     if firma_kontekst == "UNIX-TRANS":
-        allowed_vehicles = set([v.replace(" ", "").replace("-", "") for v in UNIX_FLOTA])
+        # Normalizujemy listę (usuwamy spacje i myślniki)
+        allowed_vehicles_norm = set([str(v).upper().replace(" ", "").replace("-", "") for v in UNIX_FLOTA])
         
         def filter_unix(row):
+            # 1. To jest transakcja wgrana bezpośrednio do UNIX-TRANS - ZAWSZE OK
             if row['firma'] == 'UNIX-TRANS':
                 return True
             
-            # Jeśli to transakcja współdzielona (Holier)
+            # 2. To jest transakcja z HOLIER (np. Eurowag), ale dotyczy auta UNIX
             if row['firma'] == 'HOLIER':
-                pojazd = str(row['identyfikator_clean']).replace(" ", "").replace("-", "")
-                data_tr = row['data_transakcji_dt'].date()
-                # TWARDY FILTR NA 4 AUTA
-                if pojazd not in allowed_vehicles:
-                    return False
-                if data_tr < UNIX_DATA_START:
-                    return False
-                return True
-            return True
+                # Pobieramy oczyszczony identyfikator z wiersza
+                pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
+                
+                # Sprawdzamy czy ten pojazd jest na liście UNIX
+                if pojazd in allowed_vehicles_norm:
+                    data_tr = row['data_transakcji_dt'].date()
+                    if data_tr >= UNIX_DATA_START:
+                        return True
+            return False
             
         maska = dane_z_bazy.apply(filter_unix, axis=1)
         dane_z_bazy = dane_z_bazy[maska]
@@ -808,7 +836,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None                
+    aktualna_data = None                 
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     def is_vehicle_line(line):
@@ -1452,7 +1480,7 @@ def main_app():
                             if not df_chart_poj.empty:
                                 chart_data_poj = df_chart_poj.groupby('pojazd_clean')['kwota_brutto_eur'].sum().sort_values(ascending=False)
                                 st.bar_chart(chart_data_poj)
-                 
+                  
                  st.divider()
                  df_rentownosc_sorted = df_rentownosc.sort_values(by='ZYSK_STRATA_BRUTTO_EUR', ascending=False)
                  lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc_sorted.index.unique())
