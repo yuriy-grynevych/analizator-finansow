@@ -29,7 +29,6 @@ NAZWA_POLACZENIA_DB = "db"
 FIRMY = ["HOLIER", "UNIX-TRANS"]
 
 # --- KONFIGURACJA DLA UNIX-TRANS ---
-# POPRAWKA: Dodano NOL0935C (z zerem) aby łapać paliwo z Holiera
 UNIX_FLOTA = ['NOL935C', 'NOL0935C', 'WPR9685N', 'WGM8463A', 'WPR9335N']
 UNIX_DATA_START = date(2025, 10, 1)
 
@@ -179,16 +178,33 @@ def kategoryzuj_transakcje(row, zrodlo):
         return 'INNE', service
     
     elif zrodlo == 'Fakturownia':
-        # UŻYWAMY NIPU JAKO PEWNIKA, BO NAZWA MOŻE MIEĆ BŁĘDY KODOWANIA
-        nip = str(row.get('NIP sprzedającego', '')).replace('-', '').strip()
-        if '9691670149' in nip: # NIP UNIX-TRANS
-             return 'PRZYCHÓD', 'Usługa Transportowa'
+        # --- ZAAWANSOWANA KATEGORYZACJA PO NIP ---
+        # 9691670149 to NIP UNIX-TRANS
         
+        nip_sprzedawcy = str(row.get('NIP sprzedającego', '')).replace('-', '').strip()
+        nip_nabywcy = str(row.get('NIP', '')).replace('-', '').strip() # W pliku kolumna nazywa się po prostu NIP dla nabywcy
+        
+        unix_nip = '9691670149'
+
+        # Jeśli sprzedawcą jest UNIX -> to jest przychód
+        if unix_nip in nip_sprzedawcy:
+            return 'PRZYCHÓD', str(row.get('Produkt/usługa', 'Usługa Transportowa'))
+            
+        # Jeśli nabywcą jest UNIX -> to jest koszt
+        if unix_nip in nip_nabywcy:
+             return 'KOSZT', str(row.get('Produkt/usługa', 'Koszt'))
+
+        # Fallback po nazwach (gdyby NIP był pusty)
         sprzedawca = str(row.get('Sprzedający', '')).upper()
+        nabywca = str(row.get('Nabywca', '')).upper()
+        
         if 'UNIX' in sprzedawca:
-            return 'PRZYCHÓD', 'Usługa Transportowa'
-        else:
-            return 'KOSZT', 'Koszt'
+             return 'PRZYCHÓD', str(row.get('Produkt/usługa', 'Usługa Transportowa'))
+        if 'UNIX' in nabywca:
+             return 'KOSZT', str(row.get('Produkt/usługa', 'Koszt'))
+        
+        # Jeśli nie wiadomo co to -> IGNORUJ, nie wrzucaj do kosztów na siłę
+        return 'IGNORUJ', 'Nieznane'
         
     return 'INNE', 'Nieznane'
     
@@ -270,31 +286,34 @@ def normalizuj_e100_EN(df_e100, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# POPRAWIONA FUNKCJA NORMALIZACJI FAKTUROWNI
+# --- POPRAWIONA FUNKCJA NORMALIZACJI FAKTUROWNI ---
 def normalizuj_fakturownia(df_fakt, firma_tag):
-    # Robimy kopię, aby nie psuć oryginału
+    # Robimy kopię
     df = df_fakt.copy()
     
-    # Mapa nazw kolumn (obsługa różnych wariantów nagłówków)
+    # Mapa nazw kolumn - naprawiamy literówki i warianty
     col_map = {}
     for c in df.columns:
         c_lower = str(c).lower().strip()
+        # Najważniejsze: mapujemy "Cena netto" a nie "Wartość netto" (bo wartość to suma faktury)
         if 'cena' in c_lower and 'netto' in c_lower and 'pln' not in c_lower:
             col_map[c] = 'Cena netto'
         elif 'cena' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower:
             col_map[c] = 'Cena brutto'
         elif 'ilość' in c_lower or 'ilosc' in c_lower:
             col_map[c] = 'Ilość'
-        elif 'warto' in c_lower and 'netto' in c_lower and 'pln' not in c_lower and 'wal' not in c_lower:
-            col_map[c] = 'Wartość netto'
-        elif 'warto' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower and 'wal' not in c_lower:
-            col_map[c] = 'Wartość brutto'
+        
+        # Inne pola
         elif 'sprzedaj' in c_lower and 'nip' not in c_lower:
             col_map[c] = 'Sprzedający'
         elif 'nip' in c_lower and 'sprzed' in c_lower:
             col_map[c] = 'NIP sprzedającego'
+        elif 'nabywca' in c_lower and 'nip' not in c_lower:
+            col_map[c] = 'Nabywca'
         elif 'data wyst' in c_lower:
             col_map[c] = 'Data wystawienia'
+        elif 'produkt' in c_lower or 'usługa' in c_lower:
+             col_map[c] = 'Produkt/usługa'
         elif 'waluta' in c_lower:
              col_map[c] = 'Waluta'
 
@@ -304,6 +323,7 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df['Data wystawienia'], errors='coerce')
     
+    # Szukanie pojazdu w różnych kolumnach
     def znajdz_pojazd(row):
         cols_to_search = ['Uwagi', 'Nr zamówienia', 'Opis', 'Dodatkowe pole na pozycjach faktury', 'Produkt/usługa']
         text_full = ""
@@ -320,7 +340,10 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
 
     df_out['identyfikator'] = df.apply(znajdz_pojazd, axis=1)
 
-    # --- KLUCZOWA POPRAWKA KWOT ---
+    # --- KLUCZOWA POPRAWKA: LICZENIE Z CENY JEDNOSTKOWEJ ---
+    # Fakturownia w CSV powiela "Wartość netto" (suma faktury) dla każdego wiersza pozycji!
+    # Musimy liczyć: Cena netto * Ilość
+    
     if 'Cena netto' in df.columns and 'Ilość' in df.columns:
         cena_netto = pd.to_numeric(df['Cena netto'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
         ilosc = pd.to_numeric(df['Ilość'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
@@ -331,12 +354,14 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
             cena_brutto = pd.to_numeric(df['Cena brutto'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
             df_out['kwota_brutto'] = cena_brutto * ilosc
         else:
-            # Fallback - jeśli brak ceny brutto, używamy netto (orientacyjnie, vat i tak wyjdzie w księgowości)
+            # Fallback - jeśli brak ceny brutto, używamy netto (orientacyjnie)
             df_out['kwota_brutto'] = df_out['kwota_netto'] 
     else:
-        # To jest eksport listy faktur (tylko nagłówki)
-        df_out['kwota_netto'] = pd.to_numeric(df['Wartość netto'].astype(str).str.replace(',', '.'), errors='coerce')
-        df_out['kwota_brutto'] = pd.to_numeric(df['Wartość brutto'].astype(str).str.replace(',', '.'), errors='coerce')
+        # Fallback dla starego formatu (lista faktur bez pozycji)
+        if 'Wartość netto' in df.columns:
+             df_out['kwota_netto'] = pd.to_numeric(df['Wartość netto'].astype(str).str.replace(',', '.'), errors='coerce')
+        if 'Wartość brutto' in df.columns:
+             df_out['kwota_brutto'] = pd.to_numeric(df['Wartość brutto'].astype(str).str.replace(',', '.'), errors='coerce')
 
     df_out['waluta'] = df.get('Waluta', 'PLN')
     df_out['ilosc'] = 1.0 
@@ -346,18 +371,21 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     else:
         df_out['kraj'] = 'PL'
 
+    # Kategoryzacja (NIP)
     kategorie = df.apply(lambda row: kategoryzuj_transakcje(row, 'Fakturownia'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie] 
     df_out['produkt'] = [kat[1] for kat in kategorie]
     df_out['zrodlo'] = 'Fakturownia'
     df_out['firma'] = firma_tag
 
+    # Odsiewamy śmieci
     df_out = df_out.dropna(subset=['data_transakcji'])
+    df_out = df_out[df_out['typ'] != 'IGNORUJ'] # Wyrzucamy to czego nie jesteśmy pewni
     df_out = df_out[df_out['kwota_brutto'] != 0]
     
     return df_out
 
-# --- WCZYTYWANIE PLIKÓW (PANCERNA WERSJA DLA CSV/XLS) ---
+# --- WCZYTYWANIE PLIKÓW ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     lista_df_zunifikowanych = []
     
@@ -365,7 +393,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         nazwa_pliku_base = plik.name
         st.write(f" - Przetwarzam: {nazwa_pliku_base} (Firma: {wybrana_firma_upload})")
         
-        # KROK 0: Wczytaj plik do pamięci, aby uniezależnić się od wskaźnika pliku
         try:
             plik_bytes = plik.getvalue()
         except Exception as e:
@@ -374,13 +401,11 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
 
         sukces_pliku = False
 
-        # METODA 1: Prawdziwy EXCEL (openpyxl)
+        # METODA 1: Prawdziwy EXCEL
         if nazwa_pliku_base.lower().endswith(('.xls', '.xlsx')):
             try:
-                # Używamy io.BytesIO na kopii danych
                 xls = pd.ExcelFile(io.BytesIO(plik_bytes), engine='openpyxl')
                 
-                # --- LOGIKA DETEKCJI E100/EUROWAG (Excel) ---
                 if 'Transactions' in xls.sheet_names:
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                     col_e100 = df_e100.columns
@@ -396,24 +421,23 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_check = pd.read_excel(xls, sheet_name=0)
                     cols = df_check.columns
-                    # Eurowag / Fakturownia Excel
                     if 'Data i godzina' in cols and ('Posiadacz karty' in cols or 'Artykuł' in cols):
                          st.write("    -> Wykryto format Eurowag (Excel)")
                          if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
                          lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
                          sukces_pliku = True
-                    # Sprawdźmy "luźniej", czy to Fakturownia
+                    # Fakturownia Excel
                     elif any('Sprzedaj' in c for c in cols) and any('Nabywca' in c for c in cols):
                          st.write("    -> Wykryto format Fakturownia (Prawdziwy Excel)")
                          lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
                          sukces_pliku = True
             except Exception:
-                pass # To nie jest poprawny Excel, idziemy dalej do CSV
+                pass 
 
         if sukces_pliku:
             continue
 
-        # METODA 2: Próba wczytania jako CSV (tekstowy)
+        # METODA 2: CSV
         separators = [',', ';', '\t']
         encodings = ['utf-8', 'cp1250', 'latin1', 'utf-8-sig']
         
@@ -422,21 +446,16 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         for enc in encodings:
             for sep in separators:
                 try:
-                    # Tworzymy nowy strumień dla każdej próby
                     buffer = io.BytesIO(plik_bytes)
-                    
-                    # engine='python' lepiej radzi sobie z błędami parsowania
                     temp_df = pd.read_csv(
                         buffer, 
                         sep=sep, 
                         encoding=enc, 
                         engine='python', 
-                        on_bad_lines='skip' # Ignoruj uszkodzone linie
+                        on_bad_lines='skip'
                     )
                     
                     cols = temp_df.columns
-                    # Warunek sprawdzający Fakturownię (luźniejszy na kodowanie)
-                    # Szukamy NIPu albo Sprzedającego albo Daty wystawienia
                     is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols) or any('Data wyst' in c for c in cols)
                     
                     if is_fakt: 
@@ -655,22 +674,17 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
-    # --- POPRAWIONY FILTR DLA UNIX-TRANS ---
+    # --- FILTR DLA UNIX-TRANS ---
     if firma_kontekst == "UNIX-TRANS":
-        # Normalizujemy listę (usuwamy spacje i myślniki)
         allowed_vehicles_norm = set([str(v).upper().replace(" ", "").replace("-", "") for v in UNIX_FLOTA])
         
         def filter_unix(row):
-            # 1. To jest transakcja wgrana bezpośrednio do UNIX-TRANS - ZAWSZE OK
+            # 1. Transakcja UNIX
             if row['firma'] == 'UNIX-TRANS':
                 return True
-            
-            # 2. To jest transakcja z HOLIER (np. Eurowag), ale dotyczy auta UNIX
+            # 2. Paliwo HOLIER ale auto UNIX
             if row['firma'] == 'HOLIER':
-                # Pobieramy oczyszczony identyfikator z wiersza
                 pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
-                
-                # Sprawdzamy czy ten pojazd jest na liście UNIX
                 if pojazd in allowed_vehicles_norm:
                     data_tr = row['data_transakcji_dt'].date()
                     if data_tr >= UNIX_DATA_START:
@@ -722,10 +736,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
          for enc in encodings_to_try:
              for sep in separators:
                  try:
-                     # Nowy bufor dla każdej próby
                      temp_df = pd.read_csv(io.BytesIO(plik_content), sep=sep, engine='python', encoding=enc, on_bad_lines='skip')
-                     
-                     # Sprawdź czy kolumny mają sens (nawet przy złym kodowaniu coś znajdzie)
                      cols = temp_df.columns
                      is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols)
                      if is_fakt:
@@ -764,11 +775,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              df_wyniki = df_zunifikowane.copy()
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
              
-             # --- TUTAJ MAPOWANIE (POPRAWIONE) ---
-             # df_wyniki['typ'] już jest ustawione w normalizuj_fakturownia
-             # Uzupełniamy tylko braki
+             # Mapowanie
              df_wyniki['typ'] = df_wyniki['typ'].fillna('Koszt (Subiekt)')
-             # Mapowanie nazwy dla spójności z wykresem
              df_wyniki['typ'] = df_wyniki['typ'].replace({
                  'PRZYCHÓD': 'Przychód (Subiekt)', 
                  'KOSZT': 'Koszt (Subiekt)'
@@ -776,6 +784,12 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
+             
+             # Pobieranie kontrahenta (jeśli istnieje kolumna Nabywca/Sprzedający w zależności od typu)
+             # Ale normalizuj_fakturownia nie zwraca kontrahenta wprost w tabeli wynikowej
+             # Musimy to naprawić jeśli chcemy widzieć kontrahenta
+             # W tym miejscu df_wyniki ma kolumny z normalizacji.
+             
              df_wyniki['kontrahent'] = 'Brak Kontrahenta'
              
              df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
