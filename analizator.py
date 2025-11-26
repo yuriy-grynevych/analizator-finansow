@@ -28,7 +28,7 @@ NAZWA_POLACZENIA_DB = "db"
 # --- LISTA FIRM ---
 FIRMY = ["HOLIER", "UNIX-TRANS"]
 
-# --- KONFIGURACJA DLA UNIX-TRANS (NOWE!) ---
+# --- KONFIGURACJA DLA UNIX-TRANS ---
 UNIX_FLOTA = ['NOL935C', 'WPR9685N', 'WGM8463A', 'WPR9335N']
 UNIX_DATA_START = date(2025, 10, 1)
 
@@ -305,7 +305,7 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- WCZYTYWANIE PLIKÓW ---
+# --- WCZYTYWANIE PLIKÓW (NAPRAWIONE) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     lista_df_zunifikowanych = []
     for plik in przeslane_pliki:
@@ -346,21 +346,34 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     else:
                         st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu.")
                 except Exception:
+                    # To miejsce wyłapuje błąd "File is not a zip file"
                     st.warning(f"Plik {nazwa_pliku_base} ma rozszerzenie .xls, ale wygląda na plik tekstowy/CSV. Próbuję wczytać jako CSV.")
                     plik.seek(0)
                     is_csv = True
 
             if is_csv:
-                try:
-                    df_csv = pd.read_csv(plik, sep=None, engine='python')
+                # AUTOMATYCZNE WYKRYWANIE KODOWANIA (UTF-8, CP1250 itd.)
+                encodings_to_try = ['utf-8', 'cp1250', 'latin1', 'utf-16']
+                df_csv = None
+                
+                for enc in encodings_to_try:
+                    try:
+                        plik.seek(0)
+                        df_csv = pd.read_csv(plik, sep=None, engine='python', encoding=enc)
+                        st.write(f"   -> Udało się wczytać z kodowaniem: {enc}")
+                        break
+                    except Exception:
+                        continue
+                
+                if df_csv is not None:
                     kolumny = df_csv.columns
                     if 'Sprzedający' in kolumny and 'Nabywca' in kolumny:
                          st.write("   -> Wykryto format Fakturownia (CSV)")
                          lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
                     else:
-                         st.warning(f"Pominięto plik CSV {nazwa_pliku_base}. Nierozpoznany format.")
-                except Exception as e:
-                    st.error(f"Błąd parsowania CSV {nazwa_pliku_base}: {e}")
+                         st.warning(f"Pominięto plik CSV {nazwa_pliku_base}. Nierozpoznany format (brak kolumn Sprzedający/Nabywca).")
+                else:
+                    st.error(f"Nie udało się wczytać pliku CSV {nazwa_pliku_base} przy użyciu kodowań: {encodings_to_try}")
 
         except Exception as e:
            st.error(f"BŁĄD wczytania pliku {nazwa_pliku_base}: {e}")
@@ -548,13 +561,11 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
-    # --- FILTR DLA UNIX-TRANS (NOWOŚĆ) ---
+    # --- FILTR DLA UNIX-TRANS ---
     if firma_kontekst == "UNIX-TRANS":
-        # Definiujemy zbiór dozwolonych pojazdów (bez spacji dla pewności)
         allowed_vehicles = set([v.replace(" ", "").replace("-", "") for v in UNIX_FLOTA])
         
         def filter_unix(row):
-            # Jeśli to transakcja własna Unix (Fakturownia) -> Zostawiamy
             if row['firma'] == 'UNIX-TRANS':
                 return True
             
@@ -562,18 +573,12 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
             if row['firma'] == 'HOLIER':
                 pojazd = str(row['identyfikator_clean']).replace(" ", "").replace("-", "")
                 data_tr = row['data_transakcji_dt'].date()
-                
-                # Warunek 1: Pojazd musi być na liście
                 if pojazd not in allowed_vehicles:
                     return False
-                
-                # Warunek 2: Data musi być >= 01.10.2025
                 if data_tr < UNIX_DATA_START:
                     return False
-                
                 return True
-            
-            return True # Domyślnie
+            return True
             
         maska = dane_z_bazy.apply(filter_unix, axis=1)
         dane_z_bazy = dane_z_bazy[maska]
@@ -606,16 +611,28 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
 # --- PARSOWANIE ANALIZY ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
+    # NAPRAWA KODOWANIA RÓWNIEŻ TUTAJ (dla pliku analizy)
     if wybrana_firma == "UNIX-TRANS":
          try:
+             df_csv = None
+             # Próba otwarcia jako CSV z różnymi kodowaniami
              try:
-                 df_csv = pd.read_csv(io.BytesIO(przeslany_plik_bytes), sep=None, engine='python')
+                 # Najpierw próba jako Excel
+                 df_csv = pd.read_excel(io.BytesIO(przeslany_plik_bytes))
              except:
-                 try:
-                     df_csv = pd.read_excel(io.BytesIO(przeslany_plik_bytes))
-                 except:
-                     st.error("Nie udało się wczytać pliku przychodów dla UNIX. Format nieznany.")
-                     return None, None
+                 # Jeśli nie Excel, to CSV - pętla po kodowaniach
+                 encodings_to_try = ['utf-8', 'cp1250', 'latin1', 'utf-16']
+                 for enc in encodings_to_try:
+                     try:
+                         przeslany_plik_bytes.seek(0)
+                         df_csv = pd.read_csv(io.BytesIO(przeslany_plik_bytes), sep=None, engine='python', encoding=enc)
+                         break
+                     except:
+                         continue
+             
+             if df_csv is None:
+                 st.error("Nie udało się odczytać pliku analizy UNIX (ani jako Excel, ani CSV).")
+                 return None, None
 
              df_zunifikowane = normalizuj_fakturownia(df_csv, "UNIX-TRANS")
              
@@ -1100,7 +1117,6 @@ def main_app():
                 if dane_z_bazy_full.empty:
                     st.warning(f"Brak danych dla firmy {wybrana_firma} w wybranym zakresie dat.")
                 else:
-                    # TUTAJ PRZEKAZUJEMY KONTEKST FIRMY DO FILTROWANIA
                     dane_przygotowane, mapa_kursow = przygotuj_dane_paliwowe(dane_z_bazy_full.copy(), wybrana_firma)
                     
                     if dane_przygotowane is None: st.stop()
@@ -1122,8 +1138,11 @@ def main_app():
                                 df_kraje = df_kraje[['Suma_Netto', 'VAT', 'Suma_Brutto']]
                                 st.bar_chart(df_kraje['Suma_Brutto'])
                                 st.dataframe(df_kraje.style.format("{:,.2f} EUR"), use_container_width=True)
+                            
                             st.divider()
-                            filtr_paliwo = st.text_input("Filtruj pojazd:", key="filtr_paliwo").upper()
+                            st.metric(label="Suma Łączna (Paliwo)", value=f"{df_paliwo['kwota_brutto_eur'].sum():,.2f} EUR")
+                            
+                            # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (TABELA PODSUMOWUJĄCA) ---
                             podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
                                 Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                 Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
@@ -1134,30 +1153,75 @@ def main_app():
                             podsumowanie_litry = podsumowanie_litry.rename(columns={'Diesel': 'Litry (Diesel)', 'AdBlue': 'Litry (AdBlue)'})
                             podsumowanie_paliwo = podsumowanie_paliwo_kwoty.merge(podsumowanie_litry, left_index=True, right_index=True, how='left').fillna(0)
                             podsumowanie_paliwo = podsumowanie_paliwo.sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                            if filtr_paliwo:
-                                podsumowanie_paliwo = podsumowanie_paliwo[podsumowanie_paliwo.index.str.contains(filtr_paliwo, na=False)]
-                            st.metric(label="Suma Łączna (Paliwo)", value=f"{podsumowanie_paliwo['Kwota_Brutto_EUR'].sum():,.2f} EUR")
                             st.dataframe(podsumowanie_paliwo[['Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 'Litry (Diesel)', 'Litry (AdBlue)']].style.format({'Kwota_Netto_EUR': '{:,.2f} EUR', 'Kwota_Brutto_EUR': '{:,.2f} EUR', 'Litry (Diesel)': '{:,.2f} L', 'Litry (AdBlue)': '{:,.2f} L'}), use_container_width=True)
+
+                            # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (POJAZDY) ---
+                            st.divider()
+                            st.subheader("Szczegóły transakcji paliwowych")
+                            lista_pojazdow_paliwo = ["--- Wybierz pojazd ---"] + sorted(list(df_paliwo['identyfikator_clean'].unique()))
+                            wybrany_pojazd_paliwo = st.selectbox("Wybierz identyfikator:", lista_pojazdow_paliwo)
+                            if wybrany_pojazd_paliwo != "--- Wybierz pojazd ---":
+                                df_szczegoly = df_paliwo[df_paliwo['identyfikator_clean'] == wybrany_pojazd_paliwo].sort_values(by='data_transakcji_dt', ascending=False)
+                                df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'produkt', 'kraj', 'ilosc', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                st.dataframe(
+                                    df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'kraj': 'Kraj', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    use_container_width=True, hide_index=True,
+                                    column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Litry": st.column_config.NumberColumn(format="%.2f L"),}
+                                )
+                    
                     with sub_tab_oplaty:
                          df_oplaty = dane_przygotowane[dane_przygotowane['typ'] == 'OPŁATA']
                          if not df_oplaty.empty:
                              st.subheader("Wydatki na Opłaty Drogowe")
+                             st.metric(label="Suma Łączna (Opłaty)", value=f"{df_oplaty['kwota_brutto_eur'].sum():,.2f} EUR")
+
                              podsumowanie_oplaty = df_oplaty.groupby('identyfikator_clean').agg(
                                  Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                  Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                              ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
                              st.dataframe(podsumowanie_oplaty.style.format("{:,.2f} EUR"), use_container_width=True)
+                             
+                             # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (OPŁATY) ---
+                             st.divider()
+                             st.subheader("Szczegóły transakcji (Opłaty)")
+                             lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
+                             wybrany_pojazd_oplaty = st.selectbox("Wybierz identyfikator:", lista_pojazdow_oplaty, key="select_oplaty")
+                             if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
+                                df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
+                                df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                st.dataframe(
+                                    df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    use_container_width=True, hide_index=True,
+                                    column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
+                                )
                          else:
                              st.info("Brak opłat drogowych.")
+
                     with sub_tab_inne:
                          df_inne = dane_przygotowane[dane_przygotowane['typ'] == 'INNE']
                          if not df_inne.empty:
                              st.subheader("Pozostałe Wydatki")
+                             st.metric(label="Suma Łączna (Inne)", value=f"{df_inne['kwota_brutto_eur'].sum():,.2f} EUR")
+                             
                              podsumowanie_inne = df_inne.groupby('identyfikator_clean').agg(
                                  Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                  Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                              ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
                              st.dataframe(podsumowanie_inne.style.format("{:,.2f} EUR"), use_container_width=True)
+
+                             # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (INNE) ---
+                             st.divider()
+                             st.subheader("Szczegóły transakcji (Inne)")
+                             lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
+                             wybrany_pojazd_inne = st.selectbox("Wybierz identyfikator:", lista_pojazdow_inne, key="select_inne")
+                             if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
+                                df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
+                                df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                st.dataframe(
+                                    df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    use_container_width=True, hide_index=True,
+                                    column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
+                                )
                          else:
                              st.info("Brak innych wydatków.")
         except Exception as e:
@@ -1210,7 +1274,6 @@ def main_app():
                 else:
                     with st.spinner("Pracuję..."):
                         dane_z_bazy_rent = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent, wybrana_firma) 
-                        # TUTAJ PRZEKAZUJEMY KONTEKST FIRMY DO FILTROWANIA
                         dane_przygotowane_rent, _ = przygotuj_dane_paliwowe(dane_z_bazy_rent.copy(), wybrana_firma)
                         st.session_state['dane_bazy_raw'] = dane_przygotowane_rent 
                         if dane_przygotowane_rent.empty:
