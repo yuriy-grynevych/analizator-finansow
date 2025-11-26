@@ -178,8 +178,12 @@ def kategoryzuj_transakcje(row, zrodlo):
         return 'INNE', service
     
     elif zrodlo == 'Fakturownia':
+        # UŻYWAMY NIPU JAKO PEWNIKA, BO NAZWA MOŻE MIEĆ BŁĘDY KODOWANIA
+        nip = str(row.get('NIP sprzedającego', '')).replace('-', '').strip()
+        if '9691670149' in nip: # NIP UNIX-TRANS
+             return 'PRZYCHÓD', 'Usługa Transportowa'
+        
         sprzedawca = str(row.get('Sprzedający', '')).upper()
-        # Upewniamy się, że sprzedawcą jest UNIX-TRANS -> wtedy to PRZYCHÓD
         if 'UNIX' in sprzedawca:
             return 'PRZYCHÓD', 'Usługa Transportowa'
         else:
@@ -266,6 +270,24 @@ def normalizuj_e100_EN(df_e100, firma_tag):
     return df_out
 
 def normalizuj_fakturownia(df_fakt, firma_tag):
+    # --- NOWOŚĆ: NAPRAWA KOLUMN PRZY ZŁYM KODOWANIU ---
+    # To naprawia błąd, gdzie "Sprzedający" nie był wykrywany przez polskie znaki
+    new_cols = {}
+    for c in df_fakt.columns:
+        c_lower = c.lower()
+        if 'sprzedaj' in c_lower and 'nip' not in c_lower:
+            new_cols[c] = 'Sprzedający'
+        elif 'nip' in c_lower and 'sprzed' in c_lower:
+            new_cols[c] = 'NIP sprzedającego'
+        elif 'data wyst' in c_lower:
+            new_cols[c] = 'Data wystawienia'
+        elif 'warto' in c_lower and 'netto' in c_lower and 'pln' not in c_lower:
+            new_cols[c] = 'Wartość netto'
+        elif 'warto' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower:
+            new_cols[c] = 'Wartość brutto'
+    df_fakt.rename(columns=new_cols, inplace=True)
+    # ---------------------------------------------------
+
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_fakt['Data wystawienia'], errors='coerce')
     
@@ -349,7 +371,8 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                          if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
                          lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
                          sukces_pliku = True
-                    elif 'Sprzedający' in cols and 'Nabywca' in cols:
+                    # Sprawdźmy "luźniej", czy to Fakturownia
+                    elif any('Sprzedaj' in c for c in cols) and any('Nabywca' in c for c in cols):
                          st.write("   -> Wykryto format Fakturownia (Prawdziwy Excel)")
                          lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
                          sukces_pliku = True
@@ -381,8 +404,10 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     )
                     
                     cols = temp_df.columns
-                    # Warunek sprawdzający Fakturownię
-                    if 'Sprzedający' in cols and ('Numer' in cols or 'Nabywca' in cols): 
+                    # Warunek sprawdzający Fakturownię (luźniejszy na kodowanie)
+                    is_fakt = any('Sprzedaj' in c for c in cols) and (any('Numer' in c for c in cols) or any('Nabywca' in c for c in cols))
+                    
+                    if is_fakt: 
                         df_csv = temp_df
                         st.write(f"   -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
                         break
@@ -392,12 +417,14 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 break
         
         if df_csv is not None:
-            if 'Sprzedający' in df_csv.columns:
+            # Sprawdź ponownie kolumny przed dodaniem
+            cols = df_csv.columns
+            if any('Sprzedaj' in c for c in cols):
                 st.write("   -> Wykryto format Fakturownia (CSV)")
                 lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
                 sukces_pliku = True
             else:
-                 st.warning(f"Plik {nazwa_pliku_base} wczytano jako CSV, ale brakuje kolumny 'Sprzedający'.")
+                 st.warning(f"Plik {nazwa_pliku_base} wczytano jako CSV, ale nie wykryto kolumn Fakturowni.")
 
         if sukces_pliku:
             continue
@@ -408,7 +435,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
             dfs_html = pd.read_html(buffer)
             if dfs_html:
                 df_html = dfs_html[0]
-                if 'Sprzedający' in df_html.columns:
+                if any('Sprzedaj' in c for c in df_html.columns):
                     st.write("   -> Wczytano jako HTML (Fake XLS)")
                     lista_df_zunifikowanych.append(normalizuj_fakturownia(df_html, wybrana_firma_upload))
                     sukces_pliku = True
@@ -613,6 +640,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
             if row['firma'] == 'HOLIER':
                 pojazd = str(row['identyfikator_clean']).replace(" ", "").replace("-", "")
                 data_tr = row['data_transakcji_dt'].date()
+                # TWARDY FILTR NA 4 AUTA
                 if pojazd not in allowed_vehicles:
                     return False
                 if data_tr < UNIX_DATA_START:
@@ -667,7 +695,11 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
                  try:
                      # Nowy bufor dla każdej próby
                      temp_df = pd.read_csv(io.BytesIO(plik_content), sep=sep, engine='python', encoding=enc, on_bad_lines='skip')
-                     if 'Sprzedający' in temp_df.columns or 'Data wystawienia' in temp_df.columns:
+                     
+                     # Sprawdź czy kolumny mają sens (nawet przy złym kodowaniu coś znajdzie)
+                     cols = temp_df.columns
+                     is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols)
+                     if is_fakt:
                          df_csv = temp_df
                          break
                  except:
@@ -702,10 +734,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              
              df_wyniki = df_zunifikowane.copy()
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
-             
-             # --- POPRAWKA KATEGORII ---
-             # Bez fillna('Koszt'), żeby nie nadpisywać przychodów
-             df_wyniki['typ'] = df_wyniki['typ'].map({'PRZYCHÓD': 'Przychód (Subiekt)', 'KOSZT': 'Koszt (Subiekt)'})
              
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
@@ -1463,7 +1491,7 @@ def main_app():
                                 if pd.isna(val): return ''
                                 color = 'red' if val < 0 else 'green'
                                 return f'color: {color}'
-                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR"), "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)", format="%.2f EUR")})
+                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR")})
                         else:
                             st.info("Brak szczegółów.")
                      except KeyError:
@@ -1472,7 +1500,6 @@ def main_app():
                  st.divider()
                  st.metric("SUMA ZYSK (BRUTTO)", f"{df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'].sum():,.2f} EUR")
                  
-                 # === TU JEST LISTA KOLUMN, KTÓRĄ CI PRZYWRÓCIŁEM (NETTO/BRUTTO ITP) ===
                  cols_show = [
                     'przychody_netto', 'przychody_brutto', 
                     'koszty_inne_netto', 'koszty_inne_brutto',
