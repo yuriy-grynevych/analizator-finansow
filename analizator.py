@@ -304,7 +304,6 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- WCZYTYWANIE PLIKÓW (WZMOCNIONE) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     lista_df_zunifikowanych = []
     for plik in przeslane_pliki:
@@ -313,21 +312,22 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         
         try:
             # 1. Czytanie jako EXCEL (jeśli to prawdziwy excel)
+            wczytano_xls = False
             try:
                 if nazwa_pliku_base.endswith(('.xls', '.xlsx')):
                     xls = pd.ExcelFile(plik, engine='openpyxl')
-                    # --- LOGIKA DETEKCJI E100/EUROWAG (Bez zmian) ---
+                    # --- LOGIKA DETEKCJI E100/EUROWAG ---
                     if 'Transactions' in xls.sheet_names:
                         df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                         kolumny_e100 = df_e100.columns
                         if 'Numer samochodu' in kolumny_e100 and 'Kwota' in kolumny_e100:
                             st.write("   -> Wykryto format E100 (Polski)")
                             lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100, wybrana_firma_upload))
+                            wczytano_xls = True
                         elif 'Car registration number' in kolumny_e100 and 'Sum' in kolumny_e100:
                             st.write("   -> Wykryto format E100 (Angielski)")
                             lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100, wybrana_firma_upload))
-                        else:
-                            st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
+                            wczytano_xls = True
                     
                     elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                         df_eurowag = pd.read_excel(xls, sheet_name=0) 
@@ -335,30 +335,32 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                         if 'Data i godzina' in kolumny_eurowag and 'Posiadacz karty' in kolumny_eurowag:
                             st.write("   -> Wykryto format Eurowag (Nowy)")
                             lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag, wybrana_firma_upload))
+                            wczytano_xls = True
                         elif 'Data i godzina' in kolumny_eurowag and 'Artykuł' in kolumny_eurowag:
                              st.write("   -> Wykryto format Eurowag (Starszy)")
                              if 'Posiadacz karty' not in df_eurowag.columns:
                                  df_eurowag['Posiadacz karty'] = None 
                              lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag, wybrana_firma_upload))
+                             wczytano_xls = True
                         else:
-                             # To może być Fakturownia w "prawdziwym" Excelu
-                             st.warning(f"Nie rozpoznano Eurowag/E100 w pliku {nazwa_pliku_base}. Sprawdzam format Fakturownia...")
+                             # Fakturownia w "prawdziwym" Excelu
                              df_fakt = pd.read_excel(xls, sheet_name=0)
                              if 'Sprzedający' in df_fakt.columns and 'Nabywca' in df_fakt.columns:
                                  st.write("   -> Wykryto format Fakturownia (Excel)")
                                  lista_df_zunifikowanych.append(normalizuj_fakturownia(df_fakt, wybrana_firma_upload))
+                                 wczytano_xls = True
                     
-                    continue # Jeśli sukces, idź do następnego pliku
+                    if wczytano_xls:
+                        continue # Sukces Excela, idź do kolejnego pliku
             except Exception:
-                pass # Przejdź do próby CSV/HTML
+                pass # Błąd Excela - to pewnie CSV udający XLS
 
-            # 2. Próba wczytania jako CSV (tekstowy) - "Fałszywy XLS"
-            # Resetujemy wskaźnik pliku
-            plik.seek(0)
+            # 2. Próba wczytania jako CSV (tekstowy) - "Fałszywy XLS" lub zwykły CSV
             
             # Lista separatorów i kodowań do sprawdzenia
-            separators = [None, ',', ';', '\t']
-            encodings = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1', 'iso-8859-1', 'utf-16']
+            # Dodano ',' jako pierwszy separator, bo plik wygląda na typowy CSV
+            separators = [',', ';', '\t', None]
+            encodings = ['utf-8', 'cp1250', 'utf-8-sig', 'latin1', 'iso-8859-1']
             
             df_csv = None
             succ_encoding = None
@@ -367,8 +369,8 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
             for enc in encodings:
                 for sep in separators:
                     try:
-                        plik.seek(0)
-                        # errors='replace' jest KLUCZOWE dla uszkodzonych bajtów 0xd0
+                        plik.seek(0) # <--- KLUCZOWA POPRAWKA: Reset wskaźnika PRZED KAŻDĄ PRÓBĄ
+                        
                         temp_df = pd.read_csv(plik, sep=sep, engine='python', encoding=enc, encoding_errors='replace')
                         
                         # Sprawdzamy czy to ma sens (czy są kolumny Fakturowni)
@@ -384,16 +386,16 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     break
             
             if df_csv is not None:
-                st.write(f"   -> Wczytano jako CSV (Kodowanie: {succ_encoding}, Separator: {succ_sep})")
+                st.write(f"   -> Wczytano jako CSV (Kodowanie: {succ_encoding}, Separator: '{succ_sep}')")
                 if 'Sprzedający' in df_csv.columns:
                      st.write("   -> Wykryto format Fakturownia (CSV/Fake XLS)")
                      lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
                 else:
                      st.warning(f"Wczytano plik tekstowy {nazwa_pliku_base}, ale nie rozpoznano kolumn Fakturowni.")
             else:
-                # 3. Ostatnia deska ratunku - HTML (niektóre systemy eksportują tabelę HTML jako .xls)
+                # 3. Ostatnia deska ratunku - HTML
                 try:
-                    plik.seek(0)
+                    plik.seek(0) # Reset przed HTML
                     dfs_html = pd.read_html(plik)
                     if dfs_html:
                         st.write("   -> Wczytano jako HTML (Fake XLS)")
@@ -411,7 +413,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
-
 # --- FUNKCJE BAZY DANYCH (POSTGRESQL) ---
 def setup_database(conn):
     with conn.session as s:
