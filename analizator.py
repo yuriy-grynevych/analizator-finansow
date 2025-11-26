@@ -179,7 +179,7 @@ def kategoryzuj_transakcje(row, zrodlo):
     
     elif zrodlo == 'Fakturownia':
         sprzedawca = str(row.get('Sprzedający', '')).upper()
-        
+        # Upewniamy się, że sprzedawcą jest UNIX-TRANS -> wtedy to PRZYCHÓD
         if 'UNIX' in sprzedawca:
             return 'PRZYCHÓD', 'Usługa Transportowa'
         else:
@@ -304,7 +304,7 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- WCZYTYWANIE PLIKÓW (PANCERNA WERSJA) ---
+# --- WCZYTYWANIE PLIKÓW (PANCERNA WERSJA DLA CSV/XLS) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     lista_df_zunifikowanych = []
     
@@ -322,7 +322,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         sukces_pliku = False
 
         # METODA 1: Prawdziwy EXCEL (openpyxl)
-        # Tylko jeśli plik ma rozszerzenie .xls/.xlsx
         if nazwa_pliku_base.lower().endswith(('.xls', '.xlsx')):
             try:
                 # Używamy io.BytesIO na kopii danych
@@ -361,7 +360,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
             continue
 
         # METODA 2: Próba wczytania jako CSV (tekstowy)
-        # Twój plik ma przecinki, więc dajemy ',' na pierwsze miejsce
         separators = [',', ';', '\t']
         encodings = ['utf-8', 'cp1250', 'latin1', 'utf-8-sig']
         
@@ -370,7 +368,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         for enc in encodings:
             for sep in separators:
                 try:
-                    # Tworzymy nowy strumień dla każdej próby - to jest kluczowe!
+                    # Tworzymy nowy strumień dla każdej próby
                     buffer = io.BytesIO(plik_bytes)
                     
                     # engine='python' lepiej radzi sobie z błędami parsowania
@@ -656,11 +654,10 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     # --- KROK 1: SCIEŻKA DLA UNIX-TRANS (FAKTUROWNIA CSV/XLS) ---
     if wybrana_firma == "UNIX-TRANS":
          df_csv = None
-         # Próbujemy otworzyć jako CSV (z różnymi separatorami/kodowaniem)
          try:
              plik_content = przeslany_plik_bytes.getvalue()
          except:
-             plik_content = przeslany_plik_bytes # może już być bytes
+             plik_content = przeslany_plik_bytes 
 
          encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1']
          separators = [',', ';', '\t']
@@ -678,7 +675,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              if df_csv is not None:
                  break
          
-         # Jeśli CSV nie zadziałał, spróbuj jako Excel (może jednak ktoś wgrał prawdziwy .xlsx)
          if df_csv is None:
              try:
                  df_csv = pd.read_excel(io.BytesIO(plik_content))
@@ -706,7 +702,11 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              
              df_wyniki = df_zunifikowane.copy()
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
-             df_wyniki['typ'] = df_wyniki['typ'].map({'PRZYCHÓD': 'Przychód (Subiekt)', 'KOSZT': 'Koszt (Subiekt)'}).fillna('Koszt (Subiekt)')
+             
+             # --- POPRAWKA KATEGORII ---
+             # Bez fillna('Koszt'), żeby nie nadpisywać przychodów
+             df_wyniki['typ'] = df_wyniki['typ'].map({'PRZYCHÓD': 'Przychód (Subiekt)', 'KOSZT': 'Koszt (Subiekt)'})
+             
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
              df_wyniki['kontrahent'] = 'Brak Kontrahenta'
@@ -725,7 +725,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              return None, None
 
     # --- KROK 2: SCIEŻKA DLA HOLIER (SUBIEKT EXCEL) ---
-    # Tu wklejamy starą logikę parsowania Excela Subiekta
     MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
         'złoty polski': 'PLN',
@@ -1464,7 +1463,7 @@ def main_app():
                                 if pd.isna(val): return ''
                                 color = 'red' if val < 0 else 'green'
                                 return f'color: {color}'
-                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR")})
+                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR"), "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)", format="%.2f EUR")})
                         else:
                             st.info("Brak szczegółów.")
                      except KeyError:
@@ -1472,12 +1471,19 @@ def main_app():
 
                  st.divider()
                  st.metric("SUMA ZYSK (BRUTTO)", f"{df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'].sum():,.2f} EUR")
+                 
+                 # === TU JEST LISTA KOLUMN, KTÓRĄ CI PRZYWRÓCIŁEM (NETTO/BRUTTO ITP) ===
                  cols_show = [
-                    'przychody_brutto', 'koszty_baza_brutto', 'ZYSK_STRATA_BRUTTO_EUR'
+                    'przychody_netto', 'przychody_brutto', 
+                    'koszty_inne_netto', 'koszty_inne_brutto',
+                    'koszty_baza_netto', 'koszty_baza_brutto',
+                    'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR'
                  ]
                  if 'Główny Kontrahent' in df_rentownosc.columns:
                       cols_show.insert(0, 'Główny Kontrahent')
-                 st.dataframe(df_rentownosc[cols_show].style.format("{:,.2f} EUR", subset=['przychody_brutto', 'koszty_baza_brutto', 'ZYSK_STRATA_BRUTTO_EUR']), use_container_width=True)
+                 
+                 st.dataframe(df_rentownosc[cols_show].style.format("{:,.2f} EUR", subset=['przychody_netto', 'przychody_brutto', 'koszty_inne_netto', 'koszty_inne_brutto', 'koszty_baza_netto', 'koszty_baza_brutto', 'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR']), use_container_width=True)
+                 
                  dane_bazy_raw_export = st.session_state.get('dane_bazy_raw')
                  df_analiza_raw = st.session_state.get('dane_analizy_raw')
                  excel_data = to_excel_extended(df_rentownosc, df_analiza_raw, dane_bazy_raw_export)
