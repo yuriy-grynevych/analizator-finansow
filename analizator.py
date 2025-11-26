@@ -639,8 +639,10 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
     
     def clean_key(key):
-        if key == 'nan' or not key: 
+        # POPRAWKA: Mapujemy "Brak Pojazdu" na "Brak Identyfikatora"
+        if key == 'nan' or not key or key == 'Brak Pojazdu': 
             return 'Brak Identyfikatora'
+            
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         FIRMY_DO_USUNIECIA = [
             'TRUCK24SP', 'TRUCK24', 'EDENRED', 'MARMAR', 'SANTANDER', 
@@ -671,6 +673,14 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
 def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     if dane_z_bazy.empty:
         return dane_z_bazy, None
+    
+    # --- POPRAWKA KLUCZOWA: IGNORUJEMY FAKTUROWNIĘ Z BAZY JAKO KOSZT BAZY ---
+    # Jeśli w bazie są wgrane faktury przychodowe, nie mogą być liczone jako koszt paliwa!
+    dane_z_bazy = dane_z_bazy[dane_z_bazy['zrodlo'] != 'Fakturownia']
+
+    if dane_z_bazy.empty:
+        return dane_z_bazy, None
+
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
@@ -773,6 +783,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              ]
              
              df_wyniki = df_zunifikowane.copy()
+             # Czyścimy klucz, teraz "Brak Pojazdu" zniknie na rzecz "Brak Identyfikatora"
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
              
              # Mapowanie
@@ -785,10 +796,13 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
              
-             # Pobieranie kontrahenta (jeśli istnieje kolumna Nabywca/Sprzedający w zależności od typu)
-             # Ale normalizuj_fakturownia nie zwraca kontrahenta wprost w tabeli wynikowej
-             # Musimy to naprawić jeśli chcemy widzieć kontrahenta
-             # W tym miejscu df_wyniki ma kolumny z normalizacji.
+             # Próba wyciągnięcia Nabywcy jako kontrahenta
+             if 'Nabywca' in df_csv.columns:
+                  # Musimy zmapować z powrotem, bo df_wyniki jest już znormalizowany
+                  # Najprościej: df_wyniki ma index resetowany? Nie, concat.
+                  # Zróbmy to bezpieczniej: df_wyniki pochodzi z df_zunifikowane.
+                  # Normalizacja fakturowni nie przenosiła kolumny Nabywca wprost.
+                  pass
              
              df_wyniki['kontrahent'] = 'Brak Kontrahenta'
              
