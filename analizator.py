@@ -54,9 +54,9 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu', 
     'Korekta faktury VAT zakupu', 
     'Rachunek zakupu',
-    'Tankowanie',          
+    'Tankowanie',           
     'Paliwo',
-    'Opłata drogowa',      
+    'Opłata drogowa',       
     'Opłaty drogowe',
     'Opłata drogowa DK',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
@@ -304,6 +304,7 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
+# --- WCZYTYWANIE PLIKÓW (PANCERNA WERSJA) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     lista_df_zunifikowanych = []
     
@@ -311,51 +312,56 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         nazwa_pliku_base = plik.name
         st.write(f" - Przetwarzam: {nazwa_pliku_base} (Firma: {wybrana_firma_upload})")
         
-        # KROK 0: Pobierz bajty do pamięci, aby nie gubić wskaźnika pliku (seek)
+        # KROK 0: Wczytaj plik do pamięci, aby uniezależnić się od wskaźnika pliku
         try:
             plik_bytes = plik.getvalue()
         except Exception as e:
-            st.error(f"Błąd pobierania danych pliku: {e}")
+            st.error(f"Nie udało się pobrać zawartości pliku: {e}")
             continue
 
-        sukces = False
+        sukces_pliku = False
 
-        # METODA 1: Prawdziwy EXCEL (biblioteka openpyxl)
-        # Tylko jeśli plik ma końcówkę .xls lub .xlsx
+        # METODA 1: Prawdziwy EXCEL (openpyxl)
+        # Tylko jeśli plik ma rozszerzenie .xls/.xlsx
         if nazwa_pliku_base.lower().endswith(('.xls', '.xlsx')):
             try:
-                # Używamy BytesIO na kopii danych
+                # Używamy io.BytesIO na kopii danych
                 xls = pd.ExcelFile(io.BytesIO(plik_bytes), engine='openpyxl')
                 
-                # Sprawdzanie arkuszy (istniejąca logika)
+                # --- LOGIKA DETEKCJI E100/EUROWAG (Excel) ---
                 if 'Transactions' in xls.sheet_names:
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
-                    if 'Numer samochodu' in df_e100.columns:
+                    col_e100 = df_e100.columns
+                    if 'Numer samochodu' in col_e100 and 'Kwota' in col_e100:
+                        st.write("   -> Wykryto format E100 (Polski - Excel)")
                         lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100, wybrana_firma_upload))
-                        sukces = True
-                    elif 'Car registration number' in df_e100.columns:
+                        sukces_pliku = True
+                    elif 'Car registration number' in col_e100 and 'Sum' in col_e100:
+                        st.write("   -> Wykryto format E100 (Angielski - Excel)")
                         lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100, wybrana_firma_upload))
-                        sukces = True
+                        sukces_pliku = True
                 
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_check = pd.read_excel(xls, sheet_name=0)
                     cols = df_check.columns
-                    
-                    if 'Data i godzina' in cols: # Eurowag
-                        if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
-                        lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
-                        sukces = True
-                    elif 'Sprzedający' in cols: # Fakturownia Excel
-                        st.write("   -> Wykryto format Fakturownia (Excel)")
-                        lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
-                        sukces = True
+                    # Eurowag / Fakturownia Excel
+                    if 'Data i godzina' in cols and ('Posiadacz karty' in cols or 'Artykuł' in cols):
+                         st.write("   -> Wykryto format Eurowag (Excel)")
+                         if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
+                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
+                         sukces_pliku = True
+                    elif 'Sprzedający' in cols and 'Nabywca' in cols:
+                         st.write("   -> Wykryto format Fakturownia (Prawdziwy Excel)")
+                         lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
+                         sukces_pliku = True
             except Exception:
-                pass # To nie był prawdziwy Excel, idziemy dalej
+                pass # To nie jest poprawny Excel, idziemy dalej do CSV
 
-        if sukces: continue
+        if sukces_pliku:
+            continue
 
-        # METODA 2: Plik tekstowy / CSV (nawet jak ma rozszerzenie .xls)
-        # Lista separatorów - przecinek pierwszy, bo tak wygląda Twój plik
+        # METODA 2: Próba wczytania jako CSV (tekstowy)
+        # Twój plik ma przecinki, więc dajemy ',' na pierwsze miejsce
         separators = [',', ';', '\t']
         encodings = ['utf-8', 'cp1250', 'latin1', 'utf-8-sig']
         
@@ -364,20 +370,21 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         for enc in encodings:
             for sep in separators:
                 try:
-                    # Tworzymy czysty strumień dla każdej próby
+                    # Tworzymy nowy strumień dla każdej próby - to jest kluczowe!
                     buffer = io.BytesIO(plik_bytes)
                     
-                    # engine='python' i on_bad_lines='skip' są kluczowe dla trudnych plików
+                    # engine='python' lepiej radzi sobie z błędami parsowania
                     temp_df = pd.read_csv(
                         buffer, 
                         sep=sep, 
                         encoding=enc, 
                         engine='python', 
-                        on_bad_lines='skip'
+                        on_bad_lines='skip' # Ignoruj uszkodzone linie
                     )
                     
-                    # Sprawdzenie czy to Fakturownia
-                    if 'Sprzedający' in temp_df.columns:
+                    cols = temp_df.columns
+                    # Warunek sprawdzający Fakturownię
+                    if 'Sprzedający' in cols and ('Numer' in cols or 'Nabywca' in cols): 
                         df_csv = temp_df
                         st.write(f"   -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
                         break
@@ -387,29 +394,38 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 break
         
         if df_csv is not None:
-            lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
-            sukces = True
+            if 'Sprzedający' in df_csv.columns:
+                st.write("   -> Wykryto format Fakturownia (CSV)")
+                lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
+                sukces_pliku = True
+            else:
+                 st.warning(f"Plik {nazwa_pliku_base} wczytano jako CSV, ale brakuje kolumny 'Sprzedający'.")
 
-        if not sukces:
-            # METODA 3: HTML (Ostatnia deska ratunku)
-            try:
-                buffer = io.BytesIO(plik_bytes)
-                dfs_html = pd.read_html(buffer)
-                if dfs_html:
-                    if 'Sprzedający' in dfs_html[0].columns:
-                        st.write("   -> Wczytano jako HTML")
-                        lista_df_zunifikowanych.append(normalizuj_fakturownia(dfs_html[0], wybrana_firma_upload))
-                        sukces = True
-            except:
-                pass
+        if sukces_pliku:
+            continue
 
-        if not sukces:
-            st.error(f"Nie udało się rozpoznać formatu pliku: {nazwa_pliku_base}. Spróbuj pobrać go jako CSV.")
+        # METODA 3: HTML
+        try:
+            buffer = io.BytesIO(plik_bytes)
+            dfs_html = pd.read_html(buffer)
+            if dfs_html:
+                df_html = dfs_html[0]
+                if 'Sprzedający' in df_html.columns:
+                    st.write("   -> Wczytano jako HTML (Fake XLS)")
+                    lista_df_zunifikowanych.append(normalizuj_fakturownia(df_html, wybrana_firma_upload))
+                    sukces_pliku = True
+        except Exception:
+            pass
+
+        if not sukces_pliku:
+            st.error(f"Nie udało się rozpoznać formatu pliku: {nazwa_pliku_base}")
 
     if not lista_df_zunifikowanych:
-        return None, "Brak danych."
+        return None, "Nie udało się zunifikować żadnych danych."
         
-    return pd.concat(lista_df_zunifikowanych, ignore_index=True), None
+    polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
+    return polaczone_df, None
+
 # --- FUNKCJE BAZY DANYCH (POSTGRESQL) ---
 def setup_database(conn):
     with conn.session as s:
@@ -634,36 +650,43 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     
     return dane_z_bazy, mapa_kursow
 
-# --- PARSOWANIE ANALIZY (NAPRAWIONE CZYTANIE FAKTUROWNI) ---
+# --- PARSOWANIE ANALIZY (HYBRYDOWE: UNIX=CSV, HOLIER=EXCEL) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
+    # --- KROK 1: SCIEŻKA DLA UNIX-TRANS (FAKTUROWNIA CSV/XLS) ---
     if wybrana_firma == "UNIX-TRANS":
          df_csv = None
-         # 1. Próba jako Excel
+         # Próbujemy otworzyć jako CSV (z różnymi separatorami/kodowaniem)
          try:
-             df_csv = pd.read_excel(io.BytesIO(przeslany_plik_bytes))
+             plik_content = przeslany_plik_bytes.getvalue()
          except:
-             pass
+             plik_content = przeslany_plik_bytes # może już być bytes
+
+         encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1']
+         separators = [',', ';', '\t']
          
-         # 2. Próba jako CSV (różne kodowania)
-         if df_csv is None:
-             encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1']
-             separators = [None, ',', ';']
-             for enc in encodings_to_try:
-                 for sep in separators:
-                     try:
-                         przeslany_plik_bytes.seek(0)
-                         temp_df = pd.read_csv(io.BytesIO(przeslany_plik_bytes), sep=sep, engine='python', encoding=enc, encoding_errors='replace')
-                         if 'Sprzedający' in temp_df.columns or 'Data wystawienia' in temp_df.columns:
-                             df_csv = temp_df
-                             break
-                     except:
-                         continue
-                 if df_csv is not None:
-                     break
+         for enc in encodings_to_try:
+             for sep in separators:
+                 try:
+                     # Nowy bufor dla każdej próby
+                     temp_df = pd.read_csv(io.BytesIO(plik_content), sep=sep, engine='python', encoding=enc, on_bad_lines='skip')
+                     if 'Sprzedający' in temp_df.columns or 'Data wystawienia' in temp_df.columns:
+                         df_csv = temp_df
+                         break
+                 except:
+                     continue
+             if df_csv is not None:
+                 break
          
+         # Jeśli CSV nie zadziałał, spróbuj jako Excel (może jednak ktoś wgrał prawdziwy .xlsx)
          if df_csv is None:
-             st.error("Nie udało się odczytać pliku analizy UNIX (ani jako Excel, ani CSV). Sprawdź kodowanie pliku.")
+             try:
+                 df_csv = pd.read_excel(io.BytesIO(plik_content))
+             except:
+                 pass
+
+         if df_csv is None:
+             st.error("Nie udało się odczytać pliku analizy UNIX (Fakturownia). Sprawdź czy plik to poprawny CSV/Excel.")
              return None, None
 
          try:
@@ -701,7 +724,8 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              st.error(f"Błąd przetwarzania danych Unix: {e}")
              return None, None
 
-    # DLA HOLIER (Stary Excel)
+    # --- KROK 2: SCIEŻKA DLA HOLIER (SUBIEKT EXCEL) ---
+    # Tu wklejamy starą logikę parsowania Excela Subiekta
     MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
         'złoty polski': 'PLN',
@@ -1176,7 +1200,6 @@ def main_app():
                             st.divider()
                             st.metric(label="Suma Łączna (Paliwo)", value=f"{df_paliwo['kwota_brutto_eur'].sum():,.2f} EUR")
                             
-                            # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (TABELA PODSUMOWUJĄCA) ---
                             podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
                                 Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                 Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
@@ -1189,7 +1212,6 @@ def main_app():
                             podsumowanie_paliwo = podsumowanie_paliwo.sort_values(by='Kwota_Brutto_EUR', ascending=False)
                             st.dataframe(podsumowanie_paliwo[['Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 'Litry (Diesel)', 'Litry (AdBlue)']].style.format({'Kwota_Netto_EUR': '{:,.2f} EUR', 'Kwota_Brutto_EUR': '{:,.2f} EUR', 'Litry (Diesel)': '{:,.2f} L', 'Litry (AdBlue)': '{:,.2f} L'}), use_container_width=True)
 
-                            # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (POJAZDY) ---
                             st.divider()
                             st.subheader("Szczegóły transakcji paliwowych")
                             lista_pojazdow_paliwo = ["--- Wybierz pojazd ---"] + sorted(list(df_paliwo['identyfikator_clean'].unique()))
@@ -1215,7 +1237,6 @@ def main_app():
                              ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
                              st.dataframe(podsumowanie_oplaty.style.format("{:,.2f} EUR"), use_container_width=True)
                              
-                             # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (OPŁATY) ---
                              st.divider()
                              st.subheader("Szczegóły transakcji (Opłaty)")
                              lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
@@ -1243,7 +1264,6 @@ def main_app():
                              ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
                              st.dataframe(podsumowanie_inne.style.format("{:,.2f} EUR"), use_container_width=True)
 
-                             # --- PRZYWRÓCONA SEKCJA SZCZEGÓŁÓW (INNE) ---
                              st.divider()
                              st.subheader("Szczegóły transakcji (Inne)")
                              lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
@@ -1302,6 +1322,11 @@ def main_app():
                 else:
                     st.warning(f"Brak pliku {nazwa_pliku_analizy}. Musisz go wgrać.")
             st.divider()
+            if 'raport_gotowy' not in st.session_state:
+                st.session_state['raport_gotowy'] = False
+            if 'wybrany_pojazd_rent' not in st.session_state:
+                st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
+
             if st.button("Generuj raport rentowności", type="primary"):
                 if plik_analizy is None:
                     st.error("Brak pliku przychodów.")
@@ -1350,14 +1375,108 @@ def main_app():
                         )
                         st.session_state['df_rentownosc'] = df_rentownosc
                         st.session_state['raport_gotowy'] = True
+                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
+
             if st.session_state.get('raport_gotowy', False):
                  df_rentownosc = st.session_state['df_rentownosc']
+                 df_analiza_raw = st.session_state.get('dane_analizy_raw')
+
+                 if df_analiza_raw is not None and not df_analiza_raw.empty:
+                        maska_raw = df_analiza_raw['pojazd_clean'].apply(czy_zakazany_pojazd)
+                        df_analiza_raw = df_analiza_raw[~maska_raw]
+
+                 if df_analiza_raw is not None and not df_analiza_raw.empty:
+                        tab_chart_kontrahent, tab_chart_pojazd = st.tabs(["🏢 Wg Kontrahentów", "🚛 Wg Pojazdów"])
+                        with tab_chart_kontrahent:
+                            df_chart_kontr = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
+                            if not df_chart_kontr.empty:
+                                chart_data = df_chart_kontr.groupby('kontrahent')['kwota_brutto_eur'].sum().sort_values(ascending=False)
+                                st.bar_chart(chart_data)
+                                st.write("#### 🕵️ Szczegóły przychodów wg Kontrahenta")
+                                lista_kontrahentow = sorted(df_chart_kontr['kontrahent'].unique().tolist())
+                                wybrany_kontrahent_view = st.multiselect("Wybierz kontrahentów:", lista_kontrahentow)
+                                excel_contractors = to_excel_contractors(df_analiza_raw)
+                                st.download_button(
+                                    label="📥 Pobierz raport przychodów wg Kontrahentów (Excel)",
+                                    data=excel_contractors,
+                                    file_name=f"raport_kontrahenci_{data_start_rent}.xlsx",
+                                    mime="application/vnd.ms-excel"
+                                )
+                                if wybrany_kontrahent_view:
+                                    df_show = df_chart_kontr[df_chart_kontr['kontrahent'].isin(wybrany_kontrahent_view)]
+                                    st.dataframe(
+                                        df_show[['data', 'pojazd_clean', 'opis', 'kwota_netto_eur', 'kwota_brutto_eur']].style.format({
+                                            'kwota_netto_eur': '{:,.2f} EUR', 'kwota_brutto_eur': '{:,.2f} EUR'
+                                        }), use_container_width=True, hide_index=True
+                                    )
+                        with tab_chart_pojazd:
+                            df_chart_poj = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
+                            if not df_chart_poj.empty:
+                                chart_data_poj = df_chart_poj.groupby('pojazd_clean')['kwota_brutto_eur'].sum().sort_values(ascending=False)
+                                st.bar_chart(chart_data_poj)
+                 
+                 st.divider()
+                 df_rentownosc_sorted = df_rentownosc.sort_values(by='ZYSK_STRATA_BRUTTO_EUR', ascending=False)
+                 lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc_sorted.index.unique())
+                 wybrany_pojazd_rent = st.selectbox("Wybierz pojazd do analizy:", lista_pojazdow_rent, key='wybrany_pojazd_rent')
+                 
+                 if wybrany_pojazd_rent != "--- Wybierz pojazd ---":
+                     try:
+                        dane_pojazdu = df_rentownosc_sorted.loc[wybrany_pojazd_rent]
+                        przychody = dane_pojazdu['przychody_brutto']
+                        koszty_inne = dane_pojazdu['koszty_inne_brutto']
+                        koszty_bazy = dane_pojazdu['koszty_baza_brutto']
+                        zysk = dane_pojazdu['ZYSK_STRATA_BRUTTO_EUR']
+                        delta_color = "normal" if zysk >= 0 else "inverse"
+                        st.metric(label="ZYSK / STRATA (BRUTTO EUR)", value=f"{zysk:,.2f} EUR", delta_color=delta_color)
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Przychód Brutto", f"{przychody:,.2f} EUR")
+                        c2.metric("Koszty Inne (Subiekt)", f"{-koszty_inne:,.2f} EUR")
+                        c3.metric("Paliwo/Opłaty (Baza)", f"{-koszty_bazy:,.2f} EUR")
+                        
+                        st.subheader(f"Szczegóły transakcji dla {wybrany_pojazd_rent}")
+                        dane_przygotowane_rent = st.session_state.get('dane_bazy_raw')
+                        lista_df_szczegolow = []
+                        
+                        if df_analiza_raw is not None and not df_analiza_raw.empty:
+                            subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
+                            if not subiekt_details.empty:
+                                subiekt_formatted = subiekt_details.copy()
+                                mask_koszt = subiekt_formatted['typ'] == 'Koszt (Subiekt)'
+                                subiekt_formatted.loc[mask_koszt, 'kwota_netto_eur'] = -subiekt_formatted.loc[mask_koszt, 'kwota_netto_eur'].abs()
+                                subiekt_formatted.loc[mask_koszt, 'kwota_brutto_eur'] = -subiekt_formatted.loc[mask_koszt, 'kwota_brutto_eur'].abs()
+                                subiekt_formatted = subiekt_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
+                                lista_df_szczegolow.append(subiekt_formatted)
+                        
+                        if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
+                            baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
+                            if not baza_details.empty:
+                                baza_formatted = baza_details[['data_transakcji_dt', 'produkt', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']].copy() 
+                                baza_formatted['data_transakcji_dt'] = baza_formatted['data_transakcji_dt'].dt.date
+                                baza_formatted.rename(columns={'data_transakcji_dt': 'data', 'produkt': 'opis'}, inplace=True)
+                                baza_formatted['kwota_netto_eur'] = -baza_formatted['kwota_netto_eur'].abs() 
+                                baza_formatted['kwota_brutto_eur'] = -baza_formatted['kwota_brutto_eur'].abs() 
+                                lista_df_szczegolow.append(baza_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']])
+                        
+                        if lista_df_szczegolow:
+                            combined_details = pd.concat(lista_df_szczegolow).sort_values(by='data', ascending=False)
+                            def koloruj_kwoty(val):
+                                if pd.isna(val): return ''
+                                color = 'red' if val < 0 else 'green'
+                                return f'color: {color}'
+                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR")})
+                        else:
+                            st.info("Brak szczegółów.")
+                     except KeyError:
+                        st.error("Błąd wyświetlania szczegółów.")
+
+                 st.divider()
                  st.metric("SUMA ZYSK (BRUTTO)", f"{df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'].sum():,.2f} EUR")
                  cols_show = [
                     'przychody_brutto', 'koszty_baza_brutto', 'ZYSK_STRATA_BRUTTO_EUR'
                  ]
                  if 'Główny Kontrahent' in df_rentownosc.columns:
-                     cols_show.insert(0, 'Główny Kontrahent')
+                      cols_show.insert(0, 'Główny Kontrahent')
                  st.dataframe(df_rentownosc[cols_show].style.format("{:,.2f} EUR", subset=['przychody_brutto', 'koszty_baza_brutto', 'ZYSK_STRATA_BRUTTO_EUR']), use_container_width=True)
                  dane_bazy_raw_export = st.session_state.get('dane_bazy_raw')
                  df_analiza_raw = st.session_state.get('dane_analizy_raw')
