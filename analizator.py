@@ -270,8 +270,8 @@ def normalizuj_e100_EN(df_e100, firma_tag):
     return df_out
 
 def normalizuj_fakturownia(df_fakt, firma_tag):
-    # --- NOWOŚĆ: NAPRAWA KOLUMN PRZY ZŁYM KODOWANIU ---
-    # To naprawia błąd, gdzie "Sprzedający" nie był wykrywany przez polskie znaki
+    # --- NAPRAWA KOLUMN PRZY ZŁYM KODOWANIU ---
+    # Mapujemy luźne nazwy na poprawne
     new_cols = {}
     for c in df_fakt.columns:
         c_lower = c.lower()
@@ -286,6 +286,11 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
         elif 'warto' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower:
             new_cols[c] = 'Wartość brutto'
     df_fakt.rename(columns=new_cols, inplace=True)
+    
+    # !!! KLUCZOWA POPRAWKA: USUWANIE DUPLIKATÓW KOLUMN !!!
+    # Jeśli przez błędy kodowania zmapowaliśmy dwie różne kolumny na "Data wystawienia",
+    # ta linia zostawi tylko jedną, co naprawi błąd "arg must be a list..."
+    df_fakt = df_fakt.loc[:, ~df_fakt.columns.duplicated()]
     # ---------------------------------------------------
 
     df_out = pd.DataFrame()
@@ -405,7 +410,8 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                     
                     cols = temp_df.columns
                     # Warunek sprawdzający Fakturownię (luźniejszy na kodowanie)
-                    is_fakt = any('Sprzedaj' in c for c in cols) and (any('Numer' in c for c in cols) or any('Nabywca' in c for c in cols))
+                    # Szukamy NIPu albo Sprzedającego albo Daty wystawienia
+                    is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols) or any('Data wyst' in c for c in cols)
                     
                     if is_fakt: 
                         df_csv = temp_df
@@ -417,14 +423,9 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 break
         
         if df_csv is not None:
-            # Sprawdź ponownie kolumny przed dodaniem
-            cols = df_csv.columns
-            if any('Sprzedaj' in c for c in cols):
-                st.write("   -> Wykryto format Fakturownia (CSV)")
-                lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
-                sukces_pliku = True
-            else:
-                 st.warning(f"Plik {nazwa_pliku_base} wczytano jako CSV, ale nie wykryto kolumn Fakturowni.")
+            st.write("   -> Wykryto format Fakturownia (CSV)")
+            lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
+            sukces_pliku = True
 
         if sukces_pliku:
             continue
@@ -734,6 +735,16 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              
              df_wyniki = df_zunifikowane.copy()
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
+             
+             # --- TUTAJ MAPOWANIE (POPRAWIONE) ---
+             # df_wyniki['typ'] już jest ustawione w normalizuj_fakturownia
+             # Uzupełniamy tylko braki
+             df_wyniki['typ'] = df_wyniki['typ'].fillna('Koszt (Subiekt)')
+             # Mapowanie nazwy dla spójności z wykresem
+             df_wyniki['typ'] = df_wyniki['typ'].replace({
+                 'PRZYCHÓD': 'Przychód (Subiekt)', 
+                 'KOSZT': 'Koszt (Subiekt)'
+             })
              
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
@@ -1491,7 +1502,7 @@ def main_app():
                                 if pd.isna(val): return ''
                                 color = 'red' if val < 0 else 'green'
                                 return f'color: {color}'
-                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR")})
+                            st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR"), "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)", format="%.2f EUR")})
                         else:
                             st.info("Brak szczegółów.")
                      except KeyError:
