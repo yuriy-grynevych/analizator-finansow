@@ -358,7 +358,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
             # 2. Próba wczytania jako CSV (tekstowy) - "Fałszywy XLS" lub zwykły CSV
             
             # Lista separatorów i kodowań do sprawdzenia
-            # Dodano ',' jako pierwszy separator, bo plik wygląda na typowy CSV
+            # Zmieniona kolejność: przecinek jako pierwszy (bo to format tego pliku)
             separators = [',', ';', '\t', None]
             encodings = ['utf-8', 'cp1250', 'utf-8-sig', 'latin1', 'iso-8859-1']
             
