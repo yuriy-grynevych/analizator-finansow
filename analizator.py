@@ -178,7 +178,6 @@ def kategoryzuj_transakcje(row, zrodlo):
         return 'INNE', service
     
     elif zrodlo == 'Fakturownia':
-        typ_faktury = str(row.get('Typ', '')).lower()
         sprzedawca = str(row.get('Sprzedający', '')).upper()
         
         if 'UNIX' in sprzedawca:
@@ -305,7 +304,7 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- WCZYTYWANIE PLIKÓW (NAPRAWIONE) ---
+# --- WCZYTYWANIE PLIKÓW (WZMOCNIONE) ---
 def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     lista_df_zunifikowanych = []
     for plik in przeslane_pliki:
@@ -313,12 +312,11 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         st.write(f" - Przetwarzam: {nazwa_pliku_base} (Firma: {wybrana_firma_upload})")
         
         try:
-            is_csv = False
-            if nazwa_pliku_base.endswith('.csv'):
-                is_csv = True
-            elif nazwa_pliku_base.endswith(('.xls', '.xlsx')):
-                try:
+            # 1. Czytanie jako EXCEL (jeśli to prawdziwy excel)
+            try:
+                if nazwa_pliku_base.endswith(('.xls', '.xlsx')):
                     xls = pd.ExcelFile(plik, engine='openpyxl')
+                    # --- LOGIKA DETEKCJI E100/EUROWAG (Bez zmian) ---
                     if 'Transactions' in xls.sheet_names:
                         df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                         kolumny_e100 = df_e100.columns
@@ -330,6 +328,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                             lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100, wybrana_firma_upload))
                         else:
                             st.warning(f"Pominięto plik {nazwa_pliku_base}. Arkusz 'Transactions' nie ma poprawnych kolumn.")
+                    
                     elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                         df_eurowag = pd.read_excel(xls, sheet_name=0) 
                         kolumny_eurowag = df_eurowag.columns
@@ -342,41 +341,70 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                                  df_eurowag['Posiadacz karty'] = None 
                              lista_df_zunifikowanych.append(normalizuj_eurowag(df_eurowag, wybrana_firma_upload))
                         else:
-                             st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu Eurowag.")
-                    else:
-                        st.warning(f"Pominięto plik {nazwa_pliku_base}. Nie rozpoznano formatu.")
-                except Exception:
-                    # To miejsce wyłapuje błąd "File is not a zip file"
-                    st.warning(f"Plik {nazwa_pliku_base} ma rozszerzenie .xls, ale wygląda na plik tekstowy/CSV. Próbuję wczytać jako CSV.")
-                    plik.seek(0)
-                    is_csv = True
+                             # To może być Fakturownia w "prawdziwym" Excelu
+                             st.warning(f"Nie rozpoznano Eurowag/E100 w pliku {nazwa_pliku_base}. Sprawdzam format Fakturownia...")
+                             df_fakt = pd.read_excel(xls, sheet_name=0)
+                             if 'Sprzedający' in df_fakt.columns and 'Nabywca' in df_fakt.columns:
+                                 st.write("   -> Wykryto format Fakturownia (Excel)")
+                                 lista_df_zunifikowanych.append(normalizuj_fakturownia(df_fakt, wybrana_firma_upload))
+                    
+                    continue # Jeśli sukces, idź do następnego pliku
+            except Exception:
+                pass # Przejdź do próby CSV/HTML
 
-            if is_csv:
-                # AUTOMATYCZNE WYKRYWANIE KODOWANIA (UTF-8, CP1250 itd.)
-                encodings_to_try = ['utf-8', 'cp1250', 'latin1', 'utf-16']
-                df_csv = None
-                
-                for enc in encodings_to_try:
+            # 2. Próba wczytania jako CSV (tekstowy) - "Fałszywy XLS"
+            # Resetujemy wskaźnik pliku
+            plik.seek(0)
+            
+            # Lista separatorów i kodowań do sprawdzenia
+            separators = [None, ',', ';', '\t']
+            encodings = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1', 'iso-8859-1', 'utf-16']
+            
+            df_csv = None
+            succ_encoding = None
+            succ_sep = None
+
+            for enc in encodings:
+                for sep in separators:
                     try:
                         plik.seek(0)
-                        df_csv = pd.read_csv(plik, sep=None, engine='python', encoding=enc)
-                        st.write(f"   -> Udało się wczytać z kodowaniem: {enc}")
-                        break
+                        # errors='replace' jest KLUCZOWE dla uszkodzonych bajtów 0xd0
+                        temp_df = pd.read_csv(plik, sep=sep, engine='python', encoding=enc, encoding_errors='replace')
+                        
+                        # Sprawdzamy czy to ma sens (czy są kolumny Fakturowni)
+                        cols = temp_df.columns
+                        if 'Sprzedający' in cols or 'Nabywca' in cols or 'Data wystawienia' in cols:
+                            df_csv = temp_df
+                            succ_encoding = enc
+                            succ_sep = sep
+                            break
                     except Exception:
                         continue
-                
                 if df_csv is not None:
-                    kolumny = df_csv.columns
-                    if 'Sprzedający' in kolumny and 'Nabywca' in kolumny:
-                         st.write("   -> Wykryto format Fakturownia (CSV)")
-                         lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
-                    else:
-                         st.warning(f"Pominięto plik CSV {nazwa_pliku_base}. Nierozpoznany format (brak kolumn Sprzedający/Nabywca).")
+                    break
+            
+            if df_csv is not None:
+                st.write(f"   -> Wczytano jako CSV (Kodowanie: {succ_encoding}, Separator: {succ_sep})")
+                if 'Sprzedający' in df_csv.columns:
+                     st.write("   -> Wykryto format Fakturownia (CSV/Fake XLS)")
+                     lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
                 else:
-                    st.error(f"Nie udało się wczytać pliku CSV {nazwa_pliku_base} przy użyciu kodowań: {encodings_to_try}")
+                     st.warning(f"Wczytano plik tekstowy {nazwa_pliku_base}, ale nie rozpoznano kolumn Fakturowni.")
+            else:
+                # 3. Ostatnia deska ratunku - HTML (niektóre systemy eksportują tabelę HTML jako .xls)
+                try:
+                    plik.seek(0)
+                    dfs_html = pd.read_html(plik)
+                    if dfs_html:
+                        st.write("   -> Wczytano jako HTML (Fake XLS)")
+                        df_html = dfs_html[0]
+                        if 'Sprzedający' in df_html.columns:
+                             lista_df_zunifikowanych.append(normalizuj_fakturownia(df_html, wybrana_firma_upload))
+                except Exception:
+                    st.error(f"Nie udało się wczytać pliku {nazwa_pliku_base} żadną metodą (Excel, CSV, HTML).")
 
         except Exception as e:
-           st.error(f"BŁĄD wczytania pliku {nazwa_pliku_base}: {e}")
+           st.error(f"KRYTYCZNY BŁĄD wczytania pliku {nazwa_pliku_base}: {e}")
     
     if not lista_df_zunifikowanych:
         return None, "Nie udało się zunifikować żadnych danych."
@@ -608,32 +636,39 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     
     return dane_z_bazy, mapa_kursow
 
-# --- PARSOWANIE ANALIZY ---
+# --- PARSOWANIE ANALIZY (NAPRAWIONE CZYTANIE FAKTUROWNI) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
-    # NAPRAWA KODOWANIA RÓWNIEŻ TUTAJ (dla pliku analizy)
     if wybrana_firma == "UNIX-TRANS":
+         df_csv = None
+         # 1. Próba jako Excel
          try:
-             df_csv = None
-             # Próba otwarcia jako CSV z różnymi kodowaniami
-             try:
-                 # Najpierw próba jako Excel
-                 df_csv = pd.read_excel(io.BytesIO(przeslany_plik_bytes))
-             except:
-                 # Jeśli nie Excel, to CSV - pętla po kodowaniach
-                 encodings_to_try = ['utf-8', 'cp1250', 'latin1', 'utf-16']
-                 for enc in encodings_to_try:
+             df_csv = pd.read_excel(io.BytesIO(przeslany_plik_bytes))
+         except:
+             pass
+         
+         # 2. Próba jako CSV (różne kodowania)
+         if df_csv is None:
+             encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1']
+             separators = [None, ',', ';']
+             for enc in encodings_to_try:
+                 for sep in separators:
                      try:
                          przeslany_plik_bytes.seek(0)
-                         df_csv = pd.read_csv(io.BytesIO(przeslany_plik_bytes), sep=None, engine='python', encoding=enc)
-                         break
+                         temp_df = pd.read_csv(io.BytesIO(przeslany_plik_bytes), sep=sep, engine='python', encoding=enc, encoding_errors='replace')
+                         if 'Sprzedający' in temp_df.columns or 'Data wystawienia' in temp_df.columns:
+                             df_csv = temp_df
+                             break
                      except:
                          continue
-             
-             if df_csv is None:
-                 st.error("Nie udało się odczytać pliku analizy UNIX (ani jako Excel, ani CSV).")
-                 return None, None
+                 if df_csv is not None:
+                     break
+         
+         if df_csv is None:
+             st.error("Nie udało się odczytać pliku analizy UNIX (ani jako Excel, ani CSV). Sprawdź kodowanie pliku.")
+             return None, None
 
+         try:
              df_zunifikowane = normalizuj_fakturownia(df_csv, "UNIX-TRANS")
              
              kurs_eur = pobierz_kurs_eur_pln()
@@ -665,9 +700,10 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              return df_agregacja, df_wyniki
 
          except Exception as e:
-             st.error(f"Błąd przetwarzania pliku Unix: {e}")
+             st.error(f"Błąd przetwarzania danych Unix: {e}")
              return None, None
 
+    # DLA HOLIER (Stary Excel)
     MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
         'złoty polski': 'PLN',
@@ -705,7 +741,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
                 if iso_code == 'EUR': kurs = 1.0
                 MAPA_NETTO_DO_KURSU[(col_waluta, col_typ)] = (kurs, iso_code)
     except Exception as e:
-        st.error(f"Nie udało się wczytać pliku Excel. Błąd: {e}")
+        st.error(f"Nie udało się wczytać pliku Excel Holier. Błąd: {e}")
         return None, None
 
     wyniki = []
