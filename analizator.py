@@ -311,55 +311,51 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         nazwa_pliku_base = plik.name
         st.write(f" - Przetwarzam: {nazwa_pliku_base} (Firma: {wybrana_firma_upload})")
         
-        # KROK 0: Wczytaj cały plik do pamięci (RAM) raz, aby uniezależnić się od wskaźnika pliku
+        # KROK 0: Pobierz bajty do pamięci, aby nie gubić wskaźnika pliku (seek)
         try:
             plik_bytes = plik.getvalue()
         except Exception as e:
-            st.error(f"Nie udało się pobrać zawartości pliku: {e}")
+            st.error(f"Błąd pobierania danych pliku: {e}")
             continue
 
-        sukces_pliku = False
+        sukces = False
 
-        # 1. Próba czytania jako EXCEL (tylko jeśli ma rozszerzenie .xls/.xlsx)
+        # METODA 1: Prawdziwy EXCEL (biblioteka openpyxl)
+        # Tylko jeśli plik ma końcówkę .xls lub .xlsx
         if nazwa_pliku_base.lower().endswith(('.xls', '.xlsx')):
             try:
-                # Używamy io.BytesIO na kopii danych
+                # Używamy BytesIO na kopii danych
                 xls = pd.ExcelFile(io.BytesIO(plik_bytes), engine='openpyxl')
                 
-                # --- LOGIKA DETEKCJI E100/EUROWAG (Excel) ---
+                # Sprawdzanie arkuszy (istniejąca logika)
                 if 'Transactions' in xls.sheet_names:
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
-                    col_e100 = df_e100.columns
-                    if 'Numer samochodu' in col_e100 and 'Kwota' in col_e100:
-                        st.write("   -> Wykryto format E100 (Polski - Excel)")
+                    if 'Numer samochodu' in df_e100.columns:
                         lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100, wybrana_firma_upload))
-                        sukces_pliku = True
-                    elif 'Car registration number' in col_e100 and 'Sum' in col_e100:
-                        st.write("   -> Wykryto format E100 (Angielski - Excel)")
+                        sukces = True
+                    elif 'Car registration number' in df_e100.columns:
                         lista_df_zunifikowanych.append(normalizuj_e100_EN(df_e100, wybrana_firma_upload))
-                        sukces_pliku = True
+                        sukces = True
                 
                 elif 'Sheet0' in xls.sheet_names or len(xls.sheet_names) > 0:
                     df_check = pd.read_excel(xls, sheet_name=0)
                     cols = df_check.columns
-                    # Eurowag / Fakturownia Excel
-                    if 'Data i godzina' in cols and ('Posiadacz karty' in cols or 'Artykuł' in cols):
-                         st.write("   -> Wykryto format Eurowag (Excel)")
-                         if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
-                         lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
-                         sukces_pliku = True
-                    elif 'Sprzedający' in cols and 'Nabywca' in cols:
-                         st.write("   -> Wykryto format Fakturownia (Prawdziwy Excel)")
-                         lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
-                         sukces_pliku = True
+                    
+                    if 'Data i godzina' in cols: # Eurowag
+                        if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
+                        lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
+                        sukces = True
+                    elif 'Sprzedający' in cols: # Fakturownia Excel
+                        st.write("   -> Wykryto format Fakturownia (Excel)")
+                        lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
+                        sukces = True
             except Exception:
-                pass # To nie jest poprawny Excel, idziemy dalej do CSV
+                pass # To nie był prawdziwy Excel, idziemy dalej
 
-        if sukces_pliku:
-            continue
+        if sukces: continue
 
-        # 2. Próba wczytania jako CSV (tekstowy)
-        # Twój plik ma przecinki, więc dajemy ',' na pierwsze miejsce
+        # METODA 2: Plik tekstowy / CSV (nawet jak ma rozszerzenie .xls)
+        # Lista separatorów - przecinek pierwszy, bo tak wygląda Twój plik
         separators = [',', ';', '\t']
         encodings = ['utf-8', 'cp1250', 'latin1', 'utf-8-sig']
         
@@ -368,25 +364,20 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         for enc in encodings:
             for sep in separators:
                 try:
-                    # Tworzymy nowy strumień dla każdej próby - to jest kluczowe!
+                    # Tworzymy czysty strumień dla każdej próby
                     buffer = io.BytesIO(plik_bytes)
                     
-                    # engine='python' lepiej radzi sobie z błędami parsowania niż 'c'
+                    # engine='python' i on_bad_lines='skip' są kluczowe dla trudnych plików
                     temp_df = pd.read_csv(
                         buffer, 
                         sep=sep, 
                         encoding=enc, 
                         engine='python', 
-                        on_bad_lines='skip' # Ignoruj uszkodzone linie zamiast wyrzucać błąd
+                        on_bad_lines='skip'
                     )
                     
-                    cols = temp_df.columns
-                    # Warunek sprawdzający Fakturownię
-                    if 'Sprzedający' in cols and 'Numer' in cols: # Sprzedający + Numer to pewnik Fakturowni
-                        df_csv = temp_df
-                        st.write(f"   -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
-                        break
-                    elif 'Sprzedający' in cols or 'Nabywca' in cols: # Lżejszy warunek
+                    # Sprawdzenie czy to Fakturownia
+                    if 'Sprzedający' in temp_df.columns:
                         df_csv = temp_df
                         st.write(f"   -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
                         break
@@ -396,37 +387,29 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 break
         
         if df_csv is not None:
-            if 'Sprzedający' in df_csv.columns:
-                st.write("   -> Wykryto format Fakturownia (CSV)")
-                lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
-                sukces_pliku = True
-            else:
-                 st.warning(f"Plik {nazwa_pliku_base} wczytano jako CSV, ale brakuje kolumny 'Sprzedający'.")
+            lista_df_zunifikowanych.append(normalizuj_fakturownia(df_csv, wybrana_firma_upload))
+            sukces = True
 
-        if sukces_pliku:
-            continue
+        if not sukces:
+            # METODA 3: HTML (Ostatnia deska ratunku)
+            try:
+                buffer = io.BytesIO(plik_bytes)
+                dfs_html = pd.read_html(buffer)
+                if dfs_html:
+                    if 'Sprzedający' in dfs_html[0].columns:
+                        st.write("   -> Wczytano jako HTML")
+                        lista_df_zunifikowanych.append(normalizuj_fakturownia(dfs_html[0], wybrana_firma_upload))
+                        sukces = True
+            except:
+                pass
 
-        # 3. Ostatnia szansa - HTML (niektóre systemy eksportują tabelę HTML jako .xls)
-        try:
-            buffer = io.BytesIO(plik_bytes)
-            dfs_html = pd.read_html(buffer)
-            if dfs_html:
-                df_html = dfs_html[0]
-                if 'Sprzedający' in df_html.columns:
-                    st.write("   -> Wczytano jako HTML (Fake XLS)")
-                    lista_df_zunifikowanych.append(normalizuj_fakturownia(df_html, wybrana_firma_upload))
-                    sukces_pliku = True
-        except Exception:
-            pass
-
-        if not sukces_pliku:
-            st.error(f"Nie udało się rozpoznać formatu pliku: {nazwa_pliku_base}")
+        if not sukces:
+            st.error(f"Nie udało się rozpoznać formatu pliku: {nazwa_pliku_base}. Spróbuj pobrać go jako CSV.")
 
     if not lista_df_zunifikowanych:
-        return None, "Nie udało się zunifikować żadnych danych."
+        return None, "Brak danych."
         
-    polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
-    return polaczone_df, None
+    return pd.concat(lista_df_zunifikowanych, ignore_index=True), None
 # --- FUNKCJE BAZY DANYCH (POSTGRESQL) ---
 def setup_database(conn):
     with conn.session as s:
