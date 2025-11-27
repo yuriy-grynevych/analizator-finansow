@@ -41,10 +41,11 @@ UNIX_FLOTA_CONFIG = {
 
 # Mapowanie aliasów (np. nazwy kart) na właściwe rejestracje
 # Klucz (Alias) musi być pisany WIELKIMI LITERAMI bez spacji
+# Dodano PLTRUCK3 dla WGM8463A (wydatki z Eurowag)
 UNIX_ALIAS_MAPPING = {
-    'TRUCK3': 'WGM8463A',     # VISA / Inne dla WGM8463A
-    'PTU0002': 'WGM8463A',    # Paliwo Eurowag One dla WGM8463A
-    # USUNIĘTO UNIXTRUCK DLA WPR9335N (identyfikuje się sam)
+    'TRUCK3': 'WGM8463A',     
+    'PLTRUCK3': 'WGM8463A',   
+    'PTU0002': 'WGM8463A',    
 }
 
 # --- SŁOWNIK VAT ---
@@ -102,7 +103,7 @@ ZAKAZANE_POJAZDY_LISTA = [
     'GRUPAKAPITA',
     'REGRINDSP',
     'PTU0001',      
-    'PTU0002'  # Uwaga: PTU0002 jest mapowane na WGM8463A w aliasach
+    'PTU0002'  # Jest mapowane, wiec w funkcji clean_key sprawdzamy mape PRZED ta lista
 ]
 
 # --- FUNKCJA FILTRUJĄCA (GLOBALNA) ---
