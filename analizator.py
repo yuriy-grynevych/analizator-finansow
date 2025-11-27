@@ -7,31 +7,62 @@ import time
 from datetime import date
 from sqlalchemy import text
 import io
-from PIL import Image
 import os
 
 # --- USTAWIENIA STRONY ---
-# Ustawiamy ikonę strony na logo z pliku image_1.png, jeśli istnieje, w przeciwnym razie domyślna
-page_icon_img = "image_1.png" if os.path.exists("image_1.png") else "🚛"
-
+# Ikona: Czarna ciężarówka (Unicode)
 st.set_page_config(
     page_title="Analizator Wydatków Multi-Firma", 
     layout="wide", 
-    page_icon=page_icon_img
+    page_icon="⛟"
 )
 
-# --- KOD DO UKRYCIA STOPKI I MENU ORAZ STYLIZACJA ---
-hide_streamlit_style = """
-            <style>
-            footer {visibility: hidden;}
-            .main .block-container {padding-top: 2rem;}
-            /* Stylizacja przycisku Admina na dole */
-            div.stButton > button:first-child {
-                width: 100%;
-            }
-            </style>
-            """
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+# --- STYLIZACJA CSS (PRZYCISKI NAWIGACJI) ---
+st.markdown("""
+    <style>
+    /* Ukrycie stopki */
+    footer {visibility: hidden;}
+    .main .block-container {padding-top: 2rem;}
+    
+    /* Stylizacja przycisków w sidebarze, aby wyglądały jak menu */
+    div[data-testid="stSidebar"] div.stButton > button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        border: 1px solid #4b4b4b;
+    }
+    
+    /* Styl dla AKTYWNEGO przycisku (type="primary") - SZARY/CIEMNY */
+    div[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+        background-color: #44475a;
+        border-color: #6272a4;
+        color: white;
+        font-weight: bold;
+    }
+    div[data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover {
+        background-color: #50546b;
+        border-color: #7083b7;
+    }
+    
+    /* Styl dla NIEAKTYWNEGO przycisku (type="secondary") */
+    div[data-testid="stSidebar"] div.stButton > button[kind="secondary"] {
+        background-color: transparent;
+        border-color: transparent;
+        color: #b0b0b0;
+    }
+    div[data-testid="stSidebar"] div.stButton > button[kind="secondary"]:hover {
+        background-color: #2b2b2b;
+        color: white;
+    }
+    
+    /* Separatory */
+    hr {
+        margin-top: 1em;
+        margin-bottom: 1em;
+        border-color: #4b4b4b;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- PARAMETRY TABELI ---
 NAZWA_TABELI = "transactions"
@@ -42,7 +73,7 @@ NAZWA_POLACZENIA_DB = "db"
 # --- LISTA FIRM ---
 FIRMY = ["HOLIER", "UNIX-TRANS"]
 
-# --- KONFIGURACJA DLA UNIX-TRANS (NOWA) ---
+# --- KONFIGURACJA DLA UNIX-TRANS ---
 UNIX_FLOTA_CONFIG = {
     'WGM8463A': date(2025, 10, 8),
     'WPR9335N': date(2025, 10, 7),
@@ -1209,9 +1240,9 @@ def to_excel_contractors(df_analiza_raw):
             formatted.to_excel(writer, sheet_name=safe_name, index=False)
     return output.getvalue()
 
-# --- WIDOKI ---
-def render_admin_panel(conn, wybrana_firma):
-    st.title("⚙️ Panel Administratora")
+# --- HELPERY DO RENDEROWANIA ZAWARTOŚCI ZAKŁADEK (WYCIĄGNIĘTE Z MAIN) ---
+
+def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
     col_up1, col_up2 = st.columns([1, 2])
@@ -1269,8 +1300,8 @@ def render_admin_panel(conn, wybrana_firma):
                     setup_file_database(conn)
                 st.success("Tabela plików została wyczyszczona.")
 
-def render_raport_view(conn, wybrana_firma):
-    st.subheader("📊 Raport Paliw i Opłat")
+def render_raport_content(conn, wybrana_firma):
+    st.subheader("Raport Paliw i Opłat")
     if wybrana_firma == "UNIX-TRANS":
         st.caption("ℹ️ Wyświetlam wydatki UNIX-TRANS oraz współdzielone koszty paliwa (Eurowag/E100 z Holier).")
     
@@ -1401,8 +1432,8 @@ def render_raport_view(conn, wybrana_firma):
         else:
              st.error(f"Błąd: {e}")
 
-def render_rentownosc_view(conn, wybrana_firma):
-    st.subheader("💰 Analiza Rentowności")
+def render_rentownosc_content(conn, wybrana_firma):
+    st.subheader("Analiza Rentowności")
     try:
         min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
         min_max_date = conn.query(min_max_date_query)
@@ -1631,7 +1662,7 @@ def render_rentownosc_view(conn, wybrana_firma):
     except Exception as e:
         st.error(f"Błąd: {e}")
 
-def render_refaktury_view(conn, wybrana_firma):
+def render_refaktury_content(conn, wybrana_firma):
     st.subheader("🔄 Refaktury Kosztów (Holier -> Unix)")
     st.info("Sekcja wylicza koszty (paliwo/opłaty) zafakturowane na Holier, które dotyczą aut jeżdżących dla UNIX-TRANS.")
     
@@ -1698,70 +1729,88 @@ def render_refaktury_view(conn, wybrana_firma):
     except Exception as e:
         st.error(f"Błąd: {e}")
 
-# --- FUNKCJA main() ---
+
+# --- GŁÓWNA APLIKACJA ---
 def main_app():
-    # --- NOWY SIDEBAR ---
+    # Inicjalizacja stanu
+    if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
+    if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
+    if 'show_admin' not in st.session_state: st.session_state.show_admin = False
+
+    # --- SIDEBAR (NOWY WYGLĄD) ---
     with st.sidebar:
-        # 1. Logo na górze
-        if os.path.exists("image_1.png"):
-            st.image("image_1.png", use_container_width=True)
-        else:
-            st.header("HOLIER LOGISTICS") # Fallback text
-
-        # 2. Wybór Firmy
-        st.header("🏢 Kontekst")
-        wybrana_firma = st.radio("Aktywna firma:", FIRMY, index=0, label_visibility="collapsed")
-        st.caption(f"DB: {NAZWA_POLACZENIA_DB}")
-        st.markdown("---")
+        st.markdown("### 🏢 Kontekst")
+        c1, c2 = st.columns(2)
         
-        # 3. Nawigacja Główna
-        st.header("📊 Nawigacja")
-        
-        # Opcje menu
-        menu_options = ["Raport Paliw/Opłat", "Rentowność", "Refaktury"]
-        
-        # Stan dla widoku admina
-        if 'show_admin' not in st.session_state:
-            st.session_state.show_admin = False
+        # Przyciski firm
+        type_holier = "primary" if st.session_state.active_company == "HOLIER" else "secondary"
+        if c1.button("HOLIER", type=type_holier, use_container_width=True):
+            st.session_state.active_company = "HOLIER"
+            st.rerun()
             
-        # Jeśli nie jesteśmy w trybie admina, pokaż wybór menu
-        if not st.session_state.show_admin:
-            selected_page = st.radio("Wybierz widok:", menu_options, label_visibility="collapsed")
-        else:
-            st.info("Jesteś w Panelu Admina")
-            if st.button("⬅️ Powrót do menu"):
-                st.session_state.show_admin = False
-                st.rerun()
-            selected_page = None # Ignorujemy radio button w trybie admina
-
-        # 4. Spacer, aby wypchnąć admina na dół (hack CSS-owy lub pusty kontener)
-        st.markdown("<div style='flex-grow: 1; height: 150px;'></div>", unsafe_allow_html=True)
-        st.markdown("---")
+        type_unix = "primary" if st.session_state.active_company == "UNIX-TRANS" else "secondary"
+        if c2.button("UNIX-TRANS", type=type_unix, use_container_width=True):
+            st.session_state.active_company = "UNIX-TRANS"
+            st.rerun()
+            
+        st.caption(f"Baza: {NAZWA_POLACZENIA_DB}")
+        st.divider()
         
-        # 5. Przycisk Admina na dole (Zębatka)
-        if st.button("⚙️ Panel Administratora", help="Konfiguracja i import plików"):
+        st.markdown("### 📊 Nawigacja")
+        
+        # Przyciski nawigacji (dezaktywujemy jeśli admin jest włączony)
+        is_admin = st.session_state.show_admin
+        
+        # 1. Raport
+        raport_type = "primary" if st.session_state.active_view == 'Raport' and not is_admin else "secondary"
+        if st.button("Raport Paliw/Opłat", type=raport_type, use_container_width=True):
+            st.session_state.active_view = 'Raport'
+            st.session_state.show_admin = False
+            st.rerun()
+            
+        # 2. Rentowność
+        rent_type = "primary" if st.session_state.active_view == 'Rentowność' and not is_admin else "secondary"
+        if st.button("Rentowność", type=rent_type, use_container_width=True):
+            st.session_state.active_view = 'Rentowność'
+            st.session_state.show_admin = False
+            st.rerun()
+            
+        # 3. Refaktury
+        ref_type = "primary" if st.session_state.active_view == 'Refaktury' and not is_admin else "secondary"
+        if st.button("Refaktury", type=ref_type, use_container_width=True):
+            st.session_state.active_view = 'Refaktury'
+            st.session_state.show_admin = False
+            st.rerun()
+
+        # Spacer
+        st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
+        st.divider()
+        
+        # Admin na dole
+        admin_type = "primary" if is_admin else "secondary"
+        if st.button("⚙️ Panel Administratora", type=admin_type, use_container_width=True):
             st.session_state.show_admin = True
             st.rerun()
 
-    # --- SETUP CONNECTION ---
-    try:
-        conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
-    except Exception as e:
-        st.error(f"Nie udało się połączyć z bazą danych '{NAZWA_POLACZENIA_DB}'. Sprawdź 'Secrets' w Ustawieniach.")
-        st.stop() 
+    # --- POŁĄCZENIE Z BAZĄ ---
+    try: conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
+    except Exception as e: st.error("Błąd połączenia z DB."); st.stop()
 
-    # --- LOGIKA WIDOKU GŁÓWNEGO ---
-    st.title(f"Analizator Wydatków: {wybrana_firma}")
+    # --- GŁÓWNE OKNO ---
+    firma = st.session_state.active_company
     
+    st.title(f"Analizator Wydatków: {firma}")
+    
+    # Warunkowe renderowanie treści
     if st.session_state.show_admin:
-        render_admin_panel(conn, wybrana_firma)
+        render_admin_content(conn, firma)
     else:
-        if selected_page == "Raport Paliw/Opłat":
-            render_raport_view(conn, wybrana_firma)
-        elif selected_page == "Rentowność":
-            render_rentownosc_view(conn, wybrana_firma)
-        elif selected_page == "Refaktury":
-            render_refaktury_view(conn, wybrana_firma)
+        if st.session_state.active_view == 'Raport':
+            render_raport_content(conn, firma)
+        elif st.session_state.active_view == 'Rentowność':
+            render_rentownosc_content(conn, firma)
+        elif st.session_state.active_view == 'Refaktury':
+            render_refaktury_content(conn, firma)
 
 def check_password():
     try:
