@@ -41,7 +41,6 @@ UNIX_FLOTA_CONFIG = {
 
 # Mapowanie aliasów (np. nazwy kart) na właściwe rejestracje
 # Klucz (Alias) musi być pisany WIELKIMI LITERAMI bez spacji
-# Dodano PLTRUCK3 dla WGM8463A (wydatki z Eurowag)
 UNIX_ALIAS_MAPPING = {
     'TRUCK3': 'WGM8463A',     
     'PLTRUCK3': 'WGM8463A',   
@@ -631,7 +630,6 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         
         # --- ZAAWANSOWANE MAPOWANIE DLA UNIX-TRANS ---
-        # Sprawdzamy czy identyfikator jest aliasem (np. TRUCK3)
         if key_nospace in UNIX_ALIAS_MAPPING:
             return UNIX_ALIAS_MAPPING[key_nospace]
             
@@ -661,50 +659,50 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
     return s_str.apply(clean_key)
 
-# --- PRZYGOTOWANIE DANYCH (ZMODYFIKOWANE DLA UNIX-TRANS) ---
+# --- PRZYGOTOWANIE DANYCH ---
 def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     if dane_z_bazy.empty:
         return dane_z_bazy, None
     
-    # Ignorujemy Fakturownię z bazy (bo ona trafia tam przez pomyłkę użytkownika)
     dane_z_bazy = dane_z_bazy[dane_z_bazy['zrodlo'] != 'Fakturownia']
 
     if dane_z_bazy.empty:
         return dane_z_bazy, None
 
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
-    
-    # Tutaj następuje mapowanie (np. TRUCK3 -> WGM8463A)
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
     # --- FILTR DLA UNIX-TRANS ---
     if firma_kontekst == "UNIX-TRANS":
-        
         def filter_unix(row):
-            # 1. Transakcja wgrana bezpośrednio na UNIX-TRANS (zawsze OK)
             if row['firma'] == 'UNIX-TRANS':
                 return True
-            
-            # 2. Transakcja z HOLIER (np. Eurowag), ale dotyczy auta UNIX
             if row['firma'] == 'HOLIER':
-                # Pojazd jest już zmapowany (np. PTU0002 -> WGM8463A)
                 pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
-                
-                # Sprawdzamy czy pojazd jest w konfiguracji floty UNIX
                 if pojazd in UNIX_FLOTA_CONFIG:
                     data_tr = row['data_transakcji_dt'].date()
                     start_date = UNIX_FLOTA_CONFIG[pojazd]
-                    
-                    # Sprawdzamy datę startu
                     if data_tr >= start_date:
                         return True
             return False
-            
         maska = dane_z_bazy.apply(filter_unix, axis=1)
         dane_z_bazy = dane_z_bazy[maska]
-        
-        if dane_z_bazy.empty:
-            return dane_z_bazy, None
+    
+    # --- FILTR DLA HOLIER (UKRYWANIE KOSZTÓW PRZEPISANYCH DO UNIX) ---
+    elif firma_kontekst == "HOLIER":
+        def filter_holier(row):
+            pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
+            if pojazd in UNIX_FLOTA_CONFIG:
+                data_tr = row['data_transakcji_dt'].date()
+                start_date = UNIX_FLOTA_CONFIG[pojazd]
+                if data_tr >= start_date:
+                    return False # Ukryj, bo jest w Unixie
+            return True
+        maska = dane_z_bazy.apply(filter_holier, axis=1)
+        dane_z_bazy = dane_z_bazy[maska]
+
+    if dane_z_bazy.empty:
+        return dane_z_bazy, None
 
     if 'kraj' not in dane_z_bazy.columns:
         dane_z_bazy['kraj'] = 'Nieznany'
@@ -723,12 +721,49 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     dane_z_bazy['kwota_brutto_eur'] = dane_z_bazy.apply(
         lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
     )
-    
     dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_eur'] 
     
     return dane_z_bazy, mapa_kursow
 
-# --- PARSOWANIE ANALIZY (HYBRYDOWE) ---
+# --- LOGIKA REFAKTUR (NOWA) ---
+def pobierz_dane_do_refaktury(conn, data_start, data_stop):
+    # Pobieramy TYLKO dane Holiera
+    df_holier = pobierz_dane_z_bazy(conn, data_start, data_stop, "HOLIER")
+    if df_holier.empty: return None, None
+    
+    df_holier = df_holier[df_holier['zrodlo'] != 'Fakturownia']
+    df_holier['data_transakcji_dt'] = pd.to_datetime(df_holier['data_transakcji'])
+    df_holier['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(df_holier['identyfikator'])
+    
+    # Filtrujemy TYLKO to, co dotyczy aut UNIX
+    def filter_refaktura(row):
+        pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
+        if pojazd in UNIX_FLOTA_CONFIG:
+            data_tr = row['data_transakcji_dt'].date()
+            start_date = UNIX_FLOTA_CONFIG[pojazd]
+            if data_tr >= start_date:
+                return True
+        return False
+        
+    maska = df_holier.apply(filter_refaktura, axis=1)
+    df_refaktura = df_holier[maska]
+    
+    if df_refaktura.empty: return None, None
+    
+    # Przeliczamy na EUR
+    kurs_eur = pobierz_kurs_eur_pln()
+    if not kurs_eur: return None, None
+    mapa_kursow = pobierz_wszystkie_kursy(df_refaktura['waluta'].unique(), kurs_eur)
+    
+    df_refaktura['kwota_netto_num'] = pd.to_numeric(df_refaktura['kwota_netto'], errors='coerce').fillna(0.0)
+    df_refaktura['kwota_brutto_num'] = pd.to_numeric(df_refaktura['kwota_brutto'], errors='coerce').fillna(0.0)
+    
+    df_refaktura['kwota_netto_eur'] = df_refaktura.apply(lambda row: row['kwota_netto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
+    df_refaktura['kwota_brutto_eur'] = df_refaktura.apply(lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
+    
+    return df_refaktura, mapa_kursow
+
+# --- PARSOWANIE ANALIZY ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
     if wybrana_firma == "UNIX-TRANS":
@@ -781,7 +816,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              ]
              
              df_wyniki = df_zunifikowane.copy()
-             # Czyścimy klucz i mapujemy aliasy
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
              
              df_wyniki['typ'] = df_wyniki['typ'].fillna('Koszt (Subiekt)')
@@ -792,7 +826,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
-             
              df_wyniki['kontrahent'] = 'Brak Kontrahenta'
              
              df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
@@ -1174,10 +1207,11 @@ def main_app():
                 formatted.to_excel(writer, sheet_name=safe_name, index=False)
         return output.getvalue()
 
-    tab_admin, tab_raport, tab_rentownosc = st.tabs([
+    tab_admin, tab_raport, tab_rentownosc, tab_refaktury = st.tabs([
         "⚙️ Panel Admina",
         "📊 Raport Paliw/Opłat", 
-        "💰 Rentowność (Zysk/Strata)"
+        "💰 Rentowność (Zysk/Strata)",
+        "🔄 Refaktury (Holier -> Unix)"
     ])
 
     try:
@@ -1581,6 +1615,71 @@ def main_app():
                     file_name=f"raport_{wybrana_firma}_{data_start_rent}.xlsx",
                     mime="application/vnd.ms-excel"
                  )
+        except Exception as e:
+            st.error(f"Błąd: {e}")
+
+    with tab_refaktury:
+        st.header("🔄 Refaktury (Koszty z Holiera dla aut Unix)")
+        st.info("Ta sekcja pokazuje koszty paliwa/opłat, które zostały zaimportowane do Holiera (np. Eurowag), ale dotyczą aut UNIX-TRANS i należy je zrefakturować.")
+        
+        try:
+            min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
+            min_max_date = conn.query(min_max_date_query)
+            domyslny_start_ref = date.today()
+            domyslny_stop_ref = date.today()
+            if not min_max_date.empty and min_max_date.iloc[0, 0] is not None:
+                domyslny_start_ref = min_max_date.iloc[0, 0]
+                domyslny_stop_ref = min_max_date.iloc[0, 1]
+                
+            c1, c2 = st.columns(2)
+            with c1:
+                data_start_ref = st.date_input("Data Start", value=domyslny_start_ref, key="ref_start")
+            with c2:
+                data_stop_ref = st.date_input("Data Stop", value=domyslny_stop_ref, key="ref_stop")
+                
+            if st.button("Pokaż koszty do refaktury"):
+                df_refaktura, _ = pobierz_dane_do_refaktury(conn, data_start_ref, data_stop_ref)
+                
+                if df_refaktura is None or df_refaktura.empty:
+                    st.info("Brak kosztów do refakturowania w wybranym okresie.")
+                else:
+                    st.metric("Łączna kwota do refaktury (Netto)", f"{df_refaktura['kwota_netto_eur'].sum():,.2f} EUR")
+                    st.metric("Łączna kwota do refaktury (Brutto)", f"{df_refaktura['kwota_brutto_eur'].sum():,.2f} EUR")
+                    
+                    st.subheader("Podział na pojazdy")
+                    agg_ref = df_refaktura.groupby('identyfikator_clean').agg(
+                        Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                        Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                    ).sort_values(by='Suma_Brutto', ascending=False)
+                    st.dataframe(agg_ref.style.format("{:,.2f} EUR"), use_container_width=True)
+                    
+                    st.subheader("Szczegóły transakcji")
+                    st.dataframe(
+                        df_refaktura[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False).style.format({
+                            'kwota_netto_eur': '{:,.2f} EUR', 
+                            'kwota_brutto_eur': '{:,.2f} EUR',
+                            'data_transakcji_dt': '{:%Y-%m-%d %H:%M}'
+                        }),
+                        use_container_width=True,
+                        column_config={
+                            "data_transakcji_dt": "Data", "identyfikator_clean": "Pojazd", 
+                            "produkt": "Opis", "kwota_netto_eur": "Netto", "kwota_brutto_eur": "Brutto"
+                        }
+                    )
+                    
+                    # Eksport do Excela
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        agg_ref.reset_index().to_excel(writer, sheet_name='Podsumowanie', index=False)
+                        df_refaktura[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].to_excel(writer, sheet_name='Szczegóły', index=False)
+                    
+                    st.download_button(
+                        label="📥 Pobierz listę do refaktury (Excel)",
+                        data=output.getvalue(),
+                        file_name=f"refaktura_holier_unix_{data_start_ref}.xlsx",
+                        mime="application/vnd.ms-excel"
+                    )
+
         except Exception as e:
             st.error(f"Błąd: {e}")
 
