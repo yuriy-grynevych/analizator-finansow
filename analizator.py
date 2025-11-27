@@ -13,12 +13,6 @@ import os
 
 # Próba wczytania pliku graficznego na ikonę
 icon_image = "⛟" # Domyślna wartość (emoji)
-try:
-    # Upewnij się, że plik 'truck_favicon.png' jest w tym samym folderze co skrypt
-    icon_image = Image.open("truck_favicon.png")
-except FileNotFoundError:
-    print("Nie znaleziono pliku truck_favicon.png, używam emoji.")
-    pass
 
 st.set_page_config(
     page_title="Analizator Wydatków Multi-Firma",
