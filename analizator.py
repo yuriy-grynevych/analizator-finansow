@@ -10,13 +10,21 @@ import io
 import os
 
 # --- USTAWIENIA STRONY ---
-# --- USTAWIENIA STRONY ---
-st.set_page_config(
-    page_title="Analizator Wydatków Multi-Firma", 
-    layout="wide", 
-    page_icon="⛟"  # Symbol czarnej ciężarówki
-)
 
+# Próba wczytania pliku graficznego na ikonę
+icon_image = "⛟" # Domyślna wartość (emoji)
+try:
+    # Upewnij się, że plik 'truck_favicon.png' jest w tym samym folderze co skrypt
+    icon_image = Image.open("truck_favicon.png")
+except FileNotFoundError:
+    print("Nie znaleziono pliku truck_favicon.png, używam emoji.")
+    pass
+
+st.set_page_config(
+    page_title="Analizator Wydatków Multi-Firma",
+    layout="wide",
+    page_icon=icon_image  # Przekazujemy załadowany obrazek lub emoji
+)
 # --- STYLIZACJA CSS (PRZYCISKI NAWIGACJI) ---
 st.markdown("""
     <style>
