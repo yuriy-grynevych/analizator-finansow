@@ -28,9 +28,24 @@ NAZWA_POLACZENIA_DB = "db"
 # --- LISTA FIRM ---
 FIRMY = ["HOLIER", "UNIX-TRANS"]
 
-# --- KONFIGURACJA DLA UNIX-TRANS ---
-UNIX_FLOTA = ['NOL935C', 'NOL0935C', 'WPR9685N', 'WGM8463A', 'WPR9335N']
-UNIX_DATA_START = date(2025, 10, 1)
+# --- KONFIGURACJA DLA UNIX-TRANS (NOWA) ---
+# Słownik: Klucz = Rejestracja, Wartość = Data startu w UNIX
+UNIX_FLOTA_CONFIG = {
+    'WGM8463A': date(2025, 10, 8),
+    'WPR9335N': date(2025, 10, 7),
+    'PTU3287F': date(2025, 11, 19),
+    'WPR9685N': date(2025, 10, 21),
+    'NOL0935C': date(2025, 10, 1),
+    'NOL935C': date(2025, 10, 1)
+}
+
+# Mapowanie aliasów (np. nazwy kart) na właściwe rejestracje
+# Klucz (Alias) musi być pisany WIELKIMI LITERAMI bez spacji
+UNIX_ALIAS_MAPPING = {
+    'TRUCK3': 'WGM8463A',     # VISA / Inne dla WGM8463A
+    'PTU0002': 'WGM8463A',    # Paliwo Eurowag One dla WGM8463A
+    # USUNIĘTO UNIXTRUCK DLA WPR9335N (identyfikuje się sam)
+}
 
 # --- SŁOWNIK VAT ---
 VAT_RATES = {
@@ -87,13 +102,18 @@ ZAKAZANE_POJAZDY_LISTA = [
     'GRUPAKAPITA',
     'REGRINDSP',
     'PTU0001',      
-    'PTU0002'
+    'PTU0002'  # Uwaga: PTU0002 jest mapowane na WGM8463A w aliasach
 ]
 
-# --- FUNKCJA FILTRUJĄCA ---
-def czy_zakazany_pojazd(nazwa):
+# --- FUNKCJA FILTRUJĄCA (GLOBALNA) ---
+def czy_zakazany_pojazd_global(nazwa):
     if not nazwa: return False
     n = str(nazwa).upper().replace(" ", "").replace("-", "")
+    
+    # Wyjątek: Jeśli nazwa jest w naszych aliasach (np. PTU0002), to NIE jest zakazana
+    if n in UNIX_ALIAS_MAPPING:
+        return False
+        
     for zakazany in ZAKAZANE_POJAZDY_LISTA:
         if zakazany in n:
             return True
@@ -179,22 +199,18 @@ def kategoryzuj_transakcje(row, zrodlo):
     
     elif zrodlo == 'Fakturownia':
         # --- ZAAWANSOWANA KATEGORYZACJA PO NIP ---
-        # 9691670149 to NIP UNIX-TRANS
-        
         nip_sprzedawcy = str(row.get('NIP sprzedającego', '')).replace('-', '').strip()
-        nip_nabywcy = str(row.get('NIP', '')).replace('-', '').strip() # W pliku kolumna nazywa się po prostu NIP dla nabywcy
+        nip_nabywcy = str(row.get('NIP', '')).replace('-', '').strip() 
         
         unix_nip = '9691670149'
 
-        # Jeśli sprzedawcą jest UNIX -> to jest przychód
         if unix_nip in nip_sprzedawcy:
             return 'PRZYCHÓD', str(row.get('Produkt/usługa', 'Usługa Transportowa'))
             
-        # Jeśli nabywcą jest UNIX -> to jest koszt
         if unix_nip in nip_nabywcy:
              return 'KOSZT', str(row.get('Produkt/usługa', 'Koszt'))
 
-        # Fallback po nazwach (gdyby NIP był pusty)
+        # Fallback po nazwach
         sprzedawca = str(row.get('Sprzedający', '')).upper()
         nabywca = str(row.get('Nabywca', '')).upper()
         
@@ -203,7 +219,6 @@ def kategoryzuj_transakcje(row, zrodlo):
         if 'UNIX' in nabywca:
              return 'KOSZT', str(row.get('Produkt/usługa', 'Koszt'))
         
-        # Jeśli nie wiadomo co to -> IGNORUJ, nie wrzucaj do kosztów na siłę
         return 'IGNORUJ', 'Nieznane'
         
     return 'INNE', 'Nieznane'
@@ -286,24 +301,19 @@ def normalizuj_e100_EN(df_e100, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- POPRAWIONA FUNKCJA NORMALIZACJI FAKTUROWNI ---
+# --- NORMALIZACJA FAKTUROWNI ---
 def normalizuj_fakturownia(df_fakt, firma_tag):
-    # Robimy kopię
     df = df_fakt.copy()
     
-    # Mapa nazw kolumn - naprawiamy literówki i warianty
     col_map = {}
     for c in df.columns:
         c_lower = str(c).lower().strip()
-        # Najważniejsze: mapujemy "Cena netto" a nie "Wartość netto" (bo wartość to suma faktury)
         if 'cena' in c_lower and 'netto' in c_lower and 'pln' not in c_lower:
             col_map[c] = 'Cena netto'
         elif 'cena' in c_lower and 'brutto' in c_lower and 'pln' not in c_lower:
             col_map[c] = 'Cena brutto'
         elif 'ilość' in c_lower or 'ilosc' in c_lower:
             col_map[c] = 'Ilość'
-        
-        # Inne pola
         elif 'sprzedaj' in c_lower and 'nip' not in c_lower:
             col_map[c] = 'Sprzedający'
         elif 'nip' in c_lower and 'sprzed' in c_lower:
@@ -323,7 +333,6 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df['Data wystawienia'], errors='coerce')
     
-    # Szukanie pojazdu w różnych kolumnach
     def znajdz_pojazd(row):
         cols_to_search = ['Uwagi', 'Nr zamówienia', 'Opis', 'Dodatkowe pole na pozycjach faktury', 'Produkt/usługa']
         text_full = ""
@@ -340,10 +349,6 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
 
     df_out['identyfikator'] = df.apply(znajdz_pojazd, axis=1)
 
-    # --- KLUCZOWA POPRAWKA: LICZENIE Z CENY JEDNOSTKOWEJ ---
-    # Fakturownia w CSV powiela "Wartość netto" (suma faktury) dla każdego wiersza pozycji!
-    # Musimy liczyć: Cena netto * Ilość
-    
     if 'Cena netto' in df.columns and 'Ilość' in df.columns:
         cena_netto = pd.to_numeric(df['Cena netto'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
         ilosc = pd.to_numeric(df['Ilość'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
@@ -354,10 +359,8 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
             cena_brutto = pd.to_numeric(df['Cena brutto'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
             df_out['kwota_brutto'] = cena_brutto * ilosc
         else:
-            # Fallback - jeśli brak ceny brutto, używamy netto (orientacyjnie)
             df_out['kwota_brutto'] = df_out['kwota_netto'] 
     else:
-        # Fallback dla starego formatu (lista faktur bez pozycji)
         if 'Wartość netto' in df.columns:
              df_out['kwota_netto'] = pd.to_numeric(df['Wartość netto'].astype(str).str.replace(',', '.'), errors='coerce')
         if 'Wartość brutto' in df.columns:
@@ -371,16 +374,14 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     else:
         df_out['kraj'] = 'PL'
 
-    # Kategoryzacja (NIP)
     kategorie = df.apply(lambda row: kategoryzuj_transakcje(row, 'Fakturownia'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie] 
     df_out['produkt'] = [kat[1] for kat in kategorie]
     df_out['zrodlo'] = 'Fakturownia'
     df_out['firma'] = firma_tag
 
-    # Odsiewamy śmieci
     df_out = df_out.dropna(subset=['data_transakcji'])
-    df_out = df_out[df_out['typ'] != 'IGNORUJ'] # Wyrzucamy to czego nie jesteśmy pewni
+    df_out = df_out[df_out['typ'] != 'IGNORUJ']
     df_out = df_out[df_out['kwota_brutto'] != 0]
     
     return df_out
@@ -401,7 +402,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
 
         sukces_pliku = False
 
-        # METODA 1: Prawdziwy EXCEL
         if nazwa_pliku_base.lower().endswith(('.xls', '.xlsx')):
             try:
                 xls = pd.ExcelFile(io.BytesIO(plik_bytes), engine='openpyxl')
@@ -426,7 +426,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                          if 'Posiadacz karty' not in cols: df_check['Posiadacz karty'] = None
                          lista_df_zunifikowanych.append(normalizuj_eurowag(df_check, wybrana_firma_upload))
                          sukces_pliku = True
-                    # Fakturownia Excel
                     elif any('Sprzedaj' in c for c in cols) and any('Nabywca' in c for c in cols):
                          st.write("    -> Wykryto format Fakturownia (Prawdziwy Excel)")
                          lista_df_zunifikowanych.append(normalizuj_fakturownia(df_check, wybrana_firma_upload))
@@ -437,27 +436,17 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         if sukces_pliku:
             continue
 
-        # METODA 2: CSV
         separators = [',', ';', '\t']
         encodings = ['utf-8', 'cp1250', 'latin1', 'utf-8-sig']
-        
         df_csv = None
         
         for enc in encodings:
             for sep in separators:
                 try:
                     buffer = io.BytesIO(plik_bytes)
-                    temp_df = pd.read_csv(
-                        buffer, 
-                        sep=sep, 
-                        encoding=enc, 
-                        engine='python', 
-                        on_bad_lines='skip'
-                    )
-                    
+                    temp_df = pd.read_csv(buffer, sep=sep, encoding=enc, engine='python', on_bad_lines='skip')
                     cols = temp_df.columns
                     is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols) or any('Data wyst' in c for c in cols)
-                    
                     if is_fakt: 
                         df_csv = temp_df
                         st.write(f"    -> Wczytano jako CSV (Kodowanie: {enc}, Separator: '{sep}')")
@@ -475,7 +464,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         if sukces_pliku:
             continue
 
-        # METODA 3: HTML
         try:
             buffer = io.BytesIO(plik_bytes)
             dfs_html = pd.read_html(buffer)
@@ -497,7 +485,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
 
-# --- FUNKCJE BAZY DANYCH (POSTGRESQL) ---
+# --- FUNKCJE BAZY DANYCH ---
 def setup_database(conn):
     with conn.session as s:
         s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI}"))
@@ -556,13 +544,11 @@ def wyczysc_duplikaty(conn):
 
 def pobierz_dane_z_bazy(conn, data_start, data_stop, wybrana_firma, typ=None):
     params = {"data_start": data_start, "data_stop": data_stop, "firma": wybrana_firma}
-    
     base_query = f"""
         SELECT * FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}
         WHERE (data_transakcji::date) >= :data_start 
           AND (data_transakcji::date) <= :data_stop
     """
-    
     if wybrana_firma == "UNIX-TRANS":
         condition = """
           AND (
@@ -574,7 +560,6 @@ def pobierz_dane_z_bazy(conn, data_start, data_stop, wybrana_firma, typ=None):
         condition = " AND firma = :firma"
 
     query = base_query + condition
-
     if typ:
         query += " AND typ = :typ"
         params["typ"] = typ
@@ -639,15 +624,21 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
     s_str = s_identyfikatorow.astype(str)
     
     def clean_key(key):
-        # POPRAWKA: Mapujemy "Brak Pojazdu" na "Brak Identyfikatora"
         if key == 'nan' or not key or key == 'Brak Pojazdu': 
             return 'Brak Identyfikatora'
             
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
+        
+        # --- ZAAWANSOWANE MAPOWANIE DLA UNIX-TRANS ---
+        # Sprawdzamy czy identyfikator jest aliasem (np. TRUCK3)
+        if key_nospace in UNIX_ALIAS_MAPPING:
+            return UNIX_ALIAS_MAPPING[key_nospace]
+            
         FIRMY_DO_USUNIECIA = [
             'TRUCK24SP', 'TRUCK24', 'EDENRED', 'MARMAR', 'SANTANDER', 
             'LEASING', 'PZU', 'WARTA', 'INTERCARS', 'EUROWAG', 'E100', 'POLSKA', 'BANK'
         ]
+        
         for firma in FIRMY_DO_USUNIECIA:
             if firma in key_nospace:
                 return 'Brak Identyfikatora'
@@ -674,30 +665,37 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     if dane_z_bazy.empty:
         return dane_z_bazy, None
     
-    # --- POPRAWKA KLUCZOWA: IGNORUJEMY FAKTUROWNIĘ Z BAZY JAKO KOSZT BAZY ---
-    # Jeśli w bazie są wgrane faktury przychodowe, nie mogą być liczone jako koszt paliwa!
+    # Ignorujemy Fakturownię z bazy (bo ona trafia tam przez pomyłkę użytkownika)
     dane_z_bazy = dane_z_bazy[dane_z_bazy['zrodlo'] != 'Fakturownia']
 
     if dane_z_bazy.empty:
         return dane_z_bazy, None
 
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
+    
+    # Tutaj następuje mapowanie (np. TRUCK3 -> WGM8463A)
     dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
     
     # --- FILTR DLA UNIX-TRANS ---
     if firma_kontekst == "UNIX-TRANS":
-        allowed_vehicles_norm = set([str(v).upper().replace(" ", "").replace("-", "") for v in UNIX_FLOTA])
         
         def filter_unix(row):
-            # 1. Transakcja UNIX
+            # 1. Transakcja wgrana bezpośrednio na UNIX-TRANS (zawsze OK)
             if row['firma'] == 'UNIX-TRANS':
                 return True
-            # 2. Paliwo HOLIER ale auto UNIX
+            
+            # 2. Transakcja z HOLIER (np. Eurowag), ale dotyczy auta UNIX
             if row['firma'] == 'HOLIER':
+                # Pojazd jest już zmapowany (np. PTU0002 -> WGM8463A)
                 pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
-                if pojazd in allowed_vehicles_norm:
+                
+                # Sprawdzamy czy pojazd jest w konfiguracji floty UNIX
+                if pojazd in UNIX_FLOTA_CONFIG:
                     data_tr = row['data_transakcji_dt'].date()
-                    if data_tr >= UNIX_DATA_START:
+                    start_date = UNIX_FLOTA_CONFIG[pojazd]
+                    
+                    # Sprawdzamy datę startu
+                    if data_tr >= start_date:
                         return True
             return False
             
@@ -729,10 +727,9 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     
     return dane_z_bazy, mapa_kursow
 
-# --- PARSOWANIE ANALIZY (HYBRYDOWE: UNIX=CSV, HOLIER=EXCEL) ---
+# --- PARSOWANIE ANALIZY (HYBRYDOWE) ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
-    # --- KROK 1: SCIEŻKA DLA UNIX-TRANS (FAKTUROWNIA CSV/XLS) ---
     if wybrana_firma == "UNIX-TRANS":
          df_csv = None
          try:
@@ -783,10 +780,9 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              ]
              
              df_wyniki = df_zunifikowane.copy()
-             # Czyścimy klucz, teraz "Brak Pojazdu" zniknie na rzecz "Brak Identyfikatora"
+             # Czyścimy klucz i mapujemy aliasy
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
              
-             # Mapowanie
              df_wyniki['typ'] = df_wyniki['typ'].fillna('Koszt (Subiekt)')
              df_wyniki['typ'] = df_wyniki['typ'].replace({
                  'PRZYCHÓD': 'Przychód (Subiekt)', 
@@ -795,14 +791,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
-             
-             # Próba wyciągnięcia Nabywcy jako kontrahenta
-             if 'Nabywca' in df_csv.columns:
-                  # Musimy zmapować z powrotem, bo df_wyniki jest już znormalizowany
-                  # Najprościej: df_wyniki ma index resetowany? Nie, concat.
-                  # Zróbmy to bezpieczniej: df_wyniki pochodzi z df_zunifikowane.
-                  # Normalizacja fakturowni nie przenosiła kolumny Nabywca wprost.
-                  pass
              
              df_wyniki['kontrahent'] = 'Brak Kontrahenta'
              
@@ -1032,12 +1020,16 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
         return None, None 
 
     df_wyniki = pd.DataFrame(wyniki)
-    CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
-    maska_zakazana = df_wyniki['pojazd_oryg'].apply(czy_zakazany_pojazd)
+    # Zmieniamy filtr, aby używał globalnej funkcji z wyjątkami na aliasy
+    maska_zakazana = df_wyniki['pojazd_oryg'].apply(czy_zakazany_pojazd_global)
     df_wyniki = df_wyniki[~maska_zakazana]
+    
+    # Dodatkowy filtr
+    CZARNA_LISTA_FINALNA = ['TRUCK24SP', 'EDENRED', 'MARMAR', 'INTERCARS', 'SANTANDER', 'LEASING']
     for smiec in CZARNA_LISTA_FINALNA:
         maska = df_wyniki['pojazd_oryg'].astype(str).str.upper().str.contains(smiec, na=False)
         df_wyniki = df_wyniki[~maska]
+        
     if df_wyniki.empty:
          return None, None
 
@@ -1113,7 +1105,7 @@ def main_app():
             if df_fuel_raw is not None and not df_fuel_raw.empty:
                 pojazdy_paliwo = set(df_fuel_raw['identyfikator_clean'].unique())
             wszystkie_pojazdy = sorted(list(pojazdy_subiekt.union(pojazdy_paliwo)))
-            wszystkie_pojazdy = [p for p in wszystkie_pojazdy if not czy_zakazany_pojazd(p)]
+            wszystkie_pojazdy = [p for p in wszystkie_pojazdy if not czy_zakazany_pojazd_global(p)]
             
             for pojazd in wszystkie_pojazdy:
                 safe_name = re.sub(r'[\\/*?:\[\]]', '', str(pojazd))[:30]
@@ -1432,7 +1424,8 @@ def main_app():
                         if dane_przygotowane_rent.empty:
                             df_koszty_baza_agg = pd.DataFrame(columns=['koszty_baza_netto', 'koszty_baza_brutto'])
                         else:
-                            maska_baza = dane_przygotowane_rent['identyfikator_clean'].apply(czy_zakazany_pojazd)
+                            # Po przygotowaniu dane są już przefiltrowane przez filter_unix, ale jeszcze raz upewniamy się co do zakazanych
+                            maska_baza = dane_przygotowane_rent['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
                             dane_przygotowane_rent = dane_przygotowane_rent[~maska_baza]
                             df_koszty_baza_agg = dane_przygotowane_rent.groupby('identyfikator_clean').agg(
                                 koszty_baza_netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
@@ -1448,7 +1441,7 @@ def main_app():
                             right_index=True, 
                             how='outer'
                         ).fillna(0)
-                        maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd)
+                        maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
                         df_rentownosc = df_rentownosc[~maska_index]
                         if df_analiza_raw is not None and not df_analiza_raw.empty:
                              def zlacz_kontrahentow(x):
@@ -1476,7 +1469,7 @@ def main_app():
                  df_analiza_raw = st.session_state.get('dane_analizy_raw')
 
                  if df_analiza_raw is not None and not df_analiza_raw.empty:
-                        maska_raw = df_analiza_raw['pojazd_clean'].apply(czy_zakazany_pojazd)
+                        maska_raw = df_analiza_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global)
                         df_analiza_raw = df_analiza_raw[~maska_raw]
 
                  if df_analiza_raw is not None and not df_analiza_raw.empty:
