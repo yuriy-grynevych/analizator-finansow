@@ -10,11 +10,11 @@ import io
 import os
 
 # --- USTAWIENIA STRONY ---
-# Ikona: Czarna ciężarówka (Unicode)
+# --- USTAWIENIA STRONY ---
 st.set_page_config(
     page_title="Analizator Wydatków Multi-Firma", 
     layout="wide", 
-    page_icon="⛟"
+    page_icon="⛟"  # Symbol czarnej ciężarówki
 )
 
 # --- STYLIZACJA CSS (PRZYCISKI NAWIGACJI) ---
