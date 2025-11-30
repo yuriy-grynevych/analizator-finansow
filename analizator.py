@@ -658,8 +658,7 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         # --- PUŁAPKA NA ZŁE "PL PTU-0002" ---
         # Jeśli po usunięciu spacji mamy "PLPTU0002", to jest to ten zły wpis ze screena.
         # Usuwamy go natychmiast.
-        if "PLPTU0002" in key_nospace:
-            return 'Brak Identyfikatora'
+       
         # ------------------------------------
 
         # --- ZAAWANSOWANE MAPOWANIE DLA UNIX-TRANS ---
@@ -1548,6 +1547,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                             right_index=True, 
                             how='outer'
                         ).fillna(0)
+                        df_rentownosc = df_rentownosc[~df_rentownosc.index.astype(str).str.contains("PLPTU0002")]
                         maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
                         df_rentownosc = df_rentownosc[~maska_index]
                         if df_analiza_raw is not None and not df_analiza_raw.empty:
