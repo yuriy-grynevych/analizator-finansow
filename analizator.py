@@ -1477,7 +1477,7 @@ def render_raport_content(conn, wybrana_firma):
              st.warning("Baza danych nie jest gotowa. Przejdź do Panelu Admina.")
         else:
              st.error(f"Błąd: {e}")
-            def render_rentownosc_content(conn, wybrana_firma):
+def render_rentownosc_content(conn, wybrana_firma):
     st.subheader("Analiza Rentowności")
     try:
         min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
