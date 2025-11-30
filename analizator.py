@@ -1764,7 +1764,8 @@ def render_refaktury_content(conn, wybrana_firma):
                             }
                         )
                        except Exception as e:
-        st.error(f"Błąd: {e}")
+                                st.error(f"Błąd: {e}")
+        
 
                 
     def render_porownanie_content(conn, wybrana_firma):
