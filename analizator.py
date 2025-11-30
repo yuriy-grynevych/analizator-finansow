@@ -1685,6 +1685,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                     st.error("Błąd wyświetlania szczegółów.")
     except Exception as e:
         st.error(f"Błąd: {e}")
+        
 
 def render_refaktury_content(conn, wybrana_firma):
     st.subheader("🔄 Refaktury Kosztów (Wzajemne)")
