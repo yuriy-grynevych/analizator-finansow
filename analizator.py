@@ -2041,7 +2041,7 @@ def main_app():
             st.rerun()
         # --- NOWY PRZYCISK PORÓWNANIE ---
         comp_type = "primary" if st.session_state.active_view == 'Porównanie' and not is_admin else "secondary"
-        if st.button("⚖️ Porównanie", type=comp_type, use_container_width=True):
+        if st.button("Porównanie", type=comp_type, use_container_width=True):
             st.session_state.active_view = 'Porównanie'
             st.session_state.show_admin = False
             st.rerun()
