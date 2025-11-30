@@ -5,3 +5,4 @@ requests
 SQLAlchemy
 psycopg2-binary
 openpyxl
+matplotlib
