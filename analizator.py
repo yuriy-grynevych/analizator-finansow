@@ -1768,7 +1768,7 @@ def render_refaktury_content(conn, wybrana_firma):
         
 
                 
-    def render_porownanie_content(conn, wybrana_firma):
+def render_porownanie_content(conn, wybrana_firma):
         st.subheader("📊 Porównanie Okresów")
         st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
     
