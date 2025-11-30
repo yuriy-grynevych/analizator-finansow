@@ -1477,7 +1477,6 @@ def render_rentownosc_content(conn, wybrana_firma):
             domyslny_start_rent = min_max_date.iloc[0, 0]
             domyslny_stop_rent = min_max_date.iloc[0, 1]
         
-        # Layout dwóch kolumn: Lewa dla ustawień, Prawa pusta lub statystyki
         col_rent_settings, col_rent_action = st.columns([1, 2])
         
         with col_rent_settings:
@@ -1496,7 +1495,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                 else:
                     st.caption("Wymagany: Subiekt Excel")
                     
-                # Sprawdź czy jest plik w bazie
                 zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy) 
                 
                 if zapisany_plik_bytes:
@@ -1529,8 +1527,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                         if dane_przygotowane_rent.empty:
                             df_koszty_baza_agg = pd.DataFrame(columns=['koszty_baza_netto', 'koszty_baza_brutto'])
                         else:
-                            # Filtrujemy zakazane ORAZ te, które nie należą do UNIXa (jeśli jesteśmy w UNIXie)
-                            # (np. NOL0935C który jest teraz obcy, nie wejdzie do kosztów rentowności UNIXa)
                             maska_baza = dane_przygotowane_rent['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
                             dane_przygotowane_rent = dane_przygotowane_rent[~maska_baza]
                             df_koszty_baza_agg = dane_przygotowane_rent.groupby('identyfikator_clean').agg(
@@ -1549,11 +1545,15 @@ def render_rentownosc_content(conn, wybrana_firma):
                             how='outer'
                         ).fillna(0)
                         
-                        # --- MODYFIKACJA FILTRA ---
-                        # Usuwa wszystko co zawiera "PTU0002" (niezależnie czy z PL, myślnikiem czy bez)
+                        # --- FILTRY SPECJALNE (PTU0002 i NONE) ---
+                        # Usuwa PTU0002
                         maska_ptu_usun = df_rentownosc.index.astype(str).str.replace(" ", "").str.replace("-", "").str.contains("PTU0002")
                         df_rentownosc = df_rentownosc[~maska_ptu_usun]
-                        # --------------------------
+                        
+                        # Usuwa NONE
+                        maska_none_usun = df_rentownosc.index.astype(str).str.upper() == "NONE"
+                        df_rentownosc = df_rentownosc[~maska_none_usun]
+                        # -----------------------------------------
 
                         maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
                         df_rentownosc = df_rentownosc[~maska_index]
@@ -1590,7 +1590,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                     maska_raw = df_analiza_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global)
                     df_analiza_raw = df_analiza_raw[~maska_raw]
 
-             # Wykresy w zakładkach dla czytelności
              if df_analiza_raw is not None and not df_analiza_raw.empty:
                     tab_chart_kontrahent, tab_chart_pojazd = st.tabs(["🏢 Wykres: Kontrahenci", "🚛 Wykres: Pojazdy"])
                     with tab_chart_kontrahent:
@@ -1625,7 +1624,6 @@ def render_rentownosc_content(conn, wybrana_firma):
              st.subheader("Wyniki Finansowe")
              st.metric("SUMA ZYSK (BRUTTO)", f"{df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'].sum():,.2f} EUR", border=True)
 
-             # Tabela główna
              cols_show = [
                 'przychody_netto', 'przychody_brutto', 
                 'koszty_inne_netto', 'koszty_inne_brutto',
@@ -1648,7 +1646,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                 type="primary"
              )
 
-             # Szczegóły pojazdu
              st.markdown("---")
              st.markdown("##### 🕵️ Analiza szczegółowa pojazdu")
              df_rentownosc_sorted = df_rentownosc.sort_values(by='ZYSK_STRATA_BRUTTO_EUR', ascending=False)
@@ -1851,10 +1848,13 @@ def render_porownanie_content(conn, wybrana_firma):
             df_baza = df_baza[~maska]
 
             # --- FILTR USUWAJĄCY PTU0002 ---
-            # Usuwamy wszystko co ma PTU0002 w nazwie (oczyszczonej ze spacji)
             maska_ptu = df_baza['identyfikator_clean'].astype(str).str.replace(" ", "").str.contains("PTU0002", case=False)
             df_baza = df_baza[~maska_ptu]
-            # -------------------------------
+            
+            # --- FILTR USUWAJĄCY NONE ---
+            maska_none = df_baza['identyfikator_clean'].astype(str).str.upper() == "NONE"
+            df_baza = df_baza[~maska_none]
+            # ----------------------------
             
             # Pivot table
             agg_baza = df_baza.groupby(['identyfikator_clean', 'typ'])['kwota_brutto_eur'].sum().unstack(fill_value=0)
@@ -1871,8 +1871,9 @@ def render_porownanie_content(conn, wybrana_firma):
             plik_analizy.seek(0)
             df_agreg, _ = przetworz_plik_analizy(plik_analizy, d_start, d_stop, wybrana_firma)
             if df_agreg is not None and not df_agreg.empty:
-                # Tutaj też usuwamy PTU0002 z danych z pliku (jeśli by tam było)
+                # Filtr PTU i NONE dla pliku analizy
                 df_agreg = df_agreg[~df_agreg.index.astype(str).str.replace(" ", "").str.contains("PTU0002", case=False)]
+                df_agreg = df_agreg[df_agreg.index.astype(str).str.upper() != "NONE"]
                 
                 agg_analiza = df_agreg[['przychody_brutto', 'koszty_inne_brutto']].copy()
                 agg_analiza.rename(columns={'koszty_inne_brutto': 'KOSZT_SUBIEKT', 'przychody_brutto': 'PRZYCHOD'}, inplace=True)
@@ -1887,7 +1888,7 @@ def render_porownanie_content(conn, wybrana_firma):
         
         return df_full
 
-    # --- LOGIKA PRZYCISKU (Z UŻYCIEM SESSION STATE) ---
+    # --- LOGIKA PRZYCISKU ---
     if 'por_data_ready' not in st.session_state:
         st.session_state.por_data_ready = False
 
@@ -1895,12 +1896,11 @@ def render_porownanie_content(conn, wybrana_firma):
         with st.spinner("Przetwarzanie danych..."):
             df_A = pobierz_agregacje(start_A, stop_A)
             df_B = pobierz_agregacje(start_B, stop_B)
-            # Zapisujemy wyniki do pamięci sesji
             st.session_state.por_df_A = df_A
             st.session_state.por_df_B = df_B
             st.session_state.por_data_ready = True
 
-    # --- WYŚWIETLANIE WYNIKÓW (JESLI DANE SĄ GOTOWE) ---
+    # --- WYŚWIETLANIE ---
     if st.session_state.por_data_ready:
         st.markdown("---")
         df_A = st.session_state.por_df_A
