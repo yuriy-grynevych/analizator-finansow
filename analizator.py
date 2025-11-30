@@ -655,6 +655,13 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         
+        # --- PUŁAPKA NA ZŁE "PL PTU-0002" ---
+        # Jeśli po usunięciu spacji mamy "PLPTU0002", to jest to ten zły wpis ze screena.
+        # Usuwamy go natychmiast.
+        if "PLPTU0002" in key_nospace:
+            return 'Brak Identyfikatora'
+        # ------------------------------------
+
         # --- ZAAWANSOWANE MAPOWANIE DLA UNIX-TRANS ---
         if key_nospace in UNIX_ALIAS_MAPPING:
             return UNIX_ALIAS_MAPPING[key_nospace]
@@ -667,20 +674,26 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
         for firma in FIRMY_DO_USUNIECIA:
             if firma in key_nospace:
                 return 'Brak Identyfikatora'
+
         if key_nospace.startswith("PL") and len(key_nospace) > 7:
             key_nospace = key_nospace[2:] 
+
         if not key_nospace:
              return 'Brak Identyfikatora'
+
         if key_nospace.startswith("("):
             return key 
+
         match = re.search(r'([A-Z0-9]{4,12})', key_nospace)
         if match:
             found = match.group(1)
             if found in FIRMY_DO_USUNIECIA:
                 return 'Brak Identyfikatora'
             return found
+
         if any(char.isdigit() for char in key_nospace):
              return key_nospace
+             
         return 'Brak Identyfikatora'
             
     return s_str.apply(clean_key)
