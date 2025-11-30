@@ -1686,7 +1686,6 @@ def render_rentownosc_content(conn, wybrana_firma):
     except Exception as e:
         st.error(f"Błąd: {e}")
         
-
 def render_refaktury_content(conn, wybrana_firma):
     st.subheader("🔄 Refaktury Kosztów (Wzajemne)")
     st.info("Ta sekcja pokazuje koszty paliwa/opłat poniesione przez jedną firmę na rzecz aut drugiej firmy.")
