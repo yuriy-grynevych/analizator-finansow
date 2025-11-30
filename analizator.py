@@ -65,20 +65,19 @@ NAZWA_POLACZENIA_DB = "db"
 # --- LISTA FIRM ---
 FIRMY = ["HOLIER", "UNIX-TRANS"]
 
-# --- KONFIGURACJA DLA UNIX-TRANS (ZAKTUALIZOWANA - NOL0935C USUNIĘTY) ---
-# Usunięcie NOL0935C z tej listy powoduje, że system traktuje go jako auto obce (Holier)
+# --- KONFIGURACJA DLA UNIX-TRANS ---
 UNIX_FLOTA_CONFIG = {
     'WGM8463A': date(2025, 10, 8),
     'WPR9335N': date(2025, 10, 7),
     'PTU3287F': date(2025, 11, 19),
     'WPR9685N': date(2025, 10, 21),
-    # 'NOL0935C': date(2025, 10, 1), # PRZENIESIONY DO HOLIERA (przez usunięcie stąd)
+    # 'NOL0935C': date(2025, 10, 1), 
 }
 
 UNIX_ALIAS_MAPPING = {
-    'TRUCK3': 'WGM8463A',       
-    'PLTRUCK3': 'WGM8463A',     
-    'PTU0002': 'WGM8463A',     
+    'TRUCK3': 'WGM8463A',        
+    'PLTRUCK3': 'WGM8463A',      
+    'PTU0002': 'WGM8463A',      
 }
 
 # --- SŁOWNIK VAT ---
@@ -103,9 +102,9 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu', 
     'Korekta faktury VAT zakupu', 
     'Rachunek zakupu',
-    'Tankowanie',               
+    'Tankowanie',                
     'Paliwo',
-    'Opłata drogowa',           
+    'Opłata drogowa',            
     'Opłaty drogowe',
     'Opłata drogowa DK',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
@@ -137,7 +136,7 @@ ZAKAZANE_POJAZDY_LISTA = [
     'REGRINDSP',
     'PTU0001',        
     'PTU0002',
-    'ZALICZKA' # Dodano ZALICZKA do globalnego filtra
+    'ZALICZKA'
 ]
 
 def czy_zakazany_pojazd_global(nazwa):
@@ -162,7 +161,6 @@ def pobierz_kurs_eur_pln():
         kurs = response.json()['rates'][0]['mid']
         return kurs
     except requests.exceptions.RequestException as e:
-        # Fallback na sztywno jeśli API padnie, żeby appka działała
         return 4.30
 
 @st.cache_data
@@ -332,7 +330,7 @@ def normalizuj_e100_EN(df_e100, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
-# --- NORMALIZACJA FAKTUROWNI (POPRAWIONA O KONTRAHENTÓW) ---
+# --- NORMALIZACJA FAKTUROWNI ---
 def normalizuj_fakturownia(df_fakt, firma_tag):
     df = df_fakt.copy()
     
@@ -350,7 +348,7 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
         elif 'nip' in c_lower and 'sprzed' in c_lower:
             col_map[c] = 'NIP sprzedającego'
         elif 'nabywca' in c_lower and 'nip' not in c_lower:
-            col_map[c] = 'Nabywca' # MAPOWANIE NABYWCY
+            col_map[c] = 'Nabywca'
         elif 'data wyst' in c_lower:
             col_map[c] = 'Data wystawienia'
         elif 'produkt' in c_lower or 'usługa' in c_lower:
@@ -364,7 +362,6 @@ def normalizuj_fakturownia(df_fakt, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df['Data wystawienia'], errors='coerce')
     
-    # Przeniesienie kontrahenta (Nabywcy)
     if 'Nabywca' in df.columns:
         df_out['kontrahent'] = df['Nabywca']
     else:
@@ -655,13 +652,6 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
         key_nospace = key.upper().replace(" ", "").replace("-", "").strip().strip('"')
         
-        # --- PUŁAPKA NA ZŁE "PL PTU-0002" ---
-        # Jeśli po usunięciu spacji mamy "PLPTU0002", to jest to ten zły wpis ze screena.
-        # Usuwamy go natychmiast.
-       
-        # ------------------------------------
-
-        # --- ZAAWANSOWANE MAPOWANIE DLA UNIX-TRANS ---
         if key_nospace in UNIX_ALIAS_MAPPING:
             return UNIX_ALIAS_MAPPING[key_nospace]
             
@@ -697,7 +687,7 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
     return s_str.apply(clean_key)
 
-# --- PRZYGOTOWANIE DANYCH (ZMODYFIKOWANE DO FILTROWANIA NOL0935C w UNIX) ---
+# --- PRZYGOTOWANIE DANYCH ---
 def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     if dane_z_bazy.empty:
         return dane_z_bazy, None
@@ -720,9 +710,6 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
                 if pojazd in UNIX_FLOTA_CONFIG:
                     return True
                 else:
-                    # To jest kluczowe: Jeśli auto nie jest w UNIX_FLOTA (np. NOL0935C),
-                    # to dla raportu Rentowności/Paliw UNIXa jest ukrywane.
-                    # Zostanie ono wyłapane w module Refaktury (Unix -> Holier).
                     return False
             
             # Jeśli firma to HOLIER (ale płacił Unix przez udostępnienie), sprawdzamy czy to auto UNIXa
@@ -774,7 +761,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     
     return dane_z_bazy, mapa_kursow
 
-# --- LOGIKA REFAKTUR (ZMODYFIKOWANA - DWUKIERUNKOWA) ---
+# --- LOGIKA REFAKTUR ---
 def pobierz_dane_do_refaktury(conn, data_start, data_stop):
     # Pobieramy wszystko z bazy w zakresie dat
     df_all = pobierz_dane_z_bazy(conn, data_start, data_stop, "UNIX-TRANS") # Używamy UNIX-TRANS żeby pobrać szeroki zakres (z logiką OR)
@@ -794,7 +781,6 @@ def pobierz_dane_do_refaktury(conn, data_start, data_stop):
     df_all['kwota_brutto_eur'] = df_all.apply(lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
 
     # 1. KIERUNEK: HOLIER -> UNIX (Unix winien Holierowi)
-    # Źródło: HOLIER (np. karta Holier), ale Pojazd: UNIX
     def filter_holier_to_unix(row):
         pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
         if row['firma'] == 'HOLIER' and pojazd in UNIX_FLOTA_CONFIG:
@@ -805,7 +791,6 @@ def pobierz_dane_do_refaktury(conn, data_start, data_stop):
         return False
 
     # 2. KIERUNEK: UNIX -> HOLIER (Holier winien Unixowi)
-    # Źródło: UNIX (np. E100 Unix), ale Pojazd: HOLIER (czyli brak w UNIX_FLOTA, np. NOL0935C)
     def filter_unix_to_holier(row):
         pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
         if row['firma'] == 'UNIX-TRANS':
@@ -821,7 +806,7 @@ def pobierz_dane_do_refaktury(conn, data_start, data_stop):
 
     return df_holier_to_unix, df_unix_to_holier, mapa_kursow
 
-# --- PARSOWANIE ANALIZY (POPRAWIONE O ZALICZKI I KONTRAHENTÓW) ---
+# --- PARSOWANIE ANALIZY ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
     if wybrana_firma == "UNIX-TRANS":
@@ -877,7 +862,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
              
              # --- FILTR ZALICZEK ---
-             # Usuwamy wiersze gdzie w identyfikatorze lub opisie występuje ZALICZKA
              maska_zaliczka_pojazd = df_wyniki['pojazd_clean'].astype(str).str.contains('ZALICZKA', case=False, na=False)
              maska_zaliczka_opis = df_wyniki['produkt'].astype(str).str.contains('ZALICZKA', case=False, na=False)
              df_wyniki = df_wyniki[~(maska_zaliczka_pojazd | maska_zaliczka_opis)]
@@ -891,9 +875,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              df_wyniki['opis'] = df_wyniki['produkt']
              df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
              
-             # --- KONTRAHENT ---
-             # Jeśli normalizacja znalazła Nabywcę, to już jest w kolumnie 'kontrahent'.
-             # Jeśli puste, wpisujemy 'Brak'
              if 'kontrahent' not in df_wyniki.columns:
                  df_wyniki['kontrahent'] = 'Brak Kontrahenta'
              else:
@@ -913,7 +894,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
              return None, None
 
     # --- KROK 2: SCIEŻKA DLA HOLIER (SUBIEKT EXCEL) ---
-    # ... (Kod dla Holiera pozostaje bez większych zmian, tylko dodano filtrowanie zaliczek jeśli występują)
     MAPA_WALUT_PLIKU = {
         'euro': 'EUR',
         'złoty polski': 'PLN',
@@ -972,7 +952,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
             'LEASING', 'FINANCE', 'UBER', 'BOLT', 'FREE',
             'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
             'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS',
-            'ZALICZKA' # Dodano ZALICZKA do blacklisty
+            'ZALICZKA' 
         ]
         if line_clean in BLACKLIST: return False
         words = re.split(r'[\s+Ii]+', line_clean) 
@@ -1384,7 +1364,11 @@ def render_raport_content(conn, wybrana_firma):
                             df_kraje['VAT'] = df_kraje['Suma_Brutto'] - df_kraje['Suma_Netto']
                             df_kraje = df_kraje[['Suma_Netto', 'VAT', 'Suma_Brutto']]
                             st.bar_chart(df_kraje['Suma_Brutto'], color="#FF4B4B")
-                            st.dataframe(df_kraje.style.format("{:,.2f} EUR"), use_container_width=True)
+                            
+                            # --- MODYFIKACJA LP ---
+                            df_kraje_show = df_kraje.reset_index()
+                            df_kraje_show.insert(0, 'Lp.', range(1, 1 + len(df_kraje_show)))
+                            st.dataframe(df_kraje_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'VAT', 'Suma_Brutto']), use_container_width=True, hide_index=True)
                         
                         st.markdown("##### 🚛 Szczegóły per Pojazd")
                         podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
@@ -1397,7 +1381,12 @@ def render_raport_content(conn, wybrana_firma):
                         podsumowanie_litry = podsumowanie_litry.rename(columns={'Diesel': 'Litry (Diesel)', 'AdBlue': 'Litry (AdBlue)'})
                         podsumowanie_paliwo = podsumowanie_paliwo_kwoty.merge(podsumowanie_litry, left_index=True, right_index=True, how='left').fillna(0)
                         podsumowanie_paliwo = podsumowanie_paliwo.sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                        st.dataframe(podsumowanie_paliwo[['Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 'Litry (Diesel)', 'Litry (AdBlue)']].style.format({'Kwota_Netto_EUR': '{:,.2f} EUR', 'Kwota_Brutto_EUR': '{:,.2f} EUR', 'Litry (Diesel)': '{:,.2f} L', 'Litry (AdBlue)': '{:,.2f} L'}), use_container_width=True)
+                        
+                        # --- MODYFIKACJA LP ---
+                        df_podsumowanie_show = podsumowanie_paliwo[['Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 'Litry (Diesel)', 'Litry (AdBlue)']].reset_index()
+                        df_podsumowanie_show.insert(0, 'Lp.', range(1, 1 + len(df_podsumowanie_show)))
+
+                        st.dataframe(df_podsumowanie_show.style.format({'Kwota_Netto_EUR': '{:,.2f} EUR', 'Kwota_Brutto_EUR': '{:,.2f} EUR', 'Litry (Diesel)': '{:,.2f} L', 'Litry (AdBlue)': '{:,.2f} L'}), use_container_width=True, hide_index=True)
 
                         with st.expander("🔎 Pokaż pojedyncze transakcje"):
                             lista_pojazdow_paliwo = ["--- Wybierz pojazd ---"] + sorted(list(df_paliwo['identyfikator_clean'].unique()))
@@ -1405,8 +1394,13 @@ def render_raport_content(conn, wybrana_firma):
                             if wybrany_pojazd_paliwo != "--- Wybierz pojazd ---":
                                 df_szczegoly = df_paliwo[df_paliwo['identyfikator_clean'] == wybrany_pojazd_paliwo].sort_values(by='data_transakcji_dt', ascending=False)
                                 df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'produkt', 'kraj', 'ilosc', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                
+                                # --- MODYFIKACJA LP ---
+                                df_szczegoly_display = df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'kraj': 'Kraj', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                                df_szczegoly_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_display)))
+                                
                                 st.dataframe(
-                                    df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'kraj': 'Kraj', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                    df_szczegoly_display,
                                     use_container_width=True, hide_index=True,
                                     column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Litry": st.column_config.NumberColumn(format="%.2f L"),}
                                 )
@@ -1420,7 +1414,11 @@ def render_raport_content(conn, wybrana_firma):
                               Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                               Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                           ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                          st.dataframe(podsumowanie_oplaty.style.format("{:,.2f} EUR"), use_container_width=True)
+                          
+                          # --- MODYFIKACJA LP ---
+                          df_oplaty_show = podsumowanie_oplaty.reset_index()
+                          df_oplaty_show.insert(0, 'Lp.', range(1, 1 + len(df_oplaty_show)))
+                          st.dataframe(df_oplaty_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
                           
                           with st.expander("🔎 Pokaż pojedyncze transakcje"):
                               lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
@@ -1428,8 +1426,13 @@ def render_raport_content(conn, wybrana_firma):
                               if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
                                  df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
                                  df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                 
+                                 # --- MODYFIKACJA LP ---
+                                 df_szczegoly_oplaty_display = df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                                 df_szczegoly_oplaty_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_oplaty_display)))
+
                                  st.dataframe(
-                                     df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                     df_szczegoly_oplaty_display,
                                      use_container_width=True, hide_index=True,
                                      column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
                                  )
@@ -1445,7 +1448,11 @@ def render_raport_content(conn, wybrana_firma):
                               Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                               Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                           ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                          st.dataframe(podsumowanie_inne.style.format("{:,.2f} EUR"), use_container_width=True)
+                          
+                          # --- MODYFIKACJA LP ---
+                          df_inne_show = podsumowanie_inne.reset_index()
+                          df_inne_show.insert(0, 'Lp.', range(1, 1 + len(df_inne_show)))
+                          st.dataframe(df_inne_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
 
                           with st.expander("🔎 Pokaż pojedyncze transakcje"):
                               lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
@@ -1453,8 +1460,13 @@ def render_raport_content(conn, wybrana_firma):
                               if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
                                  df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
                                  df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                 
+                                 # --- MODYFIKACJA LP ---
+                                 df_szczegoly_inne_display = df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                                 df_szczegoly_inne_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_inne_display)))
+
                                  st.dataframe(
-                                     df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'}),
+                                     df_szczegoly_inne_display,
                                      use_container_width=True, hide_index=True,
                                      column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
                                  )
@@ -1465,8 +1477,7 @@ def render_raport_content(conn, wybrana_firma):
              st.warning("Baza danych nie jest gotowa. Przejdź do Panelu Admina.")
         else:
              st.error(f"Błąd: {e}")
-
-def render_rentownosc_content(conn, wybrana_firma):
+            def render_rentownosc_content(conn, wybrana_firma):
     st.subheader("Analiza Rentowności")
     try:
         min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
@@ -1498,10 +1509,10 @@ def render_rentownosc_content(conn, wybrana_firma):
                 zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy) 
                 
                 if zapisany_plik_bytes:
-                     st.success(f"Znaleziono w bazie: {nazwa_pliku_analizy}")
-                     plik_analizy = io.BytesIO(zapisany_plik_bytes)
-                     if st.button("❌ Usuń zapisany plik", use_container_width=True):
-                         usun_plik_z_bazy(conn, nazwa_pliku_analizy)
+                      st.success(f"Znaleziono w bazie: {nazwa_pliku_analizy}")
+                      plik_analizy = io.BytesIO(zapisany_plik_bytes)
+                      if st.button("❌ Usuń zapisany plik", use_container_width=True):
+                          usun_plik_z_bazy(conn, nazwa_pliku_analizy)
                 else:
                     uploaded_file = st.file_uploader(f"Wgraj {nazwa_pliku_analizy}", type=['xlsx', 'csv', 'xls'])
                     if uploaded_file:
@@ -1546,11 +1557,9 @@ def render_rentownosc_content(conn, wybrana_firma):
                         ).fillna(0)
                         
                         # --- FILTRY SPECJALNE (PTU0002 i NONE) ---
-                        # Usuwa PTU0002
                         maska_ptu_usun = df_rentownosc.index.astype(str).str.replace(" ", "").str.replace("-", "").str.contains("PTU0002")
                         df_rentownosc = df_rentownosc[~maska_ptu_usun]
                         
-                        # Usuwa NONE
                         maska_none_usun = df_rentownosc.index.astype(str).str.upper() == "NONE"
                         df_rentownosc = df_rentownosc[~maska_none_usun]
                         # -----------------------------------------
@@ -1610,10 +1619,15 @@ def render_rentownosc_content(conn, wybrana_firma):
                                 )
                                 if wybrany_kontrahent_view:
                                     df_show = df_chart_kontr[df_chart_kontr['kontrahent'].isin(wybrany_kontrahent_view)]
+                                    
+                                    # --- MODYFIKACJA LP ---
+                                    df_show_display = df_show[['data', 'pojazd_clean', 'opis', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
+                                    df_show_display.insert(0, 'Lp.', range(1, 1 + len(df_show_display)))
+
                                     st.dataframe(
-                                        df_show[['data', 'pojazd_clean', 'opis', 'kwota_netto_eur', 'kwota_brutto_eur']].style.format({
-                                            'kwota_netto_eur': '{:,.2f} EUR', 'kwota_brutto_eur': '{:,.2f} EUR'
-                                        }), use_container_width=True, hide_index=True
+                                        df_show_display.style.format({'kwota_netto_eur': '{:,.2f} EUR', 'kwota_brutto_eur': '{:,.2f} EUR'}), 
+                                        use_container_width=True, 
+                                        hide_index=True
                                     )
                     with tab_chart_pojazd:
                         df_chart_poj = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
@@ -1633,7 +1647,11 @@ def render_rentownosc_content(conn, wybrana_firma):
              if 'Główny Kontrahent' in df_rentownosc.columns:
                  cols_show.insert(0, 'Główny Kontrahent')
              
-             st.dataframe(df_rentownosc[cols_show].style.format("{:,.2f} EUR", subset=['przychody_netto', 'przychody_brutto', 'koszty_inne_netto', 'koszty_inne_brutto', 'koszty_baza_netto', 'koszty_baza_brutto', 'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR']), use_container_width=True)
+             # --- MODYFIKACJA LP ---
+             df_rent_show = df_rentownosc[cols_show].reset_index().rename(columns={'index': 'Pojazd'})
+             df_rent_show.insert(0, 'Lp.', range(1, 1 + len(df_rent_show)))
+
+             st.dataframe(df_rent_show.style.format("{:,.2f} EUR", subset=['przychody_netto', 'przychody_brutto', 'koszty_inne_netto', 'koszty_inne_brutto', 'koszty_baza_netto', 'koszty_baza_brutto', 'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR']), use_container_width=True, hide_index=True)
              
              dane_bazy_raw_export = st.session_state.get('dane_bazy_raw')
              df_analiza_raw = st.session_state.get('dane_analizy_raw')
@@ -1697,6 +1715,10 @@ def render_rentownosc_content(conn, wybrana_firma):
                             if pd.isna(val): return ''
                             color = 'red' if val < 0 else 'green'
                             return f'color: {color}'
+                        
+                        # --- MODYFIKACJA LP ---
+                        combined_details.insert(0, 'Lp.', range(1, 1 + len(combined_details)))
+
                         st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR"), "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)", format="%.2f EUR")})
                     else:
                         st.info("Brak szczegółów.")
@@ -1745,18 +1767,27 @@ def render_refaktury_content(conn, wybrana_firma):
                         Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                         Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                     ).sort_values(by='Suma_Brutto', ascending=False)
-                    st.dataframe(agg_ref.style.format("{:,.2f} EUR"), use_container_width=True)
+                    
+                    # --- MODYFIKACJA LP ---
+                    agg_ref_show = agg_ref.reset_index()
+                    agg_ref_show.insert(0, 'Lp.', range(1, 1 + len(agg_ref_show)))
+                    st.dataframe(agg_ref_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
                     
                     with st.expander("Szczegóły transakcji"):
+                        # --- MODYFIKACJA LP ---
+                        df_ref_show = df_holier_to_unix[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False).copy()
+                        df_ref_show.insert(0, 'Lp.', range(1, 1 + len(df_ref_show)))
+
                         st.dataframe(
-                            df_holier_to_unix[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False),
+                            df_ref_show,
                             use_container_width=True,
+                            hide_index=True,
                             column_config={
                                 "data_transakcji_dt": st.column_config.DatetimeColumn("Data", format="YYYY-MM-DD HH:mm"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto", format="%.2f EUR")
                             }
                         )
 
-            # --- TAB 2: UNIX PLACI ZA HOLIER (np. NOL0935C) ---
+            # --- TAB 2: UNIX PLACI ZA HOLIER ---
             with tab_u2h:
                 st.markdown("### Koszty UNIX na rzecz aut Holiera (np. NOL0935C)")
                 if df_unix_to_holier is None or df_unix_to_holier.empty:
@@ -1771,12 +1802,21 @@ def render_refaktury_content(conn, wybrana_firma):
                         Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                         Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                     ).sort_values(by='Suma_Brutto', ascending=False)
-                    st.dataframe(agg_ref_2.style.format("{:,.2f} EUR"), use_container_width=True)
+                    
+                    # --- MODYFIKACJA LP ---
+                    agg_ref_2_show = agg_ref_2.reset_index()
+                    agg_ref_2_show.insert(0, 'Lp.', range(1, 1 + len(agg_ref_2_show)))
+                    st.dataframe(agg_ref_2_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
                     
                     with st.expander("Szczegóły transakcji"):
+                        # --- MODYFIKACJA LP ---
+                        df_ref_show_2 = df_unix_to_holier[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False).copy()
+                        df_ref_show_2.insert(0, 'Lp.', range(1, 1 + len(df_ref_show_2)))
+
                         st.dataframe(
-                            df_unix_to_holier[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False),
+                            df_ref_show_2,
                             use_container_width=True,
+                            hide_index=True,
                             column_config={
                                 "data_transakcji_dt": st.column_config.DatetimeColumn("Data", format="YYYY-MM-DD HH:mm"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto", format="%.2f EUR")
                             }
@@ -1936,10 +1976,16 @@ def render_porownanie_content(conn, wybrana_firma):
                 df_merge['Różnica'] = df_merge['FILTERED_COST_A'] - df_merge['FILTERED_COST_B']
                 df_merge = df_merge.sort_values(by='FILTERED_COST_A', ascending=False)
                 
+                # --- MODYFIKACJA LP ---
+                df_merge_show = df_merge.reset_index()
+                df_merge_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_show)))
+
                 st.dataframe(
-                    df_merge.style.format("{:,.2f} EUR").applymap(color_negative_good, subset=['Różnica']),
+                    df_merge_show.style.format("{:,.2f} EUR", subset=['FILTERED_COST_A', 'FILTERED_COST_B', 'Różnica']).applymap(color_negative_good, subset=['Różnica']),
                     use_container_width=True,
+                    hide_index=True,
                     column_config={
+                        "identyfikator_clean": "Pojazd",
                         "FILTERED_COST_A": st.column_config.NumberColumn("Koszt A", format="%.2f EUR"),
                         "FILTERED_COST_B": st.column_config.NumberColumn("Koszt B", format="%.2f EUR"),
                         "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
@@ -1961,11 +2007,17 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_rev = df_A[['PRZYCHOD']].join(df_B[['PRZYCHOD']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
             df_merge_rev['Różnica'] = df_merge_rev['PRZYCHOD_A'] - df_merge_rev['PRZYCHOD_B']
             df_merge_rev = df_merge_rev.sort_values(by='PRZYCHOD_A', ascending=False)
+            
+            # --- MODYFIKACJA LP ---
+            df_merge_rev_show = df_merge_rev.reset_index()
+            df_merge_rev_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_rev_show)))
 
             st.dataframe(
-                df_merge_rev.style.format("{:,.2f} EUR").applymap(color_positive_good, subset=['Różnica']),
+                df_merge_rev_show.style.format("{:,.2f} EUR").applymap(color_positive_good, subset=['Różnica']),
                 use_container_width=True,
+                hide_index=True,
                 column_config={
+                    "identyfikator_clean": "Pojazd",
                     "PRZYCHOD_A": st.column_config.NumberColumn("Przychód A", format="%.2f EUR"),
                     "PRZYCHOD_B": st.column_config.NumberColumn("Przychód B", format="%.2f EUR"),
                     "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
@@ -1988,10 +2040,16 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_zysk['Różnica'] = df_merge_zysk['ZYSK_A'] - df_merge_zysk['ZYSK_B']
             df_merge_zysk = df_merge_zysk.sort_values(by='ZYSK_A', ascending=False)
             
+            # --- MODYFIKACJA LP ---
+            df_merge_zysk_show = df_merge_zysk.reset_index()
+            df_merge_zysk_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_zysk_show)))
+            
             st.dataframe(
-                df_merge_zysk.style.format("{:,.2f} EUR").applymap(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
+                df_merge_zysk_show.style.format("{:,.2f} EUR").applymap(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
                 use_container_width=True,
+                hide_index=True,
                 column_config={
+                    "identyfikator_clean": "Pojazd",
                     "ZYSK_A": st.column_config.NumberColumn("Zysk A", format="%.2f EUR"),
                     "ZYSK_B": st.column_config.NumberColumn("Zysk B", format="%.2f EUR"),
                     "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
@@ -2041,7 +2099,7 @@ def main_app():
             st.session_state.active_view = 'Refaktury'
             st.session_state.show_admin = False
             st.rerun()
-        # --- NOWY PRZYCISK PORÓWNANIE ---
+        
         comp_type = "primary" if st.session_state.active_view == 'Porównanie' and not is_admin else "secondary"
         if st.button("Porównanie", type=comp_type, use_container_width=True):
             st.session_state.active_view = 'Porównanie'
@@ -2072,7 +2130,7 @@ def main_app():
             render_rentownosc_content(conn, firma)
         elif st.session_state.active_view == 'Refaktury':
             render_refaktury_content(conn, firma)
-        elif st.session_state.active_view == 'Porównanie':  # <--- DODANE
+        elif st.session_state.active_view == 'Porównanie':  
             render_porownanie_content(conn, firma)
 
 def check_password():
