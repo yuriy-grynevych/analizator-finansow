@@ -1763,11 +1763,23 @@ def render_refaktury_content(conn, wybrana_firma):
                             }
                         )
                 
-    except Exception as e:
-        st.error(f"Błąd: {e}")
-def render_porownanie_content(conn, wybrana_firma):
+    def render_porownanie_content(conn, wybrana_firma):
     st.subheader("📊 Porównanie Okresów")
     st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
+
+    # --- DEFINICJE FUNKCJI KOLORUJĄCYCH ---
+    # Dla przychodów i zysków: wzrost (plus) = zielony, spadek (minus) = czerwony
+    def color_positive_good(val):
+        if pd.isna(val) or val == 0: return ''
+        color = '#c9f7c9' if val > 0 else '#ffbdbd' # jasny zielony / jasny czerwony
+        return f'background-color: {color}; color: black'
+
+    # Dla wydatków: spadek (minus) = zielony, wzrost (plus) = czerwony
+    def color_negative_good(val):
+        if pd.isna(val) or val == 0: return ''
+        color = '#c9f7c9' if val < 0 else '#ffbdbd' # jasny zielony / jasny czerwony
+        return f'background-color: {color}; color: black'
+    # ---------------------------------------
 
     # --- KONFIGURACJA DAT (BIEŻĄCY VS POPRZEDNI) ---
     today = date.today()
@@ -1873,7 +1885,8 @@ def render_porownanie_content(conn, wybrana_firma):
                 sum_A = df_A['FILTERED_COST'].sum()
                 sum_B = df_B['FILTERED_COST'].sum()
                 diff = sum_A - sum_B
-                delta_color = "inverse" # Im mniej wydatków tym lepiej (zielony przy minusie)
+                # Im mniej wydatków tym lepiej (zielony przy minusie)
+                delta_color = "inverse" 
 
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Wydatki Okres A", f"{sum_A:,.2f} EUR")
@@ -1885,8 +1898,10 @@ def render_porownanie_content(conn, wybrana_firma):
                 df_merge['Różnica'] = df_merge['FILTERED_COST_A'] - df_merge['FILTERED_COST_B']
                 df_merge = df_merge.sort_values(by='FILTERED_COST_A', ascending=False)
                 
+                # KOLOROWANIE: Ujemna różnica (spadek kosztów) na zielono
                 st.dataframe(
-                    df_merge.style.format("{:,.2f} EUR").background_gradient(cmap="Reds", subset=['FILTERED_COST_A']),
+                    df_merge.style.format("{:,.2f} EUR")
+                    .applymap(color_negative_good, subset=['Różnica']),
                     use_container_width=True,
                     column_config={
                         "FILTERED_COST_A": st.column_config.NumberColumn("Koszt A", format="%.2f EUR"),
@@ -1912,8 +1927,10 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_rev['Różnica'] = df_merge_rev['PRZYCHOD_A'] - df_merge_rev['PRZYCHOD_B']
             df_merge_rev = df_merge_rev.sort_values(by='PRZYCHOD_A', ascending=False)
 
+            # KOLOROWANIE: Dodatnia różnica (wzrost przychodów) na zielono
             st.dataframe(
-                df_merge_rev.style.format("{:,.2f} EUR").background_gradient(cmap="Greens", subset=['PRZYCHOD_A']),
+                df_merge_rev.style.format("{:,.2f} EUR")
+                .applymap(color_positive_good, subset=['Różnica']),
                 use_container_width=True,
                 column_config={
                     "PRZYCHOD_A": st.column_config.NumberColumn("Przychód A", format="%.2f EUR"),
@@ -1940,13 +1957,10 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_zysk['Różnica'] = df_merge_zysk['ZYSK_A'] - df_merge_zysk['ZYSK_B']
             df_merge_zysk = df_merge_zysk.sort_values(by='ZYSK_A', ascending=False)
             
-            # Kolorowanie warunkowe dla tabeli zysków
-            def color_profit(val):
-                color = '#ffbdbd' if val < 0 else '#c9f7c9' # Lekki czerwony / Lekki zielony
-                return f'background-color: {color}; color: black'
-
+            # KOLOROWANIE: Zysk/Wzrost na zielono, Strata/Spadek na czerwono
             st.dataframe(
-                df_merge_zysk.style.format("{:,.2f} EUR").applymap(color_profit, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
+                df_merge_zysk.style.format("{:,.2f} EUR")
+                .applymap(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
                 use_container_width=True,
                 column_config={
                     "ZYSK_A": st.column_config.NumberColumn("Zysk A", format="%.2f EUR"),
@@ -1954,7 +1968,6 @@ def render_porownanie_content(conn, wybrana_firma):
                     "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
                 }
             )
-
 # --- GŁÓWNA APLIKACJA ---
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
