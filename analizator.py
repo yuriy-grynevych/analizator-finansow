@@ -1770,210 +1770,210 @@ def render_refaktury_content(conn, wybrana_firma):
 
                 
     def render_porownanie_content(conn, wybrana_firma):
-    st.subheader("📊 Porównanie Okresów")
-    st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
-
-    # --- DEFINICJE FUNKCJI KOLORUJĄCYCH ---
-    # Dla przychodów i zysków: wzrost (plus) = zielony, spadek (minus) = czerwony
-    def color_positive_good(val):
-        if pd.isna(val) or val == 0: return ''
-        color = '#c9f7c9' if val > 0 else '#ffbdbd' # jasny zielony / jasny czerwony
-        return f'background-color: {color}; color: black'
-
-    # Dla wydatków: spadek (minus) = zielony, wzrost (plus) = czerwony
-    def color_negative_good(val):
-        if pd.isna(val) or val == 0: return ''
-        color = '#c9f7c9' if val < 0 else '#ffbdbd' # jasny zielony / jasny czerwony
-        return f'background-color: {color}; color: black'
-    # ---------------------------------------
-
-    # --- KONFIGURACJA DAT (BIEŻĄCY VS POPRZEDNI) ---
-    today = date.today()
-    first_current = today.replace(day=1)
+        st.subheader("📊 Porównanie Okresów")
+        st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
     
-    # Domyślnie poprzedni miesiąc
-    last_month_end = first_current - pd.Timedelta(days=1)
-    last_month_start = last_month_end.replace(day=1)
-
-    with st.expander("📅 Konfiguracja Okresów", expanded=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### Okres A (Bieżący/Bazowy)")
-            start_A = st.date_input("Start A", value=first_current, key="start_A")
-            stop_A = st.date_input("Stop A", value=today, key="stop_A")
-        with c2:
-            st.markdown("##### Okres B (Do porównania)")
-            start_B = st.date_input("Start B", value=last_month_start, key="start_B")
-            stop_B = st.date_input("Stop B", value=last_month_end, key="stop_B")
-
-    # --- OBSŁUGA PLIKU ANALIZY (PRZYCHODY/KOSZTY SUBIEKT) ---
-    plik_analizy = None 
-    nazwa_pliku_analizy = "analiza.xlsx"
-    if wybrana_firma == "UNIX-TRANS":
-        nazwa_pliku_analizy = "fakturownia.csv"
+        # --- DEFINICJE FUNKCJI KOLORUJĄCYCH ---
+        # Dla przychodów i zysków: wzrost (plus) = zielony, spadek (minus) = czerwony
+        def color_positive_good(val):
+            if pd.isna(val) or val == 0: return ''
+            color = '#c9f7c9' if val > 0 else '#ffbdbd' # jasny zielony / jasny czerwony
+            return f'background-color: {color}; color: black'
     
-    zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy)
-    if zapisany_plik_bytes:
-        plik_analizy = io.BytesIO(zapisany_plik_bytes)
-    else:
-        st.warning(f"Brak zapisanego pliku {nazwa_pliku_analizy} w bazie. Dane z Subiekta/Fakturowni nie będą dostępne.")
-        uploaded = st.file_uploader(f"Wgraj tymczasowo {nazwa_pliku_analizy}", type=['xlsx', 'csv', 'xls'], key="por_upload")
-        if uploaded:
-            plik_analizy = uploaded
-
-    # --- FUNKCJA POMOCNICZA DO POBIERANIA DANYCH DLA JEDNEGO OKRESU ---
-    def pobierz_agregacje(d_start, d_stop):
-        # 1. Dane z Bazy (Paliwo/Opłaty)
-        df_baza = pobierz_dane_z_bazy(conn, d_start, d_stop, wybrana_firma)
-        df_baza, _ = przygotuj_dane_paliwowe(df_baza.copy(), wybrana_firma)
+        # Dla wydatków: spadek (minus) = zielony, wzrost (plus) = czerwony
+        def color_negative_good(val):
+            if pd.isna(val) or val == 0: return ''
+            color = '#c9f7c9' if val < 0 else '#ffbdbd' # jasny zielony / jasny czerwony
+            return f'background-color: {color}; color: black'
+        # ---------------------------------------
+    
+        # --- KONFIGURACJA DAT (BIEŻĄCY VS POPRZEDNI) ---
+        today = date.today()
+        first_current = today.replace(day=1)
         
-        agg_baza = pd.DataFrame()
-        if df_baza is not None and not df_baza.empty:
-            # Filtrowanie zakazanych
-            maska = df_baza['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
-            df_baza = df_baza[~maska]
-            
-            # Pivot table dla typów kosztów
-            agg_baza = df_baza.groupby(['identyfikator_clean', 'typ'])['kwota_brutto_eur'].sum().unstack(fill_value=0)
-            # Upewnij się, że kolumny istnieją
-            for col in ['PALIWO', 'OPŁATA', 'INNE']:
-                if col not in agg_baza.columns: agg_baza[col] = 0.0
-            
-            agg_baza['SUMA_BAZA'] = agg_baza['PALIWO'] + agg_baza['OPŁATA'] + agg_baza['INNE']
+        # Domyślnie poprzedni miesiąc
+        last_month_end = first_current - pd.Timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+    
+        with st.expander("📅 Konfiguracja Okresów", expanded=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("##### Okres A (Bieżący/Bazowy)")
+                start_A = st.date_input("Start A", value=first_current, key="start_A")
+                stop_A = st.date_input("Stop A", value=today, key="stop_A")
+            with c2:
+                st.markdown("##### Okres B (Do porównania)")
+                start_B = st.date_input("Start B", value=last_month_start, key="start_B")
+                stop_B = st.date_input("Stop B", value=last_month_end, key="stop_B")
+    
+        # --- OBSŁUGA PLIKU ANALIZY (PRZYCHODY/KOSZTY SUBIEKT) ---
+        plik_analizy = None 
+        nazwa_pliku_analizy = "analiza.xlsx"
+        if wybrana_firma == "UNIX-TRANS":
+            nazwa_pliku_analizy = "fakturownia.csv"
+        
+        zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy)
+        if zapisany_plik_bytes:
+            plik_analizy = io.BytesIO(zapisany_plik_bytes)
         else:
-            agg_baza = pd.DataFrame(columns=['PALIWO', 'OPŁATA', 'INNE', 'SUMA_BAZA'])
-
-        # 2. Dane z Pliku (Subiekt)
-        agg_analiza = pd.DataFrame()
-        if plik_analizy:
-            # Ważne: musimy przewinąć wskaźnik pliku na początek dla każdego odczytu
-            plik_analizy.seek(0)
-            df_agreg, _ = przetworz_plik_analizy(plik_analizy, d_start, d_stop, wybrana_firma)
-            if df_agreg is not None and not df_agreg.empty:
-                agg_analiza = df_agreg[['przychody_brutto', 'koszty_inne_brutto']].copy()
-                agg_analiza.rename(columns={'koszty_inne_brutto': 'KOSZT_SUBIEKT', 'przychody_brutto': 'PRZYCHOD'}, inplace=True)
-        
-        if agg_analiza.empty:
-            agg_analiza = pd.DataFrame(columns=['PRZYCHOD', 'KOSZT_SUBIEKT'])
-
-        # 3. Łączenie (Merge)
-        df_full = agg_baza.join(agg_analiza, how='outer').fillna(0)
-        df_full['ZYSK'] = df_full.get('PRZYCHOD', 0) - df_full.get('SUMA_BAZA', 0) - df_full.get('KOSZT_SUBIEKT', 0)
-        df_full['KOSZTY_TOTAL'] = df_full.get('SUMA_BAZA', 0) + df_full.get('KOSZT_SUBIEKT', 0)
-        
-        return df_full
-
-    if st.button("🚀 Generuj Porównanie", type="primary", use_container_width=True):
-        with st.spinner("Pobieranie i przetwarzanie danych dla obu okresów..."):
-            df_A = pobierz_agregacje(start_A, stop_A)
-            df_B = pobierz_agregacje(start_B, stop_B)
-
-        st.markdown("---")
-        
-        # --- ZAKŁADKI ---
-        tab_wydatki, tab_przychody, tab_zyski = st.tabs(["💸 Wydatki", "💰 Przychody", "📈 Zyski"])
-
-        # === TAB 1: WYDATKI ===
-        with tab_wydatki:
-            st.markdown("#### Porównanie Wydatków")
+            st.warning(f"Brak zapisanego pliku {nazwa_pliku_analizy} w bazie. Dane z Subiekta/Fakturowni nie będą dostępne.")
+            uploaded = st.file_uploader(f"Wgraj tymczasowo {nazwa_pliku_analizy}", type=['xlsx', 'csv', 'xls'], key="por_upload")
+            if uploaded:
+                plik_analizy = uploaded
+    
+        # --- FUNKCJA POMOCNICZA DO POBIERANIA DANYCH DLA JEDNEGO OKRESU ---
+        def pobierz_agregacje(d_start, d_stop):
+            # 1. Dane z Bazy (Paliwo/Opłaty)
+            df_baza = pobierz_dane_z_bazy(conn, d_start, d_stop, wybrana_firma)
+            df_baza, _ = przygotuj_dane_paliwowe(df_baza.copy(), wybrana_firma)
             
-            # Filtry
-            opcje_kosztow = ['PALIWO', 'OPŁATA', 'INNE', 'KOSZT_SUBIEKT']
-            wybrane_koszty = st.multiselect("Wybierz składniki kosztów:", opcje_kosztow, default=opcje_kosztow)
-            
-            if not wybrane_koszty:
-                st.warning("Wybierz przynajmniej jedną kategorię kosztów.")
+            agg_baza = pd.DataFrame()
+            if df_baza is not None and not df_baza.empty:
+                # Filtrowanie zakazanych
+                maska = df_baza['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
+                df_baza = df_baza[~maska]
+                
+                # Pivot table dla typów kosztów
+                agg_baza = df_baza.groupby(['identyfikator_clean', 'typ'])['kwota_brutto_eur'].sum().unstack(fill_value=0)
+                # Upewnij się, że kolumny istnieją
+                for col in ['PALIWO', 'OPŁATA', 'INNE']:
+                    if col not in agg_baza.columns: agg_baza[col] = 0.0
+                
+                agg_baza['SUMA_BAZA'] = agg_baza['PALIWO'] + agg_baza['OPŁATA'] + agg_baza['INNE']
             else:
-                # Obliczanie sumy wg filtrów
-                df_A['FILTERED_COST'] = df_A[wybrane_koszty].sum(axis=1)
-                df_B['FILTERED_COST'] = df_B[wybrane_koszty].sum(axis=1)
+                agg_baza = pd.DataFrame(columns=['PALIWO', 'OPŁATA', 'INNE', 'SUMA_BAZA'])
+    
+            # 2. Dane z Pliku (Subiekt)
+            agg_analiza = pd.DataFrame()
+            if plik_analizy:
+                # Ważne: musimy przewinąć wskaźnik pliku na początek dla każdego odczytu
+                plik_analizy.seek(0)
+                df_agreg, _ = przetworz_plik_analizy(plik_analizy, d_start, d_stop, wybrana_firma)
+                if df_agreg is not None and not df_agreg.empty:
+                    agg_analiza = df_agreg[['przychody_brutto', 'koszty_inne_brutto']].copy()
+                    agg_analiza.rename(columns={'koszty_inne_brutto': 'KOSZT_SUBIEKT', 'przychody_brutto': 'PRZYCHOD'}, inplace=True)
+            
+            if agg_analiza.empty:
+                agg_analiza = pd.DataFrame(columns=['PRZYCHOD', 'KOSZT_SUBIEKT'])
+    
+            # 3. Łączenie (Merge)
+            df_full = agg_baza.join(agg_analiza, how='outer').fillna(0)
+            df_full['ZYSK'] = df_full.get('PRZYCHOD', 0) - df_full.get('SUMA_BAZA', 0) - df_full.get('KOSZT_SUBIEKT', 0)
+            df_full['KOSZTY_TOTAL'] = df_full.get('SUMA_BAZA', 0) + df_full.get('KOSZT_SUBIEKT', 0)
+            
+            return df_full
+    
+        if st.button("🚀 Generuj Porównanie", type="primary", use_container_width=True):
+            with st.spinner("Pobieranie i przetwarzanie danych dla obu okresów..."):
+                df_A = pobierz_agregacje(start_A, stop_A)
+                df_B = pobierz_agregacje(start_B, stop_B)
+    
+            st.markdown("---")
+            
+            # --- ZAKŁADKI ---
+            tab_wydatki, tab_przychody, tab_zyski = st.tabs(["💸 Wydatki", "💰 Przychody", "📈 Zyski"])
+    
+            # === TAB 1: WYDATKI ===
+            with tab_wydatki:
+                st.markdown("#### Porównanie Wydatków")
                 
-                sum_A = df_A['FILTERED_COST'].sum()
-                sum_B = df_B['FILTERED_COST'].sum()
-                diff = sum_A - sum_B
-                # Im mniej wydatków tym lepiej (zielony przy minusie)
-                delta_color = "inverse" 
-
+                # Filtry
+                opcje_kosztow = ['PALIWO', 'OPŁATA', 'INNE', 'KOSZT_SUBIEKT']
+                wybrane_koszty = st.multiselect("Wybierz składniki kosztów:", opcje_kosztow, default=opcje_kosztow)
+                
+                if not wybrane_koszty:
+                    st.warning("Wybierz przynajmniej jedną kategorię kosztów.")
+                else:
+                    # Obliczanie sumy wg filtrów
+                    df_A['FILTERED_COST'] = df_A[wybrane_koszty].sum(axis=1)
+                    df_B['FILTERED_COST'] = df_B[wybrane_koszty].sum(axis=1)
+                    
+                    sum_A = df_A['FILTERED_COST'].sum()
+                    sum_B = df_B['FILTERED_COST'].sum()
+                    diff = sum_A - sum_B
+                    # Im mniej wydatków tym lepiej (zielony przy minusie)
+                    delta_color = "inverse" 
+    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Wydatki Okres A", f"{sum_A:,.2f} EUR")
+                    c2.metric("Wydatki Okres B", f"{sum_B:,.2f} EUR")
+                    c3.metric("Różnica (A - B)", f"{diff:,.2f} EUR", delta=f"{diff:,.2f} EUR", delta_color=delta_color)
+    
+                    # Tabela szczegółowa
+                    df_merge = df_A[['FILTERED_COST']].join(df_B[['FILTERED_COST']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
+                    df_merge['Różnica'] = df_merge['FILTERED_COST_A'] - df_merge['FILTERED_COST_B']
+                    df_merge = df_merge.sort_values(by='FILTERED_COST_A', ascending=False)
+                    
+                    # KOLOROWANIE: Ujemna różnica (spadek kosztów) na zielono
+                    st.dataframe(
+                        df_merge.style.format("{:,.2f} EUR")
+                        .applymap(color_negative_good, subset=['Różnica']),
+                        use_container_width=True,
+                        column_config={
+                            "FILTERED_COST_A": st.column_config.NumberColumn("Koszt A", format="%.2f EUR"),
+                            "FILTERED_COST_B": st.column_config.NumberColumn("Koszt B", format="%.2f EUR"),
+                            "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
+                        }
+                    )
+    
+            # === TAB 2: PRZYCHODY ===
+            with tab_przychody:
+                st.markdown("#### Porównanie Przychodów")
+                
+                rev_A = df_A['PRZYCHOD'].sum()
+                rev_B = df_B['PRZYCHOD'].sum()
+                diff_rev = rev_A - rev_B
+                
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Wydatki Okres A", f"{sum_A:,.2f} EUR")
-                c2.metric("Wydatki Okres B", f"{sum_B:,.2f} EUR")
-                c3.metric("Różnica (A - B)", f"{diff:,.2f} EUR", delta=f"{diff:,.2f} EUR", delta_color=delta_color)
-
-                # Tabela szczegółowa
-                df_merge = df_A[['FILTERED_COST']].join(df_B[['FILTERED_COST']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
-                df_merge['Różnica'] = df_merge['FILTERED_COST_A'] - df_merge['FILTERED_COST_B']
-                df_merge = df_merge.sort_values(by='FILTERED_COST_A', ascending=False)
-                
-                # KOLOROWANIE: Ujemna różnica (spadek kosztów) na zielono
+                c1.metric("Przychód Okres A", f"{rev_A:,.2f} EUR")
+                c2.metric("Przychód Okres B", f"{rev_B:,.2f} EUR")
+                c3.metric("Różnica (A - B)", f"{diff_rev:,.2f} EUR", delta=f"{diff_rev:,.2f} EUR") # Zielony przy plusie
+    
+                df_merge_rev = df_A[['PRZYCHOD']].join(df_B[['PRZYCHOD']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
+                df_merge_rev['Różnica'] = df_merge_rev['PRZYCHOD_A'] - df_merge_rev['PRZYCHOD_B']
+                df_merge_rev = df_merge_rev.sort_values(by='PRZYCHOD_A', ascending=False)
+    
+                # KOLOROWANIE: Dodatnia różnica (wzrost przychodów) na zielono
                 st.dataframe(
-                    df_merge.style.format("{:,.2f} EUR")
-                    .applymap(color_negative_good, subset=['Różnica']),
+                    df_merge_rev.style.format("{:,.2f} EUR")
+                    .applymap(color_positive_good, subset=['Różnica']),
                     use_container_width=True,
                     column_config={
-                        "FILTERED_COST_A": st.column_config.NumberColumn("Koszt A", format="%.2f EUR"),
-                        "FILTERED_COST_B": st.column_config.NumberColumn("Koszt B", format="%.2f EUR"),
+                        "PRZYCHOD_A": st.column_config.NumberColumn("Przychód A", format="%.2f EUR"),
+                        "PRZYCHOD_B": st.column_config.NumberColumn("Przychód B", format="%.2f EUR"),
                         "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
                     }
                 )
-
-        # === TAB 2: PRZYCHODY ===
-        with tab_przychody:
-            st.markdown("#### Porównanie Przychodów")
-            
-            rev_A = df_A['PRZYCHOD'].sum()
-            rev_B = df_B['PRZYCHOD'].sum()
-            diff_rev = rev_A - rev_B
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Przychód Okres A", f"{rev_A:,.2f} EUR")
-            c2.metric("Przychód Okres B", f"{rev_B:,.2f} EUR")
-            c3.metric("Różnica (A - B)", f"{diff_rev:,.2f} EUR", delta=f"{diff_rev:,.2f} EUR") # Zielony przy plusie
-
-            df_merge_rev = df_A[['PRZYCHOD']].join(df_B[['PRZYCHOD']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
-            df_merge_rev['Różnica'] = df_merge_rev['PRZYCHOD_A'] - df_merge_rev['PRZYCHOD_B']
-            df_merge_rev = df_merge_rev.sort_values(by='PRZYCHOD_A', ascending=False)
-
-            # KOLOROWANIE: Dodatnia różnica (wzrost przychodów) na zielono
-            st.dataframe(
-                df_merge_rev.style.format("{:,.2f} EUR")
-                .applymap(color_positive_good, subset=['Różnica']),
-                use_container_width=True,
-                column_config={
-                    "PRZYCHOD_A": st.column_config.NumberColumn("Przychód A", format="%.2f EUR"),
-                    "PRZYCHOD_B": st.column_config.NumberColumn("Przychód B", format="%.2f EUR"),
-                    "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
-                }
-            )
-
-        # === TAB 3: ZYSKI ===
-        with tab_zyski:
-            st.markdown("#### Porównanie Zysków (Brutto)")
-            st.caption("Zysk = Przychód (Analiza) - [Paliwo + Opłaty + Inne DB + Koszty Analiza]")
-
-            zysk_A = df_A['ZYSK'].sum()
-            zysk_B = df_B['ZYSK'].sum()
-            diff_zysk = zysk_A - zysk_B
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Zysk Okres A", f"{zysk_A:,.2f} EUR")
-            c2.metric("Zysk Okres B", f"{zysk_B:,.2f} EUR")
-            c3.metric("Różnica (A - B)", f"{diff_zysk:,.2f} EUR", delta=f"{diff_zysk:,.2f} EUR")
-
-            df_merge_zysk = df_A[['ZYSK']].join(df_B[['ZYSK']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
-            df_merge_zysk['Różnica'] = df_merge_zysk['ZYSK_A'] - df_merge_zysk['ZYSK_B']
-            df_merge_zysk = df_merge_zysk.sort_values(by='ZYSK_A', ascending=False)
-            
-            # KOLOROWANIE: Zysk/Wzrost na zielono, Strata/Spadek na czerwono
-            st.dataframe(
-                df_merge_zysk.style.format("{:,.2f} EUR")
-                .applymap(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
-                use_container_width=True,
-                column_config={
-                    "ZYSK_A": st.column_config.NumberColumn("Zysk A", format="%.2f EUR"),
-                    "ZYSK_B": st.column_config.NumberColumn("Zysk B", format="%.2f EUR"),
-                    "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
-                }
-            )
+    
+            # === TAB 3: ZYSKI ===
+            with tab_zyski:
+                st.markdown("#### Porównanie Zysków (Brutto)")
+                st.caption("Zysk = Przychód (Analiza) - [Paliwo + Opłaty + Inne DB + Koszty Analiza]")
+    
+                zysk_A = df_A['ZYSK'].sum()
+                zysk_B = df_B['ZYSK'].sum()
+                diff_zysk = zysk_A - zysk_B
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Zysk Okres A", f"{zysk_A:,.2f} EUR")
+                c2.metric("Zysk Okres B", f"{zysk_B:,.2f} EUR")
+                c3.metric("Różnica (A - B)", f"{diff_zysk:,.2f} EUR", delta=f"{diff_zysk:,.2f} EUR")
+    
+                df_merge_zysk = df_A[['ZYSK']].join(df_B[['ZYSK']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
+                df_merge_zysk['Różnica'] = df_merge_zysk['ZYSK_A'] - df_merge_zysk['ZYSK_B']
+                df_merge_zysk = df_merge_zysk.sort_values(by='ZYSK_A', ascending=False)
+                
+                # KOLOROWANIE: Zysk/Wzrost na zielono, Strata/Spadek na czerwono
+                st.dataframe(
+                    df_merge_zysk.style.format("{:,.2f} EUR")
+                    .applymap(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
+                    use_container_width=True,
+                    column_config={
+                        "ZYSK_A": st.column_config.NumberColumn("Zysk A", format="%.2f EUR"),
+                        "ZYSK_B": st.column_config.NumberColumn("Zysk B", format="%.2f EUR"),
+                        "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
+                    }
+                )
 # --- GŁÓWNA APLIKACJA ---
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
