@@ -1763,8 +1763,8 @@ def render_refaktury_content(conn, wybrana_firma):
                                 "data_transakcji_dt": st.column_config.DatetimeColumn("Data", format="YYYY-MM-DD HH:mm"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto", format="%.2f EUR")
                             }
                         )
-                        except Exception as e:
-    st.error(f"Błąd: {e}")
+                       except Exception as e:
+        st.error(f"Błąd: {e}")
 
                 
     def render_porownanie_content(conn, wybrana_firma):
