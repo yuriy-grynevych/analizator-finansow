@@ -1541,15 +1541,23 @@ def render_rentownosc_content(conn, wybrana_firma):
                         st.session_state['dane_analizy_raw'] = df_analiza_raw 
                         if df_analiza_agreg is None:
                              df_analiza_agreg = pd.DataFrame(columns=['przychody_brutto', 'przychody_netto', 'koszty_inne_brutto', 'koszty_inne_netto'])
+                        
                         df_rentownosc = df_analiza_agreg.merge(
                             df_koszty_baza_agg, 
                             left_index=True, 
                             right_index=True, 
                             how='outer'
                         ).fillna(0)
-                        df_rentownosc = df_rentownosc[~df_rentownosc.index.astype(str).str.contains("PLPTU0002")]
+                        
+                        # --- MODYFIKACJA FILTRA ---
+                        # Usuwa wszystko co zawiera "PTU0002" (niezależnie czy z PL, myślnikiem czy bez)
+                        maska_ptu_usun = df_rentownosc.index.astype(str).str.replace(" ", "").str.replace("-", "").str.contains("PTU0002")
+                        df_rentownosc = df_rentownosc[~maska_ptu_usun]
+                        # --------------------------
+
                         maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
                         df_rentownosc = df_rentownosc[~maska_index]
+                        
                         if df_analiza_raw is not None and not df_analiza_raw.empty:
                              def zlacz_kontrahentow(x):
                                    unikalne = sorted(list(set([k for k in x if k and k != "Brak Kontrahenta"])))
@@ -1557,6 +1565,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                                    return ", ".join(unikalne)
                              df_kontrahenci_mapa = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kontrahent'].apply(zlacz_kontrahentow).to_frame('Główny Kontrahent')
                              df_rentownosc = df_rentownosc.merge(df_kontrahenci_mapa, left_index=True, right_index=True, how='left').fillna('Brak danych')
+                        
                         df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'] = (
                             df_rentownosc['przychody_brutto'] - 
                             df_rentownosc['koszty_inne_brutto'] - 
