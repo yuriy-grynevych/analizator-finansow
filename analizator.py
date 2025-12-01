@@ -102,9 +102,9 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu', 
     'Korekta faktury VAT zakupu', 
     'Rachunek zakupu',
-    'Tankowanie',                
+    'Tankowanie',                 
     'Paliwo',
-    'Opłata drogowa',            
+    'Opłata drogowa',             
     'Opłaty drogowe',
     'Opłata drogowa DK',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
@@ -118,7 +118,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
 
 ETYKIETY_IGNOROWANE = [
     'Zamówienie od klienta', 
-    'Wydanie zewnętrzne',        
+    'Wydanie zewnętrzne',         
     'Oferta', 
     'Proforma',
     'Suma końcowa', 
@@ -279,19 +279,24 @@ def normalizuj_eurowag(df_eurowag, firma_tag):
 def normalizuj_e100_PL(df_e100, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
+    
+    # Najpierw pobieramy nazwę z pliku
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
-
-    # --- POPRAWKA: Logika dla TRUCK w Unix (rozróżnianie po karcie) ---
-    numer_karty_str = df_e100['Numer karty'].astype(str).fillna('').str.strip()
+    
+    # --- POPRAWKA: TWARDE PRZYPISANIE TRUCK DO WGM I OSOBOWYCH ---
+    # Tworzymy pomocniczą kolumnę z numerem karty jako tekst (usuwamy .0 jeśli excel zrobił liczbę)
+    numer_karty_str = df_e100['Numer karty'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # Szukamy wszystkiego co ma w nazwie TRUCK
     mask_truck = df_out['identyfikator'].astype(str).str.upper().str.contains('TRUCK')
     
-    # Karta końcówka 24 -> WGM8463A
+    # 1. Karta końcówka 24 -> Zamień na WGM8463A (twardo)
     df_out.loc[mask_truck & numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
     
-    # Karta końcówka 40 -> TRUCK_OSOBOWY
+    # 2. Karta końcówka 40 -> Zamień na TRUCK_OSOBOWY (żeby był w raporcie paliw, ale nie w rentowności)
     df_out.loc[mask_truck & numer_karty_str.str.endswith('40'), 'identyfikator'] = 'TRUCK_OSOBOWY'
-    # ------------------------------------------------------------------
-    
+    # -------------------------------------------------------------
+
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
     vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) 
     df_out['kwota_netto'] = kwota_brutto / (1 + vat_rate)
@@ -517,7 +522,6 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
-
 # --- FUNKCJE BAZY DANYCH ---
 def setup_database(conn):
     with conn.session as s:
@@ -720,6 +724,10 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
             if row['firma'] == 'UNIX-TRANS':
                 if pojazd in UNIX_FLOTA_CONFIG:
                     return True
+                # --- POPRAWKA: Pokaż też Trucka Osobowego w paliwie, mimo że nie jest w configu ---
+                if 'TRUCK_OSOBOWY' in pojazd or 'TRUCKOSOBOWY' in pojazd:
+                    return True
+                # ---------------------------------------------------------------------------------
                 else:
                     return False
             
@@ -805,10 +813,10 @@ def pobierz_dane_do_refaktury(conn, data_start, data_stop):
     def filter_unix_to_holier(row):
         pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
         
-        # --- POPRAWKA: Wykluczenie Trucków z refaktur ---
-        if 'TRUCKOSOBOWY' in pojazd: return False
-        if 'TRUCK' in pojazd and pojazd not in ['TRUCK3', 'PLTRUCK3']: return False 
-        # -----------------------------------------------
+        # --- POPRAWKA: Nie refakturuj Trucka Osobowego ani zwykłego Trucka ---
+        if 'TRUCK' in pojazd:
+             return False # Blokujemy wszystko co ma w nazwie TRUCK (w tym TRUCK_OSOBOWY)
+        # ---------------------------------------------------------------------
 
         if row['firma'] == 'UNIX-TRANS':
             if pojazd not in UNIX_FLOTA_CONFIG:
@@ -955,7 +963,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None                  
+    aktualna_data = None                   
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     def is_vehicle_line(line):
@@ -1441,18 +1449,18 @@ def render_raport_content(conn, wybrana_firma):
                               lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
                               wybrany_pojazd_oplaty = st.selectbox("Wybierz identyfikator:", lista_pojazdow_oplaty, key="select_oplaty")
                               if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
-                                 df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
-                                 df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
-                                 
-                                 # --- MODYFIKACJA LP ---
-                                 df_szczegoly_oplaty_display = df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
-                                 df_szczegoly_oplaty_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_oplaty_display)))
+                                  df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
+                                  df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                  
+                                  # --- MODYFIKACJA LP ---
+                                  df_szczegoly_oplaty_display = df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                                  df_szczegoly_oplaty_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_oplaty_display)))
 
-                                 st.dataframe(
-                                     df_szczegoly_oplaty_display,
-                                     use_container_width=True, hide_index=True,
-                                     column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
-                                 )
+                                  st.dataframe(
+                                      df_szczegoly_oplaty_display,
+                                      use_container_width=True, hide_index=True,
+                                      column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
+                                  )
                       else:
                           st.info("Brak opłat drogowych.")
 
@@ -1475,18 +1483,18 @@ def render_raport_content(conn, wybrana_firma):
                               lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
                               wybrany_pojazd_inne = st.selectbox("Wybierz identyfikator:", lista_pojazdow_inne, key="select_inne")
                               if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
-                                 df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
-                                 df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
-                                 
-                                 # --- MODYFIKACJA LP ---
-                                 df_szczegoly_inne_display = df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
-                                 df_szczegoly_inne_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_inne_display)))
+                                  df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
+                                  df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                                  
+                                  # --- MODYFIKACJA LP ---
+                                  df_szczegoly_inne_display = df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                                  df_szczegoly_inne_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_inne_display)))
 
-                                 st.dataframe(
-                                     df_szczegoly_inne_display,
-                                     use_container_width=True, hide_index=True,
-                                     column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
-                                 )
+                                  st.dataframe(
+                                      df_szczegoly_inne_display,
+                                      use_container_width=True, hide_index=True,
+                                      column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
+                                  )
                       else:
                           st.info("Brak innych wydatków.")
     except Exception as e:
@@ -1580,10 +1588,10 @@ def render_rentownosc_content(conn, wybrana_firma):
                         maska_none_usun = df_rentownosc.index.astype(str).str.upper() == "NONE"
                         df_rentownosc = df_rentownosc[~maska_none_usun]
                         
-                        # --- POPRAWKA: Usunięcie TRUCK_OSOBOWY z rentowności ---
-                        maska_osobowy = df_rentownosc.index.astype(str).str.contains('TRUCK_OSOBOWY', case=False)
+                        # --- POPRAWKA: Wywal TRUCK_OSOBOWY z rentowności ---
+                        maska_osobowy = df_rentownosc.index.astype(str).str.contains("OSOBOWY", case=False)
                         df_rentownosc = df_rentownosc[~maska_osobowy]
-                        # -----------------------------------------
+                        # ---------------------------------------------------
 
                         maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
                         df_rentownosc = df_rentownosc[~maska_index]
