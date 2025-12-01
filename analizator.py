@@ -280,6 +280,17 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
+
+    # --- POPRAWKA: Logika dla TRUCK w Unix (rozróżnianie po karcie) ---
+    numer_karty_str = df_e100['Numer karty'].astype(str).fillna('').str.strip()
+    mask_truck = df_out['identyfikator'].astype(str).str.upper().str.contains('TRUCK')
+    
+    # Karta końcówka 24 -> WGM8463A
+    df_out.loc[mask_truck & numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
+    
+    # Karta końcówka 40 -> TRUCK_OSOBOWY
+    df_out.loc[mask_truck & numer_karty_str.str.endswith('40'), 'identyfikator'] = 'TRUCK_OSOBOWY'
+    # ------------------------------------------------------------------
     
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
     vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) 
@@ -793,6 +804,12 @@ def pobierz_dane_do_refaktury(conn, data_start, data_stop):
     # 2. KIERUNEK: UNIX -> HOLIER (Holier winien Unixowi)
     def filter_unix_to_holier(row):
         pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
+        
+        # --- POPRAWKA: Wykluczenie Trucków z refaktur ---
+        if 'TRUCKOSOBOWY' in pojazd: return False
+        if 'TRUCK' in pojazd and pojazd not in ['TRUCK3', 'PLTRUCK3']: return False 
+        # -----------------------------------------------
+
         if row['firma'] == 'UNIX-TRANS':
             if pojazd not in UNIX_FLOTA_CONFIG:
                 return True # To auto obce (Holiera), za które zapłacił Unix
@@ -1562,6 +1579,10 @@ def render_rentownosc_content(conn, wybrana_firma):
                         
                         maska_none_usun = df_rentownosc.index.astype(str).str.upper() == "NONE"
                         df_rentownosc = df_rentownosc[~maska_none_usun]
+                        
+                        # --- POPRAWKA: Usunięcie TRUCK_OSOBOWY z rentowności ---
+                        maska_osobowy = df_rentownosc.index.astype(str).str.contains('TRUCK_OSOBOWY', case=False)
+                        df_rentownosc = df_rentownosc[~maska_osobowy]
                         # -----------------------------------------
 
                         maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
