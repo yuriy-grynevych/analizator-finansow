@@ -280,23 +280,24 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     
-    # Najpierw pobieramy nazwę z pliku
+    # 1. Pobieramy identyfikator (zwykle numer auta)
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
     
-    # --- POPRAWKA: TWARDE PRZYPISANIE TRUCK DO WGM I OSOBOWYCH ---
-    # Tworzymy pomocniczą kolumnę z numerem karty jako tekst (usuwamy .0 jeśli excel zrobił liczbę)
+    # --- POPRAWKA SPECJALNA: Mapowanie TRUCK na WGM i OSOBOWY ---
+    # Musimy upewnić się, że numer karty jest stringiem i nie ma końcówki .0 (jeśli excel tak sformatował)
     numer_karty_str = df_e100['Numer karty'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # Szukamy wszystkiego co ma w nazwie TRUCK
+    # Znajdź wiersze gdzie identyfikator to TRUCK (lub zawiera TRUCK)
     mask_truck = df_out['identyfikator'].astype(str).str.upper().str.contains('TRUCK')
     
-    # 1. Karta końcówka 24 -> Zamień na WGM8463A (twardo)
+    # Jeśli karta kończy się na '24' -> Zmień nazwę na WGM8463A
+    # Dzięki temu system od razu "zobaczy" to auto jako WGM i doda do kosztów UNIXa
     df_out.loc[mask_truck & numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
     
-    # 2. Karta końcówka 40 -> Zamień na TRUCK_OSOBOWY (żeby był w raporcie paliw, ale nie w rentowności)
+    # Jeśli karta kończy się na '40' -> Zmień nazwę na TRUCK_OSOBOWY
     df_out.loc[mask_truck & numer_karty_str.str.endswith('40'), 'identyfikator'] = 'TRUCK_OSOBOWY'
-    # -------------------------------------------------------------
-
+    # -----------------------------------------------------------------------------------------
+    
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
     vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) 
     df_out['kwota_netto'] = kwota_brutto / (1 + vat_rate)
@@ -459,6 +460,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
                 if 'Transactions' in xls.sheet_names:
                     df_e100 = pd.read_excel(xls, sheet_name='Transactions')
                     col_e100 = df_e100.columns
+                    # Poprawione wykrywanie kolumn
                     if 'Numer samochodu' in col_e100 and 'Kwota' in col_e100:
                         st.write("    -> Wykryto format E100 (Polski - Excel)")
                         lista_df_zunifikowanych.append(normalizuj_e100_PL(df_e100, wybrana_firma_upload))
@@ -724,7 +726,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
             if row['firma'] == 'UNIX-TRANS':
                 if pojazd in UNIX_FLOTA_CONFIG:
                     return True
-                # --- POPRAWKA: Pokaż też Trucka Osobowego w paliwie, mimo że nie jest w configu ---
+                # --- POPRAWKA: Pokaż też Trucka Osobowego w raporcie paliwowym (dla widoczności) ---
                 if 'TRUCK_OSOBOWY' in pojazd or 'TRUCKOSOBOWY' in pojazd:
                     return True
                 # ---------------------------------------------------------------------------------
