@@ -143,6 +143,11 @@ def czy_zakazany_pojazd_global(nazwa):
     if not nazwa: return False
     n = str(nazwa).upper().replace(" ", "").replace("-", "")
     
+    # --- POPRAWKA: Jeśli to osobowy, to NIE jest zakazany (nawet jak ma TRUCK w nazwie) ---
+    if 'OSOBOWY' in n:
+        return False
+    # -------------------------------------------------------------------------------------
+
     if n in UNIX_ALIAS_MAPPING:
         return False
         
@@ -295,7 +300,7 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     df_out.loc[mask_truck & numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
     
     # Jeśli karta kończy się na '40' -> Zmień nazwę na TRUCK_OSOBOWY
-    df_out.loc[mask_truck & numer_karty_str.str.endswith('40'), 'identyfikator'] = 'TRUCK_OSOBOWY'
+    df_out.loc[mask_truck & numer_karty_str.str.endswith('40'), 'identyfikator'] = 'TRUCKOSOBOWY'
     # -----------------------------------------------------------------------------------------
     
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
