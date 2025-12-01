@@ -276,10 +276,30 @@ def normalizuj_eurowag(df_eurowag, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
+# --- NORMALIZACJA E100 PL (Z POPRAWKĄ NA KARTĘ KOŃCÓWKA 24) ---
 def normalizuj_e100_PL(df_e100, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
-    df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
+    
+    # --- LOGIKA PRZYPISYWANIA POJAZDU PO KARCIE ---
+    def ustal_identyfikator(row):
+        # Pobieramy numer karty jako tekst i usuwamy spacje
+        nr_karty = str(row.get('Numer karty', '')).strip()
+        nr_samochodu = str(row.get('Numer samochodu', '')).strip()
+        
+        # 1. SPRAWDZENIE KARTY (PRIORYTET)
+        # Jeśli karta kończy się na 24 -> to jest WGM8463A
+        if nr_karty.endswith('24'):
+            return 'WGM8463A'
+            
+        # 2. STANDARDOWE PRZYPISANIE
+        # Jeśli nie ma wyjątku, bierzemy numer samochodu, a jak go brak to numer karty
+        if nr_samochodu and nr_samochodu.lower() != 'nan':
+            return nr_samochodu
+        return nr_karty
+
+    df_out['identyfikator'] = df_e100.apply(ustal_identyfikator, axis=1)
+    # -----------------------------------------------
     
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
     vat_rate = df_e100['Kraj'].map(VAT_RATES).fillna(0.0) 
@@ -303,10 +323,26 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     df_out = df_out.dropna(subset=['data_transakcji', 'kwota_brutto'])
     return df_out
 
+# --- NORMALIZACJA E100 EN (Z POPRAWKĄ NA KARTĘ KOŃCÓWKA 24) ---
 def normalizuj_e100_EN(df_e100, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Date'] + ' ' + df_e100['Time'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
-    df_out['identyfikator'] = df_e100['Car registration number'].fillna(df_e100['Card number'])
+    
+    # --- LOGIKA PRZYPISYWANIA POJAZDU PO KARCIE (WERSJA EN) ---
+    def ustal_identyfikator_en(row):
+        nr_karty = str(row.get('Card number', '')).strip()
+        nr_samochodu = str(row.get('Car registration number', '')).strip()
+        
+        # Wyjątek dla karty kończącej się na 24
+        if nr_karty.endswith('24'):
+            return 'WGM8463A'
+            
+        if nr_samochodu and nr_samochodu.lower() != 'nan':
+            return nr_samochodu
+        return nr_karty
+
+    df_out['identyfikator'] = df_e100.apply(ustal_identyfikator_en, axis=1)
+    # ----------------------------------------------------------
     
     kwota_brutto = pd.to_numeric(df_e100['Sum'], errors='coerce')
     vat_rate = df_e100['Country'].map(VAT_RATES).fillna(0.0) 
