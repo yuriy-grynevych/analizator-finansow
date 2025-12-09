@@ -2110,9 +2110,7 @@ def main_app():
         if c1.button("HOLIER", type=type_holier, use_container_width=True):
             st.session_state.active_company = "HOLIER"
             st.rerun()
-          if st.button("🧹 Wyczyść Cache"):
-        st.cache_data.clear()
-        st.rerun()   
+            
         type_unix = "primary" if st.session_state.active_company == "UNIX-TRANS" else "secondary"
         if c2.button("UNIX-TRANS", type=type_unix, use_container_width=True):
             st.session_state.active_company = "UNIX-TRANS"
@@ -2156,7 +2154,9 @@ def main_app():
         if st.button("⚙️ Panel Administratora", type=admin_type, use_container_width=True):
             st.session_state.show_admin = True
             st.rerun()
-
+        if st.button("🧹 Wyczyść Cache"):
+            st.cache_data.clear()
+            st.rerun() 
     try: conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
     except Exception as e: st.error("Błąd połączenia z DB."); st.stop()
 
