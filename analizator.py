@@ -2096,6 +2096,10 @@ def render_porownanie_content(conn, wybrana_firma):
             )
 # --- GŁÓWNA APLIKACJA ---
 def main_app():
+    with st.sidebar:
+    if st.button("🧹 Wyczyść Cache"):
+        st.cache_data.clear()
+        st.rerun()
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
     if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
     if 'show_admin' not in st.session_state: st.session_state.show_admin = False
