@@ -1305,7 +1305,7 @@ def render_admin_content(conn, wybrana_firma):
                 type=['xlsx', 'xls', 'csv']
             )
             if przeslane_pliki:
-                if st.button(" Przetwórz i wgraj do bazy", type="primary", use_container_width=True):
+                if st.button("🚀 Przetwórz i wgraj do bazy", type="primary", use_container_width=True):
                     with st.spinner("Wczytywanie i unifikowanie plików..."):
                         dane_do_wgrania, blad = wczytaj_i_zunifikuj_pliki(przeslane_pliki, firma_upload)
                     if blad:
@@ -1349,7 +1349,7 @@ def render_admin_content(conn, wybrana_firma):
 def render_raport_content(conn, wybrana_firma):
     st.subheader("Raport Paliw i Opłat")
     if wybrana_firma == "UNIX-TRANS":
-        st.caption("Wyświetlam wydatki UNIX-TRANS (bez pojazdów obcych).")
+        st.caption("ℹ️ Wyświetlam wydatki UNIX-TRANS (bez pojazdów obcych).")
     
     try:
         min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
@@ -1362,7 +1362,7 @@ def render_raport_content(conn, wybrana_firma):
             domyslny_stop = min_max_date.iloc[0, 1]
             
             with st.container(border=True):
-                st.markdown("##### Zakres Raportu")
+                st.markdown("##### 📅 Zakres Raportu")
                 col_r1, col_r2 = st.columns(2)
                 with col_r1:
                     data_start_rap = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop, key="rap_start")
@@ -1378,7 +1378,7 @@ def render_raport_content(conn, wybrana_firma):
                 
                 if dane_przygotowane is None: st.stop()
                 
-                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne = st.tabs(["Paliwo", "Opłaty Drogowe", " Pozostałe"])
+                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne = st.tabs(["⛽ Paliwo", "🛣️ Opłaty Drogowe", "🛒 Pozostałe"])
                 
                 with sub_tab_paliwo:
                     df_paliwo = dane_przygotowane[dane_przygotowane['typ'] == 'PALIWO']
@@ -1387,7 +1387,7 @@ def render_raport_content(conn, wybrana_firma):
                     else:
                         st.metric(label="Łącznie Paliwo (Brutto)", value=f"{df_paliwo['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
                         
-                        st.markdown("##### Wydatki paliwowe wg Kraju")
+                        st.markdown("##### 🗺️ Wydatki paliwowe wg Kraju")
                         if 'kraj' in df_paliwo.columns:
                             df_kraje = df_paliwo.groupby('kraj').agg(
                                 Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
@@ -1402,7 +1402,7 @@ def render_raport_content(conn, wybrana_firma):
                             df_kraje_show.insert(0, 'Lp.', range(1, 1 + len(df_kraje_show)))
                             st.dataframe(df_kraje_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'VAT', 'Suma_Brutto']), use_container_width=True, hide_index=True)
                         
-                        st.markdown("##### Szczegóły per Pojazd")
+                        st.markdown("##### 🚛 Szczegóły per Pojazd")
                         podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
                             Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                             Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
@@ -1420,7 +1420,7 @@ def render_raport_content(conn, wybrana_firma):
 
                         st.dataframe(df_podsumowanie_show.style.format({'Kwota_Netto_EUR': '{:,.2f} EUR', 'Kwota_Brutto_EUR': '{:,.2f} EUR', 'Litry (Diesel)': '{:,.2f} L', 'Litry (AdBlue)': '{:,.2f} L'}), use_container_width=True, hide_index=True)
 
-                        with st.expander("Pokaż pojedyncze transakcje"):
+                        with st.expander("🔎 Pokaż pojedyncze transakcje"):
                             lista_pojazdow_paliwo = ["--- Wybierz pojazd ---"] + sorted(list(df_paliwo['identyfikator_clean'].unique()))
                             wybrany_pojazd_paliwo = st.selectbox("Wybierz identyfikator:", lista_pojazdow_paliwo)
                             if wybrany_pojazd_paliwo != "--- Wybierz pojazd ---":
@@ -1452,7 +1452,7 @@ def render_raport_content(conn, wybrana_firma):
                           df_oplaty_show.insert(0, 'Lp.', range(1, 1 + len(df_oplaty_show)))
                           st.dataframe(df_oplaty_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
                           
-                          with st.expander("Pokaż pojedyncze transakcje"):
+                          with st.expander("🔎 Pokaż pojedyncze transakcje"):
                               lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
                               wybrany_pojazd_oplaty = st.selectbox("Wybierz identyfikator:", lista_pojazdow_oplaty, key="select_oplaty")
                               if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
@@ -1486,7 +1486,7 @@ def render_raport_content(conn, wybrana_firma):
                           df_inne_show.insert(0, 'Lp.', range(1, 1 + len(df_inne_show)))
                           st.dataframe(df_inne_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
 
-                          with st.expander("Pokaż pojedyncze transakcje"):
+                          with st.expander("🔎 Pokaż pojedyncze transakcje"):
                               lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
                               wybrany_pojazd_inne = st.selectbox("Wybierz identyfikator:", lista_pojazdow_inne, key="select_inne")
                               if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
@@ -1509,240 +1509,262 @@ def render_raport_content(conn, wybrana_firma):
              st.warning("Baza danych nie jest gotowa. Przejdź do Panelu Admina.")
         else:
              st.error(f"Błąd: {e}")
-def render_porownanie_content(conn, wybrana_firma):
-    st.subheader("📊 Porównanie Okresów")
-    st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
-
-    # --- DEFINICJE FUNKCJI KOLORUJĄCYCH ---
-    def color_positive_good(val):
-        if pd.isna(val) or val == 0: return ''
-        color = '#c9f7c9' if val > 0 else '#ffbdbd' 
-        return f'background-color: {color}; color: black'
-
-    def color_negative_good(val):
-        if pd.isna(val) or val == 0: return ''
-        color = '#c9f7c9' if val < 0 else '#ffbdbd' 
-        return f'background-color: {color}; color: black'
-    # ---------------------------------------
-
-    # --- KONFIGURACJA DAT ---
-    today = date.today()
-    first_current = today.replace(day=1)
-    last_month_end = first_current - pd.Timedelta(days=1)
-    last_month_start = last_month_end.replace(day=1)
-
-    with st.expander("Konfiguracja Okresów", expanded=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### Okres A (Bieżący/Bazowy)")
-            start_A = st.date_input("Start A", value=first_current, key="start_A")
-            stop_A = st.date_input("Stop A", value=today, key="stop_A")
-        with c2:
-            st.markdown("##### Okres B (Do porównania)")
-            start_B = st.date_input("Start B", value=last_month_start, key="start_B")
-            stop_B = st.date_input("Stop B", value=last_month_end, key="stop_B")
-
-    # --- OBSŁUGA PLIKU ---
-    plik_analizy = None 
-    nazwa_pliku_analizy = "analiza.xlsx"
-    if wybrana_firma == "UNIX-TRANS":
-        nazwa_pliku_analizy = "fakturownia.csv"
-    
-    zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy)
-    if zapisany_plik_bytes:
-        plik_analizy = io.BytesIO(zapisany_plik_bytes)
-    else:
-        st.warning(f"Brak zapisanego pliku {nazwa_pliku_analizy}. Dane z Subiekta/Fakturowni nie będą dostępne.")
-        uploaded = st.file_uploader(f"Wgraj tymczasowo {nazwa_pliku_analizy}", type=['xlsx', 'csv', 'xls'], key="por_upload")
-        if uploaded:
-            plik_analizy = uploaded
-
-    # --- FUNKCJA POBIERANIA DANYCH ---
-    def pobierz_agregacje(d_start, d_stop):
-        # 1. Dane z Bazy
-        df_baza = pobierz_dane_z_bazy(conn, d_start, d_stop, wybrana_firma)
-        df_baza, _ = przygotuj_dane_paliwowe(df_baza.copy(), wybrana_firma)
+def render_rentownosc_content(conn, wybrana_firma):
+    st.subheader("Analiza Rentowności")
+    try:
+        min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
+        min_max_date = conn.query(min_max_date_query)
+        domyslny_start_rent = date.today()
+        domyslny_stop_rent = date.today()
+        if not min_max_date.empty and min_max_date.iloc[0, 0] is not None:
+            domyslny_start_rent = min_max_date.iloc[0, 0]
+            domyslny_stop_rent = min_max_date.iloc[0, 1]
         
-        agg_baza = pd.DataFrame()
-        if df_baza is not None and not df_baza.empty:
-            # Filtrowanie globalne zakazanych
-            maska = df_baza['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
-            df_baza = df_baza[~maska]
-
-            # --- FILTR USUWAJĄCY PTU0002 ---
-            maska_ptu = df_baza['identyfikator_clean'].astype(str).str.replace(" ", "").str.contains("PTU0002", case=False)
-            df_baza = df_baza[~maska_ptu]
+        col_rent_settings, col_rent_action = st.columns([1, 2])
+        
+        with col_rent_settings:
+            with st.container(border=True):
+                st.markdown("##### 1. Zakres Dat")
+                data_start_rent = st.date_input("Start", value=domyslny_start_rent, key="rent_start_2")
+                data_stop_rent = st.date_input("Stop", value=domyslny_stop_rent, key="rent_stop_2")
             
-            # --- FILTR USUWAJĄCY NONE ---
-            maska_none = df_baza['identyfikator_clean'].astype(str).str.upper() == "NONE"
-            df_baza = df_baza[~maska_none]
-            # ----------------------------
-            
-            # Pivot table
-            agg_baza = df_baza.groupby(['identyfikator_clean', 'typ'])['kwota_brutto_eur'].sum().unstack(fill_value=0)
-            for col in ['PALIWO', 'OPŁATA', 'INNE']:
-                if col not in agg_baza.columns: agg_baza[col] = 0.0
-            
-            agg_baza['SUMA_BAZA'] = agg_baza['PALIWO'] + agg_baza['OPŁATA'] + agg_baza['INNE']
-        else:
-            agg_baza = pd.DataFrame(columns=['PALIWO', 'OPŁATA', 'INNE', 'SUMA_BAZA'])
-
-        # 2. Dane z Pliku
-        agg_analiza = pd.DataFrame()
-        if plik_analizy:
-            plik_analizy.seek(0)
-            df_agreg, _ = przetworz_plik_analizy(plik_analizy, d_start, d_stop, wybrana_firma)
-            if df_agreg is not None and not df_agreg.empty:
-                # Filtr PTU i NONE dla pliku analizy
-                df_agreg = df_agreg[~df_agreg.index.astype(str).str.replace(" ", "").str.contains("PTU0002", case=False)]
-                df_agreg = df_agreg[df_agreg.index.astype(str).str.upper() != "NONE"]
+            with st.container(border=True):
+                st.markdown("##### 2. Źródło Przychodów")
+                plik_analizy = None 
+                nazwa_pliku_analizy = "analiza.xlsx"
+                if wybrana_firma == "UNIX-TRANS":
+                    nazwa_pliku_analizy = "fakturownia.csv"
+                    st.caption("Wymagany: Fakturownia CSV")
+                else:
+                    st.caption("Wymagany: Subiekt Excel")
+                    
+                zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy) 
                 
-                agg_analiza = df_agreg[['przychody_brutto', 'koszty_inne_brutto']].copy()
-                agg_analiza.rename(columns={'koszty_inne_brutto': 'KOSZT_SUBIEKT', 'przychody_brutto': 'PRZYCHOD'}, inplace=True)
-        
-        if agg_analiza.empty:
-            agg_analiza = pd.DataFrame(columns=['PRZYCHOD', 'KOSZT_SUBIEKT'])
+                if zapisany_plik_bytes:
+                      st.success(f"Znaleziono w bazie: {nazwa_pliku_analizy}")
+                      plik_analizy = io.BytesIO(zapisany_plik_bytes)
+                      if st.button("❌ Usuń zapisany plik", use_container_width=True):
+                          usun_plik_z_bazy(conn, nazwa_pliku_analizy)
+                else:
+                    uploaded_file = st.file_uploader(f"Wgraj {nazwa_pliku_analizy}", type=['xlsx', 'csv', 'xls'])
+                    if uploaded_file:
+                         plik_analizy = uploaded_file
+                         if st.button("💾 Zapisz plik na stałe w bazie", use_container_width=True):
+                             zapisz_plik_w_bazie(conn, nazwa_pliku_analizy, uploaded_file.getvalue())
 
-        # 3. Merge
-        df_full = agg_baza.join(agg_analiza, how='outer').fillna(0)
-        df_full['ZYSK'] = df_full.get('PRZYCHOD', 0) - df_full.get('SUMA_BAZA', 0) - df_full.get('KOSZT_SUBIEKT', 0)
-        df_full['KOSZTY_TOTAL'] = df_full.get('SUMA_BAZA', 0) + df_full.get('KOSZT_SUBIEKT', 0)
-        
-        return df_full
+        with col_rent_action:
+            st.info("Kliknij przycisk poniżej, aby połączyć dane o przychodach z wydatkami paliwowymi i obliczyć wynik.")
+            if 'raport_gotowy' not in st.session_state:
+                st.session_state['raport_gotowy'] = False
+            if 'wybrany_pojazd_rent' not in st.session_state:
+                st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
 
-    # --- LOGIKA PRZYCISKU ---
-    if 'por_data_ready' not in st.session_state:
-        st.session_state.por_data_ready = False
+            if st.button("🚀 Generuj Raport Rentowności", type="primary", use_container_width=True):
+                if plik_analizy is None:
+                    st.error("Brak pliku przychodów.")
+                else:
+                    with st.spinner("Przeliczanie rentowności..."):
+                        dane_z_bazy_rent = pobierz_dane_z_bazy(conn, data_start_rent, data_stop_rent, wybrana_firma) 
+                        dane_przygotowane_rent, _ = przygotuj_dane_paliwowe(dane_z_bazy_rent.copy(), wybrana_firma)
+                        st.session_state['dane_bazy_raw'] = dane_przygotowane_rent 
+                        if dane_przygotowane_rent.empty:
+                            df_koszty_baza_agg = pd.DataFrame(columns=['koszty_baza_netto', 'koszty_baza_brutto'])
+                        else:
+                            maska_baza = dane_przygotowane_rent['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
+                            dane_przygotowane_rent = dane_przygotowane_rent[~maska_baza]
+                            df_koszty_baza_agg = dane_przygotowane_rent.groupby('identyfikator_clean').agg(
+                                koszty_baza_netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                                koszty_baza_brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                            )
+                        df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent, wybrana_firma)
+                        st.session_state['dane_analizy_raw'] = df_analiza_raw 
+                        if df_analiza_agreg is None:
+                             df_analiza_agreg = pd.DataFrame(columns=['przychody_brutto', 'przychody_netto', 'koszty_inne_brutto', 'koszty_inne_netto'])
+                        
+                        df_rentownosc = df_analiza_agreg.merge(
+                            df_koszty_baza_agg, 
+                            left_index=True, 
+                            right_index=True, 
+                            how='outer'
+                        ).fillna(0)
+                        
+                        # --- FILTRY SPECJALNE (PTU0002 i NONE) ---
+                        maska_ptu_usun = df_rentownosc.index.astype(str).str.replace(" ", "").str.replace("-", "").str.contains("PTU0002")
+                        df_rentownosc = df_rentownosc[~maska_ptu_usun]
+                        
+                        maska_none_usun = df_rentownosc.index.astype(str).str.upper() == "NONE"
+                        df_rentownosc = df_rentownosc[~maska_none_usun]
+                        
+                        # --- POPRAWKA: Wywal TRUCK_OSOBOWY z rentowności ---
+                        maska_osobowy = df_rentownosc.index.astype(str).str.contains("OSOBOWY", case=False)
+                        df_rentownosc = df_rentownosc[~maska_osobowy]
+                        # ---------------------------------------------------
 
-    if st.button("Generuj Porównanie", type="primary", use_container_width=True):
-        with st.spinner("Przetwarzanie danych..."):
-            df_A = pobierz_agregacje(start_A, stop_A)
-            df_B = pobierz_agregacje(start_B, stop_B)
-            st.session_state.por_df_A = df_A
-            st.session_state.por_df_B = df_B
-            st.session_state.por_data_ready = True
+                        maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
+                        df_rentownosc = df_rentownosc[~maska_index]
+                        
+                        if df_analiza_raw is not None and not df_analiza_raw.empty:
+                             def zlacz_kontrahentow(x):
+                                   unikalne = sorted(list(set([k for k in x if k and k != "Brak Kontrahenta"])))
+                                   if not unikalne: return "Brak danych"
+                                   return ", ".join(unikalne)
+                             df_kontrahenci_mapa = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kontrahent'].apply(zlacz_kontrahentow).to_frame('Główny Kontrahent')
+                             df_rentownosc = df_rentownosc.merge(df_kontrahenci_mapa, left_index=True, right_index=True, how='left').fillna('Brak danych')
+                        
+                        df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'] = (
+                            df_rentownosc['przychody_brutto'] - 
+                            df_rentownosc['koszty_inne_brutto'] - 
+                            df_rentownosc['koszty_baza_brutto']
+                        )
+                        df_rentownosc['ZYSK_STRATA_NETTO_EUR'] = (
+                            df_rentownosc['przychody_netto'] - 
+                            df_rentownosc['koszty_inne_netto'] - 
+                            df_rentownosc['koszty_baza_netto']
+                        )
+                        st.session_state['df_rentownosc'] = df_rentownosc
+                        st.session_state['raport_gotowy'] = True
+                        st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
 
-    # --- WYŚWIETLANIE ---
-    if st.session_state.por_data_ready:
-        st.markdown("---")
-        df_A = st.session_state.por_df_A
-        df_B = st.session_state.por_df_B
-        
-        tab_wydatki, tab_przychody, tab_zyski = st.tabs(["💸 Wydatki", "💰 Przychody", "📈 Zyski"])
+        # --- SEKCJA WYNIKÓW ---
+        if st.session_state.get('raport_gotowy', False):
+             st.markdown("---")
+             df_rentownosc = st.session_state['df_rentownosc']
+             df_analiza_raw = st.session_state.get('dane_analizy_raw')
 
-        # === TAB 1: WYDATKI ===
-        with tab_wydatki:
-            st.markdown("#### Porównanie Wydatków")
-            opcje_kosztow = ['PALIWO', 'OPŁATA', 'INNE', 'KOSZT_SUBIEKT']
-            wybrane_koszty = st.multiselect("Wybierz składniki kosztów:", opcje_kosztow, default=opcje_kosztow)
-            
-            if not wybrane_koszty:
-                st.warning("Wybierz przynajmniej jedną kategorię.")
-            else:
-                df_A_view = df_A.copy()
-                df_B_view = df_B.copy()
-                df_A_view['FILTERED_COST'] = df_A_view[wybrane_koszty].sum(axis=1)
-                df_B_view['FILTERED_COST'] = df_B_view[wybrane_koszty].sum(axis=1)
-                
-                sum_A = df_A_view['FILTERED_COST'].sum()
-                sum_B = df_B_view['FILTERED_COST'].sum()
-                diff = sum_A - sum_B
-                delta_color = "inverse"
+             if df_analiza_raw is not None and not df_analiza_raw.empty:
+                    maska_raw = df_analiza_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global)
+                    df_analiza_raw = df_analiza_raw[~maska_raw]
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Wydatki Okres A", f"{sum_A:,.2f} EUR")
-                c2.metric("Wydatki Okres B", f"{sum_B:,.2f} EUR")
-                c3.metric("Różnica (A - B)", f"{diff:,.2f} EUR", delta=f"{diff:,.2f} EUR", delta_color=delta_color)
+             if df_analiza_raw is not None and not df_analiza_raw.empty:
+                    tab_chart_kontrahent, tab_chart_pojazd = st.tabs(["🏢 Wykres: Kontrahenci", "🚛 Wykres: Pojazdy"])
+                    with tab_chart_kontrahent:
+                        df_chart_kontr = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
+                        if not df_chart_kontr.empty:
+                            chart_data = df_chart_kontr.groupby('kontrahent')['kwota_brutto_eur'].sum().sort_values(ascending=False)
+                            st.bar_chart(chart_data)
+                            
+                            with st.expander("Szczegóły wg Kontrahenta"):
+                                lista_kontrahentow = sorted(df_chart_kontr['kontrahent'].unique().tolist())
+                                wybrany_kontrahent_view = st.multiselect("Filtruj tabelę:", lista_kontrahentow)
+                                excel_contractors = to_excel_contractors(df_analiza_raw)
+                                st.download_button(
+                                    label="📥 Pobierz Excel (Wg Kontrahentów)",
+                                    data=excel_contractors,
+                                    file_name=f"raport_kontrahenci_{data_start_rent}.xlsx",
+                                    mime="application/vnd.ms-excel"
+                                )
+                                if wybrany_kontrahent_view:
+                                    df_show = df_chart_kontr[df_chart_kontr['kontrahent'].isin(wybrany_kontrahent_view)]
+                                    
+                                    # --- MODYFIKACJA LP ---
+                                    df_show_display = df_show[['data', 'pojazd_clean', 'opis', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
+                                    df_show_display.insert(0, 'Lp.', range(1, 1 + len(df_show_display)))
 
-                df_merge = df_A_view[['FILTERED_COST']].join(df_B_view[['FILTERED_COST']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
-                df_merge['Różnica'] = df_merge['FILTERED_COST_A'] - df_merge['FILTERED_COST_B']
-                df_merge = df_merge.sort_values(by='FILTERED_COST_A', ascending=False)
-                
-                # --- MODYFIKACJA LP ---
-                df_merge_show = df_merge.reset_index()
-                df_merge_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_show)))
+                                    st.dataframe(
+                                        df_show_display.style.format({'kwota_netto_eur': '{:,.2f} EUR', 'kwota_brutto_eur': '{:,.2f} EUR'}), 
+                                        use_container_width=True, 
+                                        hide_index=True
+                                    )
+                    with tab_chart_pojazd:
+                        df_chart_poj = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].copy()
+                        if not df_chart_poj.empty:
+                            chart_data_poj = df_chart_poj.groupby('pojazd_clean')['kwota_brutto_eur'].sum().sort_values(ascending=False)
+                            st.bar_chart(chart_data_poj, color="#76b900")
+             
+             st.subheader("Wyniki Finansowe")
+             st.metric("SUMA ZYSK (BRUTTO)", f"{df_rentownosc['ZYSK_STRATA_BRUTTO_EUR'].sum():,.2f} EUR", border=True)
 
-                # Tutaj dodano subset dla formatowania, aby uniknąć błędów
-                st.dataframe(
-                    df_merge_show.style.format("{:,.2f} EUR", subset=['FILTERED_COST_A', 'FILTERED_COST_B', 'Różnica']).map(color_negative_good, subset=['Różnica']),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "identyfikator_clean": "Pojazd",
-                        "FILTERED_COST_A": st.column_config.NumberColumn("Koszt A", format="%.2f EUR"),
-                        "FILTERED_COST_B": st.column_config.NumberColumn("Koszt B", format="%.2f EUR"),
-                        "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
-                    }
-                )
+             cols_show = [
+                'przychody_netto', 'przychody_brutto', 
+                'koszty_inne_netto', 'koszty_inne_brutto',
+                'koszty_baza_netto', 'koszty_baza_brutto',
+                'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR'
+             ]
+             if 'Główny Kontrahent' in df_rentownosc.columns:
+                 cols_show.insert(0, 'Główny Kontrahent')
+             
+             # --- MODYFIKACJA LP ---
+             df_rent_show = df_rentownosc[cols_show].reset_index().rename(columns={'index': 'Pojazd'})
+             df_rent_show.insert(0, 'Lp.', range(1, 1 + len(df_rent_show)))
 
-        # === TAB 2: PRZYCHODY ===
-        with tab_przychody:
-            st.markdown("#### Porównanie Przychodów")
-            rev_A = df_A['PRZYCHOD'].sum()
-            rev_B = df_B['PRZYCHOD'].sum()
-            diff_rev = rev_A - rev_B
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Przychód Okres A", f"{rev_A:,.2f} EUR")
-            c2.metric("Przychód Okres B", f"{rev_B:,.2f} EUR")
-            c3.metric("Różnica (A - B)", f"{diff_rev:,.2f} EUR", delta=f"{diff_rev:,.2f} EUR")
+             st.dataframe(df_rent_show.style.format("{:,.2f} EUR", subset=['przychody_netto', 'przychody_brutto', 'koszty_inne_netto', 'koszty_inne_brutto', 'koszty_baza_netto', 'koszty_baza_brutto', 'ZYSK_STRATA_NETTO_EUR', 'ZYSK_STRATA_BRUTTO_EUR']), use_container_width=True, hide_index=True)
+             
+             dane_bazy_raw_export = st.session_state.get('dane_bazy_raw')
+             df_analiza_raw = st.session_state.get('dane_analizy_raw')
+             excel_data = to_excel_extended(df_rentownosc, df_analiza_raw, dane_bazy_raw_export)
+             st.download_button(
+                label="📥 Pobierz PEŁNY Raport Rentowności (Excel)",
+                data=excel_data,
+                file_name=f"raport_{wybrana_firma}_{data_start_rent}.xlsx",
+                mime="application/vnd.ms-excel",
+                type="primary"
+             )
 
-            df_merge_rev = df_A[['PRZYCHOD']].join(df_B[['PRZYCHOD']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
-            df_merge_rev['Różnica'] = df_merge_rev['PRZYCHOD_A'] - df_merge_rev['PRZYCHOD_B']
-            df_merge_rev = df_merge_rev.sort_values(by='PRZYCHOD_A', ascending=False)
-            
-            # --- MODYFIKACJA LP ---
-            df_merge_rev_show = df_merge_rev.reset_index()
-            df_merge_rev_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_rev_show)))
+             st.markdown("---")
+             st.markdown("##### 🕵️ Analiza szczegółowa pojazdu")
+             df_rentownosc_sorted = df_rentownosc.sort_values(by='ZYSK_STRATA_BRUTTO_EUR', ascending=False)
+             lista_pojazdow_rent = ["--- Wybierz pojazd ---"] + list(df_rentownosc_sorted.index.unique())
+             wybrany_pojazd_rent = st.selectbox("Wybierz pojazd:", lista_pojazdow_rent, key='wybrany_pojazd_rent')
+             
+             if wybrany_pojazd_rent != "--- Wybierz pojazd ---":
+                  try:
+                    dane_pojazdu = df_rentownosc_sorted.loc[wybrany_pojazd_rent]
+                    przychody = dane_pojazdu['przychody_brutto']
+                    koszty_inne = dane_pojazdu['koszty_inne_brutto']
+                    koszty_bazy = dane_pojazdu['koszty_baza_brutto']
+                    zysk = dane_pojazdu['ZYSK_STRATA_BRUTTO_EUR']
+                    delta_color = "normal" if zysk >= 0 else "inverse"
+                    
+                    col_det1, col_det2, col_det3, col_det4 = st.columns(4)
+                    col_det1.metric("Zysk/Strata", f"{zysk:,.2f} EUR", delta_color=delta_color)
+                    col_det2.metric("Przychód", f"{przychody:,.2f} EUR")
+                    col_det3.metric("Koszty Inne", f"{-koszty_inne:,.2f} EUR")
+                    col_det4.metric("Paliwo/Opłaty", f"{-koszty_bazy:,.2f} EUR")
+                    
+                    st.caption(f"Szczegóły transakcji: {wybrany_pojazd_rent}")
+                    dane_przygotowane_rent = st.session_state.get('dane_bazy_raw')
+                    lista_df_szczegolow = []
+                    
+                    if df_analiza_raw is not None and not df_analiza_raw.empty:
+                        subiekt_details = df_analiza_raw[df_analiza_raw['pojazd_clean'] == wybrany_pojazd_rent].copy()
+                        if not subiekt_details.empty:
+                            subiekt_formatted = subiekt_details.copy()
+                            mask_koszt = subiekt_formatted['typ'] == 'Koszt (Subiekt)'
+                            subiekt_formatted.loc[mask_koszt, 'kwota_netto_eur'] = -subiekt_formatted.loc[mask_koszt, 'kwota_netto_eur'].abs()
+                            subiekt_formatted.loc[mask_koszt, 'kwota_brutto_eur'] = -subiekt_formatted.loc[mask_koszt, 'kwota_brutto_eur'].abs()
+                            subiekt_formatted = subiekt_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']]
+                            lista_df_szczegolow.append(subiekt_formatted)
+                    
+                    if dane_przygotowane_rent is not None and not dane_przygotowane_rent.empty:
+                        baza_details = dane_przygotowane_rent[dane_przygotowane_rent['identyfikator_clean'] == wybrany_pojazd_rent].copy()
+                        if not baza_details.empty:
+                            baza_formatted = baza_details[['data_transakcji_dt', 'produkt', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']].copy() 
+                            baza_formatted['data_transakcji_dt'] = baza_formatted['data_transakcji_dt'].dt.date
+                            baza_formatted.rename(columns={'data_transakcji_dt': 'data', 'produkt': 'opis'}, inplace=True)
+                            baza_formatted['kwota_netto_eur'] = -baza_formatted['kwota_netto_eur'].abs() 
+                            baza_formatted['kwota_brutto_eur'] = -baza_formatted['kwota_brutto_eur'].abs() 
+                            lista_df_szczegolow.append(baza_formatted[['data', 'opis', 'zrodlo', 'kwota_netto_eur', 'kwota_brutto_eur']])
+                    
+                    if lista_df_szczegolow:
+                        combined_details = pd.concat(lista_df_szczegolow).sort_values(by='data', ascending=False)
+                        def koloruj_kwoty(val):
+                            if pd.isna(val): return ''
+                            color = 'red' if val < 0 else 'green'
+                            return f'color: {color}'
+                        
+                        # --- MODYFIKACJA LP ---
+                        combined_details.insert(0, 'Lp.', range(1, 1 + len(combined_details)))
 
-            # --- POPRAWKA TUTAJ: Dodano subset do format ---
-            st.dataframe(
-                df_merge_rev_show.style.format("{:,.2f} EUR", subset=['PRZYCHOD_A', 'PRZYCHOD_B', 'Różnica']).map(color_positive_good, subset=['Różnica']),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "identyfikator_clean": "Pojazd",
-                    "PRZYCHOD_A": st.column_config.NumberColumn("Przychód A", format="%.2f EUR"),
-                    "PRZYCHOD_B": st.column_config.NumberColumn("Przychód B", format="%.2f EUR"),
-                    "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
-                }
-            )
-
-        # === TAB 3: ZYSKI ===
-        with tab_zyski:
-            st.markdown("#### Porównanie Zysków (Brutto)")
-            zysk_A = df_A['ZYSK'].sum()
-            zysk_B = df_B['ZYSK'].sum()
-            diff_zysk = zysk_A - zysk_B
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Zysk Okres A", f"{zysk_A:,.2f} EUR")
-            c2.metric("Zysk Okres B", f"{zysk_B:,.2f} EUR")
-            c3.metric("Różnica (A - B)", f"{diff_zysk:,.2f} EUR", delta=f"{diff_zysk:,.2f} EUR")
-
-            df_merge_zysk = df_A[['ZYSK']].join(df_B[['ZYSK']], lsuffix='_A', rsuffix='_B', how='outer').fillna(0)
-            df_merge_zysk['Różnica'] = df_merge_zysk['ZYSK_A'] - df_merge_zysk['ZYSK_B']
-            df_merge_zysk = df_merge_zysk.sort_values(by='ZYSK_A', ascending=False)
-            
-            # --- MODYFIKACJA LP ---
-            df_merge_zysk_show = df_merge_zysk.reset_index()
-            df_merge_zysk_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_zysk_show)))
-            
-            # --- POPRAWKA TUTAJ: Dodano subset do format ---
-            st.dataframe(
-                df_merge_zysk_show.style.format("{:,.2f} EUR", subset=['ZYSK_A', 'ZYSK_B', 'Różnica']).map(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "identyfikator_clean": "Pojazd",
-                    "ZYSK_A": st.column_config.NumberColumn("Zysk A", format="%.2f EUR"),
-                    "ZYSK_B": st.column_config.NumberColumn("Zysk B", format="%.2f EUR"),
-                    "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
-                }
-            )
+                        st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR"), "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)", format="%.2f EUR")})
+                    else:
+                        st.info("Brak szczegółów.")
+                  except KeyError:
+                    st.error("Błąd wyświetlania szczegółów.")
+    except Exception as e:
+        st.error(f"Błąd: {e}")
         
 def render_refaktury_content(conn, wybrana_firma):
-    st.subheader("Refaktury Kosztów (Wzajemne)")
+    st.subheader("🔄 Refaktury Kosztów (Wzajemne)")
     st.info("Ta sekcja pokazuje koszty paliwa/opłat poniesione przez jedną firmę na rzecz aut drugiej firmy.")
     
     try:
@@ -1764,7 +1786,7 @@ def render_refaktury_content(conn, wybrana_firma):
         if st.button("🔎 Pokaż koszty do refaktury", type="primary"):
             df_holier_to_unix, df_unix_to_holier, _ = pobierz_dane_do_refaktury(conn, data_start_ref, data_stop_ref)
             
-            tab_h2u, tab_u2h = st.tabs(["Holier -> Unix (Do zwrotu przez Unix)", "Unix -> Holier (Do zwrotu przez Holier)"])
+            tab_h2u, tab_u2h = st.tabs(["➡️ Holier -> Unix (Do zwrotu przez Unix)", "⬅️ Unix -> Holier (Do zwrotu przez Holier)"])
             
             # --- TAB 1: HOLIER PLACI ZA UNIX ---
             with tab_h2u:
@@ -1842,7 +1864,7 @@ def render_refaktury_content(conn, wybrana_firma):
 
                 
 def render_porownanie_content(conn, wybrana_firma):
-    st.subheader("Porównanie Okresów")
+    st.subheader("📊 Porównanie Okresów")
     st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
 
     # --- DEFINICJE FUNKCJI KOLORUJĄCYCH ---
@@ -1863,7 +1885,7 @@ def render_porownanie_content(conn, wybrana_firma):
     last_month_end = first_current - pd.Timedelta(days=1)
     last_month_start = last_month_end.replace(day=1)
 
-    with st.expander("Konfiguracja Okresów", expanded=True):
+    with st.expander("📅 Konfiguracja Okresów", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("##### Okres A (Bieżący/Bazowy)")
@@ -1946,7 +1968,7 @@ def render_porownanie_content(conn, wybrana_firma):
     if 'por_data_ready' not in st.session_state:
         st.session_state.por_data_ready = False
 
-    if st.button("Generuj Porównanie", type="primary", use_container_width=True):
+    if st.button("🚀 Generuj Porównanie", type="primary", use_container_width=True):
         with st.spinner("Przetwarzanie danych..."):
             df_A = pobierz_agregacje(start_A, stop_A)
             df_B = pobierz_agregacje(start_B, stop_B)
@@ -2079,7 +2101,7 @@ def main_app():
     if 'show_admin' not in st.session_state: st.session_state.show_admin = False
 
     with st.sidebar:
-        st.markdown("### Kontekst")
+        st.markdown("### 🏢 Kontekst")
         c1, c2 = st.columns(2)
         
         type_holier = "primary" if st.session_state.active_company == "HOLIER" else "secondary"
@@ -2095,7 +2117,7 @@ def main_app():
         st.caption(f"Baza: {NAZWA_POLACZENIA_DB}")
         st.divider()
         
-        st.markdown("### Nawigacja")
+        st.markdown("### 📊 Nawigacja")
         
         is_admin = st.session_state.show_admin
         
