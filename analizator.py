@@ -195,55 +195,80 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
 
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
-    # Pobieramy dane w zależności od źródła
+    # Pobieramy dane i budujemy full_text do przeszukiwania
+    usluga = ""
+    artykul = ""
+    full_text = ""
+
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
         artykul = str(row.get('Artykuł', '')).strip().upper()
+        # Eurowag: czasem typ paliwa jest w 'Produkt' (jeśli taka kolumna istnieje)
+        produkt = str(row.get('Produkt', '')).strip().upper() if 'Produkt' in row else ""
+        full_text = (usluga + " " + artykul + " " + produkt).upper()
+        
     elif zrodlo == 'E100_PL':
         usluga = str(row.get('Usługa', '')).strip().upper()
         kategoria = str(row.get('Kategoria', '')).strip().upper()
-        artykul = kategoria if kategoria else usluga # Czasem paliwo jest w kategorii
+        brand = str(row.get('Brand', '')).strip().upper() # E100: Ważne! Tu bywa np. "Power Max" lub typ paliwa
+        # Łączymy wszystko, żeby nic nie umknęło
+        full_text = (usluga + " " + kategoria + " " + brand).upper()
+        artykul = kategoria if kategoria else usluga
+
     elif zrodlo == 'E100_EN':
         usluga = str(row.get('Service', '')).strip().upper()
         artykul = str(row.get('Category', '')).strip().upper()
+        full_text = (usluga + " " + artykul).upper()
+        
     elif zrodlo == 'Fakturownia':
-        # Logika dla fakturowni zostaje bez zmian w innej części kodu, tu zwracamy default dla bezpieczeństwa
-        return 'INNE', 'Nieznane'
+        # Logika dla fakturowni - tutaj szukamy w produkcie
+        full_text = str(row.get('Produkt/usługa', '')).upper()
+        return 'INNE', 'Nieznane' # Fakturownia ma własną logikę w innej części kodu, tu default
     else:
-        usluga = ''
-        artykul = ''
+        full_text = ""
 
-    # Łączymy teksty, żeby szukać wszędzie
-    full_text = (usluga + " " + artykul).upper()
+    # --- 1. OPŁATY DROGOWE ---
+    if 'TOLL' in full_text or 'OPŁATA DROGOWA' in full_text or 'VIATOLL' in full_text or 'E-TOLL' in full_text or 'DROGOWE' in full_text:
+        return 'OPŁATA', usluga if usluga else 'Opłata drogowa'
 
-    # --- 1. OPŁATY DROGOWE (Bez zmian) ---
-    if 'TOLL' in full_text or 'OPŁATA DROGOWA' in full_text or 'VIATOLL' in full_text or 'E-TOLL' in full_text:
-        return 'OPŁATA', usluga
-
-    # --- 2. PALIWA (Rozszerzone) ---
+    # --- 2. PALIWA (Rozszerzona logika) ---
     
-    # LPG
-    if 'LPG' in full_text or 'AUTOGAZ' in full_text or 'GAZ PŁYNNY' in full_text:
+    # LPG (Słowa kluczowe: LPG, Autogaz, Gaz płynny, GPL, Propane)
+    if any(keyword in full_text for keyword in ['LPG', 'AUTOGAZ', 'GAZ PŁYNNY', 'GPL', 'PROPANE', 'BUTANE']):
         return 'PALIWO', 'LPG'
 
-    # Benzyna (Pb95, Pb98, Gasoline, Super, Eurosuper)
-    if 'PB' in full_text or 'BENZYNA' in full_text or 'GASOLINE' in full_text or 'SUPER' in full_text or 'UNLEADED' in full_text:
+    # Benzyna (Słowa kluczowe: Pb, 95, 98, Mogas, Petrol, Super, Natural, Unleaded)
+    # Uwaga: sprawdzamy " 95 " ze spacjami, żeby nie łapać końcówek numerów kart czy kwot
+    benzyna_keywords = ['BENZYNA', 'GASOLINE', 'PETROL', 'MOGAS', 'EUROSUPER', 'SUPER 95', 'SUPER 98', 'NATURAL 95', 'UNLEADED', 'PB95', 'PB98', ' E5 ', ' E10 ']
+    if any(keyword in full_text for keyword in benzyna_keywords):
+        return 'PALIWO', 'Benzyna'
+        
+    # Dodatkowe sprawdzenie dla "PB " na początku lub w środku
+    if 'PB ' in full_text or ' PB' in full_text:
         return 'PALIWO', 'Benzyna'
 
     # AdBlue
-    if 'ADBLUE' in full_text:
+    if 'ADBLUE' in full_text or 'AD BLUE' in full_text:
         return 'PALIWO', 'AdBlue'
 
-    # Diesel (ON, Olej napędowy)
-    if 'DIESEL' in full_text or 'ON' in full_text.split() or 'OLEJ NAPĘDOWY' in full_text:
+    # Diesel (ON, Olej napędowy, Diesel)
+    if 'DIESEL' in full_text or 'OLEJ NAPĘDOWY' in full_text:
+        return 'PALIWO', 'Diesel'
+    
+    # "ON" jest ryzykowne (np. "ZONE"), więc sprawdzamy jako oddzielne słowo
+    if ' ON ' in (" " + full_text + " "): 
         return 'PALIWO', 'Diesel'
 
-    # --- 3. INNE (Bez zmian) ---
-    if 'OPENLOOP' in full_text or 'VISA' in full_text or 'MYJNIA' in full_text:
+    # --- 3. INNE ---
+    if 'OPENLOOP' in full_text or 'VISA' in full_text or 'MYJNIA' in full_text or 'WASH' in full_text or 'PARKING' in full_text:
         return 'INNE', 'Płatność kartą/Inne'
         
-    # Domyślny zwrot, jeśli nic nie pasuje
-    return 'INNE', usluga.title()
+    # Domyślny zwrot, jeśli to paliwo ale nie zidentyfikowane powyżej (często Diesel w Eurowag to po prostu nazwa stacji)
+    # Jeśli kwota jest duża i jest litraż, to pewnie Diesel, ale dla bezpieczeństwa zostawmy jako INNE lub domyślnie Diesel jeśli ma "Power Max"
+    if 'POWER MAX' in full_text or 'ECTO' in full_text:
+        return 'PALIWO', 'Diesel'
+
+    return 'INNE', usluga.title() if usluga else "Inne"
     
 # --- NORMALIZACJA ---
 def normalizuj_eurowag(df_eurowag, firma_tag):
