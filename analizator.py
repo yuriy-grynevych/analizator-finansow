@@ -297,10 +297,10 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     
     # Jeśli karta kończy się na '24' -> Zmień nazwę na WGM8463A
     # Dzięki temu system od razu "zobaczy" to auto jako WGM i doda do kosztów UNIXa
-    df_out.loc[mask_truck & numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
+    df_out.loc[numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
     
     # Jeśli karta kończy się na '40' -> Zmień nazwę na TRUCK_OSOBOWY
-    df_out.loc[mask_truck & numer_karty_str.str.endswith('40'), 'identyfikator'] = 'TRUCKOSOBOWY'
+    df_out.loc[numer_karty_str.str.endswith('40'), 'identyfikator'] = 'Kacper'
     # -----------------------------------------------------------------------------------------
     
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
