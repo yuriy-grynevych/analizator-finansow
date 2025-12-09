@@ -300,7 +300,7 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     df_out.loc[numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
     
     # Jeśli karta kończy się na '40' -> Zmień nazwę na TRUCK_OSOBOWY
-    df_out.loc[numer_karty_str.str.endswith('40'), 'identyfikator'] = 'Kacper'
+    df_out.loc[numer_karty_str.str.endswith('40'), 'identyfikator'] = 'KACPER'
     # -----------------------------------------------------------------------------------------
     
     kwota_brutto = pd.to_numeric(df_e100['Kwota'], errors='coerce')
@@ -732,7 +732,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
                 if pojazd in UNIX_FLOTA_CONFIG:
                     return True
                 # --- POPRAWKA: Pokaż też Trucka Osobowego w raporcie paliwowym (dla widoczności) ---
-                if 'TRUCK_OSOBOWY' in pojazd or 'TRUCKOSOBOWY' in pojazd:
+                if 'TRUCK_OSOBOWY' in pojazd or 'TRUCKOSOBOWY' in pojazd or 'KACPER' in pojazd:
                     return True
                 # ---------------------------------------------------------------------------------
                 else:
