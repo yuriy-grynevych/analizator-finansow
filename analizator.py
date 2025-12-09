@@ -2096,10 +2096,8 @@ def render_porownanie_content(conn, wybrana_firma):
             )
 # --- GŁÓWNA APLIKACJA ---
 def main_app():
-    with st.sidebar:
-    if st.button("🧹 Wyczyść Cache"):
-        st.cache_data.clear()
-        st.rerun()
+    
+   
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
     if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
     if 'show_admin' not in st.session_state: st.session_state.show_admin = False
@@ -2112,7 +2110,9 @@ def main_app():
         if c1.button("HOLIER", type=type_holier, use_container_width=True):
             st.session_state.active_company = "HOLIER"
             st.rerun()
-            
+          if st.button("🧹 Wyczyść Cache"):
+        st.cache_data.clear()
+        st.rerun()   
         type_unix = "primary" if st.session_state.active_company == "UNIX-TRANS" else "secondary"
         if c2.button("UNIX-TRANS", type=type_unix, use_container_width=True):
             st.session_state.active_company = "UNIX-TRANS"
