@@ -1994,8 +1994,9 @@ def render_porownanie_content(conn, wybrana_firma):
                 df_merge_show = df_merge.reset_index()
                 df_merge_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_show)))
 
+                # Używamy subset=..., aby formatować tylko liczby
                 st.dataframe(
-                    df_merge_show.style.format("{:,.2f} EUR", subset=['FILTERED_COST_A', 'FILTERED_COST_B', 'Różnica']).applymap(color_negative_good, subset=['Różnica']),
+                    df_merge_show.style.format("{:,.2f} EUR", subset=['FILTERED_COST_A', 'FILTERED_COST_B', 'Różnica']).map(color_negative_good, subset=['Różnica']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -2026,8 +2027,9 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_rev_show = df_merge_rev.reset_index()
             df_merge_rev_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_rev_show)))
 
+            # Używamy subset=..., aby formatować tylko liczby (TO BYŁO ŹRÓDŁEM BŁĘDU)
             st.dataframe(
-                df_merge_rev_show.style.format("{:,.2f} EUR").applymap(color_positive_good, subset=['Różnica']),
+                df_merge_rev_show.style.format("{:,.2f} EUR", subset=['PRZYCHOD_A', 'PRZYCHOD_B', 'Różnica']).map(color_positive_good, subset=['Różnica']),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -2058,8 +2060,9 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_zysk_show = df_merge_zysk.reset_index()
             df_merge_zysk_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_zysk_show)))
             
+            # Używamy subset=..., aby formatować tylko liczby
             st.dataframe(
-                df_merge_zysk_show.style.format("{:,.2f} EUR").applymap(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
+                df_merge_zysk_show.style.format("{:,.2f} EUR", subset=['ZYSK_A', 'ZYSK_B', 'Różnica']).map(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
