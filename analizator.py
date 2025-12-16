@@ -1617,10 +1617,36 @@ def render_rentownosc_content(conn, wybrana_firma):
                                 koszty_baza_netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                                 koszty_baza_brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                             )
-                        df_analiza_agreg, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent, wybrana_firma)
+                        
+                        # Pobieramy dane z pliku
+                        _, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent, wybrana_firma)
+                        
+                        # --- MODYFIKACJA: FILTROWANIE REFAKTUR Z RENTOWNOŚCI ---
+                        if df_analiza_raw is not None and not df_analiza_raw.empty:
+                            # Jeśli jesteśmy w HOLIER, usuwamy faktury wystawione na UNIX
+                            if wybrana_firma == "HOLIER":
+                                maska_refaktura = df_analiza_raw['kontrahent'].astype(str).str.upper().str.contains("UNIX", na=False)
+                                # Usuwamy tylko przychody (faktury sprzedaży na Unix), zostawiamy koszty jeśli są
+                                maska_do_usuniecia = maska_refaktura & (df_analiza_raw['typ'] == 'Przychód (Subiekt)')
+                                df_analiza_raw = df_analiza_raw[~maska_do_usuniecia]
+                            
+                            # Jeśli jesteśmy w UNIX, usuwamy faktury wystawione na HOLIER (rzadkie, ale dla porządku)
+                            elif wybrana_firma == "UNIX-TRANS":
+                                maska_refaktura = df_analiza_raw['kontrahent'].astype(str).str.upper().str.contains("HOLIER", na=False)
+                                maska_do_usuniecia = maska_refaktura & (df_analiza_raw['typ'] == 'Przychód (Subiekt)')
+                                df_analiza_raw = df_analiza_raw[~maska_do_usuniecia]
+
+                            # RE-AGREGACJA DANYCH PO FILTRACJI
+                            df_przychody = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+                            df_przychody_netto = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+                            df_koszty = df_analiza_raw[df_analiza_raw['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
+                            df_koszty_netto = df_analiza_raw[df_analiza_raw['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
+                            df_analiza_agreg = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
+                        else:
+                            df_analiza_agreg = pd.DataFrame(columns=['przychody_brutto', 'przychody_netto', 'koszty_inne_brutto', 'koszty_inne_netto'])
+                        # -------------------------------------------------------
+
                         st.session_state['dane_analizy_raw'] = df_analiza_raw 
-                        if df_analiza_agreg is None:
-                             df_analiza_agreg = pd.DataFrame(columns=['przychody_brutto', 'przychody_netto', 'koszty_inne_brutto', 'koszty_inne_netto'])
                         
                         df_rentownosc = df_analiza_agreg.merge(
                             df_koszty_baza_agg, 
@@ -1636,10 +1662,8 @@ def render_rentownosc_content(conn, wybrana_firma):
                         maska_none_usun = df_rentownosc.index.astype(str).str.upper() == "NONE"
                         df_rentownosc = df_rentownosc[~maska_none_usun]
                         
-                        # --- POPRAWKA: Wywal TRUCK_OSOBOWY z rentowności ---
                         maska_osobowy = df_rentownosc.index.astype(str).str.contains("OSOBOWY", case=False)
                         df_rentownosc = df_rentownosc[~maska_osobowy]
-                        # ---------------------------------------------------
 
                         maska_index = df_rentownosc.index.to_series().apply(czy_zakazany_pojazd_global)
                         df_rentownosc = df_rentownosc[~maska_index]
@@ -1696,8 +1720,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                                 )
                                 if wybrany_kontrahent_view:
                                     df_show = df_chart_kontr[df_chart_kontr['kontrahent'].isin(wybrany_kontrahent_view)]
-                                    
-                                    # --- MODYFIKACJA LP ---
                                     df_show_display = df_show[['data', 'pojazd_clean', 'opis', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
                                     df_show_display.insert(0, 'Lp.', range(1, 1 + len(df_show_display)))
 
@@ -1724,7 +1746,6 @@ def render_rentownosc_content(conn, wybrana_firma):
              if 'Główny Kontrahent' in df_rentownosc.columns:
                  cols_show.insert(0, 'Główny Kontrahent')
              
-             # --- MODYFIKACJA LP ---
              df_rent_show = df_rentownosc[cols_show].reset_index().rename(columns={'index': 'Pojazd'})
              df_rent_show.insert(0, 'Lp.', range(1, 1 + len(df_rent_show)))
 
@@ -1793,7 +1814,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                             color = 'red' if val < 0 else 'green'
                             return f'color: {color}'
                         
-                        # --- MODYFIKACJA LP ---
                         combined_details.insert(0, 'Lp.', range(1, 1 + len(combined_details)))
 
                         st.dataframe(combined_details.style.apply(axis=1, subset=['kwota_brutto_eur'], func=lambda row: [koloruj_kwoty(row.kwota_brutto_eur)]), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DateColumn("Data"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto (EUR)", format="%.2f EUR"), "kwota_netto_eur": st.column_config.NumberColumn("Netto (EUR)", format="%.2f EUR")})
@@ -1806,7 +1826,7 @@ def render_rentownosc_content(conn, wybrana_firma):
         
 def render_refaktury_content(conn, wybrana_firma):
     st.subheader("Refaktury Kosztów (Wzajemne)")
-    st.info("Ta sekcja pokazuje koszty paliwa/opłat poniesione przez jedną firmę na rzecz aut drugiej firmy.")
+    st.info("Ta sekcja pokazuje koszty paliwa/opłat poniesione przez jedną firmę na rzecz aut drugiej firmy oraz rzeczywiste faktury sprzedaży wystawione na drugą firmę.")
     
     try:
         min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
@@ -1818,20 +1838,47 @@ def render_refaktury_content(conn, wybrana_firma):
             domyslny_stop_ref = min_max_date.iloc[0, 1]
             
         with st.container(border=True):
+            st.markdown("##### Ustawienia")
             c1, c2 = st.columns(2)
             with c1:
                 data_start_ref = st.date_input("Data Start", value=domyslny_start_ref, key="ref_start")
             with c2:
                 data_stop_ref = st.date_input("Data Stop", value=domyslny_stop_ref, key="ref_stop")
             
+            # --- DODANE: ŁADOWANIE PLIKU DO RZECZYWISTYCH REFAKTUR ---
+            plik_analizy = None 
+            nazwa_pliku_analizy = "analiza.xlsx"
+            if wybrana_firma == "UNIX-TRANS":
+                nazwa_pliku_analizy = "fakturownia.csv"
+            
+            zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy)
+            if zapisany_plik_bytes:
+                plik_analizy = io.BytesIO(zapisany_plik_bytes)
+            # -------------------------------------------------------------
+            
         if st.button("🔎 Pokaż koszty do refaktury", type="primary"):
             df_holier_to_unix, df_unix_to_holier, _ = pobierz_dane_do_refaktury(conn, data_start_ref, data_stop_ref)
             
-            tab_h2u, tab_u2h = st.tabs(["Holier -> Unix (Do zwrotu przez Unix)", "Unix -> Holier (Do zwrotu przez Holier)"])
+            # Pobieramy dane z pliku (Subiekt/Fakturownia)
+            df_rzeczywiste_refaktury = pd.DataFrame()
+            if plik_analizy:
+                _, df_raw_file = przetworz_plik_analizy(plik_analizy, data_start_ref, data_stop_ref, wybrana_firma)
+                if df_raw_file is not None and not df_raw_file.empty:
+                    # Filtrujemy tylko Przychody wystawione na drugą firmę
+                    firma_docelowa_str = "UNIX" if wybrana_firma == "HOLIER" else "HOLIER"
+                    maska_kontrahent = df_raw_file['kontrahent'].astype(str).str.upper().str.contains(firma_docelowa_str, na=False)
+                    maska_typ = df_raw_file['typ'] == 'Przychód (Subiekt)'
+                    df_rzeczywiste_refaktury = df_raw_file[maska_kontrahent & maska_typ].copy()
+
+            tab_h2u, tab_u2h, tab_rzecz = st.tabs([
+                "Holier -> Unix (Do zwrotu przez Unix)", 
+                "Unix -> Holier (Do zwrotu przez Holier)",
+                f"Rzeczywiste Refaktury (Wystawione przez {wybrana_firma})"
+            ])
             
             # --- TAB 1: HOLIER PLACI ZA UNIX ---
             with tab_h2u:
-                st.markdown("### Koszty Holiera na rzecz aut UNIX")
+                st.markdown("### Koszty Holiera na rzecz aut UNIX (Obliczone z kart paliwowych)")
                 if df_holier_to_unix is None or df_holier_to_unix.empty:
                     st.success("Brak kosztów w tym kierunku.")
                 else:
@@ -1845,13 +1892,11 @@ def render_refaktury_content(conn, wybrana_firma):
                         Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                     ).sort_values(by='Suma_Brutto', ascending=False)
                     
-                    # --- MODYFIKACJA LP ---
                     agg_ref_show = agg_ref.reset_index()
                     agg_ref_show.insert(0, 'Lp.', range(1, 1 + len(agg_ref_show)))
                     st.dataframe(agg_ref_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
                     
                     with st.expander("Szczegóły transakcji"):
-                        # --- MODYFIKACJA LP ---
                         df_ref_show = df_holier_to_unix[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False).copy()
                         df_ref_show.insert(0, 'Lp.', range(1, 1 + len(df_ref_show)))
 
@@ -1866,7 +1911,7 @@ def render_refaktury_content(conn, wybrana_firma):
 
             # --- TAB 2: UNIX PLACI ZA HOLIER ---
             with tab_u2h:
-                st.markdown("### Koszty UNIX na rzecz aut Holiera (np. NOL0935C)")
+                st.markdown("### Koszty UNIX na rzecz aut Holiera (Obliczone z kart paliwowych)")
                 if df_unix_to_holier is None or df_unix_to_holier.empty:
                     st.success("Brak kosztów w tym kierunku.")
                 else:
@@ -1880,13 +1925,11 @@ def render_refaktury_content(conn, wybrana_firma):
                         Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                     ).sort_values(by='Suma_Brutto', ascending=False)
                     
-                    # --- MODYFIKACJA LP ---
                     agg_ref_2_show = agg_ref_2.reset_index()
                     agg_ref_2_show.insert(0, 'Lp.', range(1, 1 + len(agg_ref_2_show)))
                     st.dataframe(agg_ref_2_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
                     
                     with st.expander("Szczegóły transakcji"):
-                        # --- MODYFIKACJA LP ---
                         df_ref_show_2 = df_unix_to_holier[['data_transakcji_dt', 'identyfikator_clean', 'produkt', 'kraj', 'kwota_netto_eur', 'kwota_brutto_eur', 'zrodlo']].sort_values(by='data_transakcji_dt', ascending=False).copy()
                         df_ref_show_2.insert(0, 'Lp.', range(1, 1 + len(df_ref_show_2)))
 
@@ -1898,12 +1941,48 @@ def render_refaktury_content(conn, wybrana_firma):
                                 "data_transakcji_dt": st.column_config.DatetimeColumn("Data", format="YYYY-MM-DD HH:mm"), "kwota_brutto_eur": st.column_config.NumberColumn("Brutto", format="%.2f EUR")
                             }
                         )
+            
+            # --- TAB 3: RZECZYWISTE REFAKTURY Z PLIKU ---
+            with tab_rzecz:
+                st.markdown(f"### Zaksięgowane Faktury Sprzedaży na rzecz drugiej firmy (z pliku)")
+                if df_rzeczywiste_refaktury.empty:
+                    if plik_analizy is None:
+                        st.warning("Brak pliku analizy w bazie. Wgraj go w zakładce Rentowność lub Admin.")
+                    else:
+                        st.info("Brak znalezionych refaktur w pliku (brak faktur sprzedaży na drugą firmę).")
+                else:
+                     col_rz1, col_rz2 = st.columns(2)
+                     col_rz1.metric("Wystawione (Netto)", f"{df_rzeczywiste_refaktury['kwota_netto_eur'].sum():,.2f} EUR", border=True)
+                     col_rz2.metric("Wystawione (Brutto)", f"{df_rzeczywiste_refaktury['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+                     
+                     st.markdown("##### Podział na pojazdy")
+                     agg_rzecz = df_rzeczywiste_refaktury.groupby('pojazd_clean').agg(
+                        Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                        Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum'),
+                        Liczba_Faktur=pd.NamedAgg(column='opis', aggfunc='count')
+                    ).sort_values(by='Suma_Brutto', ascending=False)
+                    
+                     agg_rzecz_show = agg_rzecz.reset_index()
+                     agg_rzecz_show.insert(0, 'Lp.', range(1, 1 + len(agg_rzecz_show)))
+                     st.dataframe(agg_rzecz_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
+                     
+                     with st.expander("Szczegóły dokumentów"):
+                        df_rzecz_show = df_rzeczywiste_refaktury[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].sort_values(by='data', ascending=False).copy()
+                        df_rzecz_show.insert(0, 'Lp.', range(1, 1 + len(df_rzecz_show)))
+                        
+                        st.dataframe(
+                            df_rzecz_show,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "data": st.column_config.DateColumn("Data"),
+                                "kwota_brutto_eur": st.column_config.NumberColumn("Brutto", format="%.2f EUR"),
+                                "kwota_netto_eur": st.column_config.NumberColumn("Netto", format="%.2f EUR")
+                            }
+                        )
+                        
     except Exception as e:
             st.error(f"Błąd: {e}")
-
-        
-
-                
 def render_porownanie_content(conn, wybrana_firma):
     st.subheader("Porównanie Okresów")
     st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
