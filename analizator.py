@@ -686,7 +686,7 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
         FIRMY_DO_USUNIECIA = [
             'TRUCK24SP', 'TRUCK24', 'EDENRED', 'MARMAR', 'SANTANDER', 
-            'LEASING', 'PZU', 'WARTA', 'INTERCARS', 'EUROWAG', 'E100', 'POLSKA', 'BANK', 'WE8JP51','WH0064F','PTU6049P','PTU6050P'
+            'LEASING', 'PZU', 'WARTA', 'INTERCARS', 'EUROWAG', 'E100', 'POLSKA', 'BANK'
         ]
         
         for firma in FIRMY_DO_USUNIECIA:
@@ -991,7 +991,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
             'LEASING', 'FINANCE', 'UBER', 'BOLT', 'FREE',
             'SERWIS', 'POLSKA', 'SPOLKA', 'GROUP', 'LOGISTICS',
             'TRANS', 'CONSULTING', 'SYSTEM', 'SOLUTIONS',
-            'ZALICZKA' 
+            'ZALICZKA', 'WE8JP51','WH0064F','PTU6049P','PTU6050P'
         ]
         if line_clean in BLACKLIST: return False
         words = re.split(r'[\s+Ii]+', line_clean) 
