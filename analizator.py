@@ -686,7 +686,7 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
         FIRMY_DO_USUNIECIA = [
             'TRUCK24SP', 'TRUCK24', 'EDENRED', 'MARMAR', 'SANTANDER', 
-            'LEASING', 'PZU', 'WARTA', 'INTERCARS', 'EUROWAG', 'E100', 'POLSKA', 'BANK'
+            'LEASING', 'PZU', 'WARTA', 'INTERCARS', 'EUROWAG', 'E100', 'POLSKA', 'BANK', 'WE8JP51','WH0064F','PTU6049P','PTU6050P'
         ]
         
         for firma in FIRMY_DO_USUNIECIA:
