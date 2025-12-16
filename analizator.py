@@ -220,10 +220,11 @@ def kategoryzuj_transakcje(row, zrodlo):
         artykul = str(row.get('Category', '')).strip().upper()
         full_text = (usluga + " " + artykul).upper()
         
-    elif zrodlo == 'Fakturownia':
+     elif zrodlo == 'Fakturownia':
         # Logika dla fakturowni - tutaj szukamy w produkcie
         full_text = str(row.get('Produkt/usługa', '')).upper()
-        return 'INNE', 'Nieznane' # Fakturownia ma własną logikę w innej części kodu, tu default
+        # Zakładamy domyślnie, że import z Fakturowni to Przychód
+        return 'PRZYCHÓD', 'Usługa transportowa' # Fakturownia ma własną logikę w innej części kodu, tu default
     else:
         full_text = ""
 
