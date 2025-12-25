@@ -9,14 +9,15 @@ from sqlalchemy import text
 import io
 import os
 import json
+import calendar
 
 # --- USTAWIENIA STRONY ---
-icon_image = "⛟" 
+icon_image = "⛟"
 
 st.set_page_config(
     page_title="Analizator Wydatków Multi-Firma",
     layout="wide",
-    page_icon=icon_image 
+    page_icon=icon_image
 )
 
 # --- STYLIZACJA CSS ---
@@ -77,8 +78,8 @@ UNIX_FLOTA_CONFIG = {
 
 UNIX_ALIAS_MAPPING = {
     'TRUCK3': 'WGM8463A',        
-    'PLTRUCK3': 'WGM8463A',      
-    'PTU0002': 'WGM8463A',      
+    'PLTRUCK3': 'WGM8463A',       
+    'PTU0002': 'WGM8463A',       
 }
 
 # --- SŁOWNIK VAT ---
@@ -103,9 +104,9 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Faktura VAT zakupu', 
     'Korekta faktury VAT zakupu', 
     'Rachunek zakupu',
-    'Tankowanie',                 
+    'Tankowanie',                  
     'Paliwo',
-    'Opłata drogowa',             
+    'Opłata drogowa',              
     'Opłaty drogowe',
     'Opłata drogowa DK',
     'Art. biurowe', 'Art. chemiczne', 'Art. spożywcze', 'Badanie lekarskie', 'Delegacja', 
@@ -119,7 +120,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
 
 ETYKIETY_IGNOROWANE = [
     'Zamówienie od klienta', 
-    'Wydanie zewnętrzne',         
+    'Wydanie zewnętrzne',          
     'Oferta', 
     'Proforma',
     'Suma końcowa', 
@@ -140,14 +141,108 @@ ZAKAZANE_POJAZDY_LISTA = [
     'ZALICZKA'
 ]
 
+# --- NOWE FUNKCJE POMOCNICZE DO WYNAGRODZEŃ (EXCEL) ---
+MAPA_MIESIECY_PL = {
+    'STYCZEŃ': 1, 'STYCZEN': 1, 'JANUARY': 1, '01': 1, '1': 1,
+    'LUTY': 2, 'FEBRUARY': 2, '02': 2, '2': 2,
+    'MARZEC': 3, 'MARCH': 3, '03': 3, '3': 3,
+    'KWIECIEŃ': 4, 'KWIECIEN': 4, 'APRIL': 4, '04': 4, '4': 4,
+    'MAJ': 5, 'MAY': 5, '05': 5, '5': 5,
+    'CZERWIEC': 6, 'JUNE': 6, '06': 6, '6': 6,
+    'LIPIEC': 7, 'JULY': 7, '07': 7, '7': 7,
+    'SIERPIEŃ': 8, 'SIERPIEN': 8, 'AUGUST': 8, '08': 8, '8': 8,
+    'WRZESIEŃ': 9, 'WRZESIEN': 9, 'SEPTEMBER': 9, '09': 9, '9': 9,
+    'PAŹDZIERNIK': 10, 'PAZDZIERNIK': 10, 'OCTOBER': 10, '10': 10,
+    'LISTOPAD': 11, 'NOVEMBER': 11, '11': 11,
+    'GRUDZIEŃ': 12, 'GRUDZIEN': 12, 'DECEMBER': 12, '12': 12
+}
+
+def parsuj_dataframe_plac(df):
+    """
+    Parsuje DataFrame wczytany z arkusza Excela.
+    Szuka wierszy ze słowem 'KWOTA'.
+    """
+    wyniki = []
+    aktualny_kierowca = None
+    
+    # Konwersja na stringi i czyszczenie
+    df = df.astype(str)
+    
+    # Iterujemy po wierszach
+    for idx, row in df.iterrows():
+        # Pobieramy pierwsze kilka kolumn (zakładamy, że struktura jest w pierwszych kolumnach)
+        col0 = row.iloc[0].strip() if len(row) > 0 else ""
+        col1 = row.iloc[1].strip() if len(row) > 1 else ""
+        col2 = row.iloc[2].strip() if len(row) > 2 else ""
+        col3 = row.iloc[3].strip() if len(row) > 3 else ""
+        
+        # 1. Szukamy nazwiska. Często jest w kolumnie 0 lub 1, a obok "ILOSC DNI"
+        # Sprawdzamy czy wiersz wygląda na nagłówek kierowcy
+        tekst_wiersza = (col0 + " " + col1).upper()
+        if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza:
+            # Zakładamy, że nazwisko jest w pierwszej niepustej komórce tego wiersza (przed ILOSC DNI)
+            if col0 and col0.upper() != "NAN":
+                aktualny_kierowca = col0
+            elif col1 and "ILOSC" not in col1.upper() and col1.upper() != "NAN":
+                aktualny_kierowca = col1
+            continue
+            
+        # 2. Szukamy słowa "KWOTA"
+        # Wg opisu: wiersz zawiera "KWOTA"
+        if "KWOTA" in col0.upper() or "KWOTA" in col1.upper() or "KWOTA" in col2.upper():
+            if aktualny_kierowca:
+                try:
+                    wartosc = 0.0
+                    found = False
+                    # Szukamy liczby w tym samym wierszu
+                    for val in row:
+                        val_str = str(val).replace(',', '.').replace(' ', '').replace('zł', '').replace('pln', '')
+                        if not val_str or val_str.upper() == 'NAN' or "KWOTA" in val_str.upper():
+                            continue
+                        try:
+                            # Jeśli to liczba, bierzemy jako kwotę
+                            wartosc = float(val_str)
+                            found = True
+                            break # Bierzemy pierwszą napotkaną liczbę po etykiecie KWOTA
+                        except:
+                            continue
+                    
+                    if found:
+                        wyniki.append({
+                            'kierowca': aktualny_kierowca,
+                            'kwota_total': wartosc
+                        })
+                        aktualny_kierowca = None # Reset
+                except:
+                    pass
+                    
+    return pd.DataFrame(wyniki)
+
+def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok):
+    nazwa_clean = nazwa_arkusza.upper().strip().split('.')[0]
+    # Próba usunięcia roku z nazwy jeśli jest (np. "Styczeń 2024")
+    nazwa_clean = nazwa_clean.replace(str(rok), "").strip()
+    
+    miesiac = MAPA_MIESIECY_PL.get(nazwa_clean)
+    if not miesiac:
+        for k, v in MAPA_MIESIECY_PL.items():
+            if k in nazwa_clean:
+                miesiac = v
+                break
+    
+    if miesiac:
+        _, last_day = calendar.monthrange(rok, miesiac)
+        start = date(rok, miesiac, 1)
+        stop = date(rok, miesiac, last_day)
+        return start, stop
+    return None, None
+
 def czy_zakazany_pojazd_global(nazwa):
     if not nazwa: return False
     n = str(nazwa).upper().replace(" ", "").replace("-", "")
     
-    # --- POPRAWKA: Jeśli to osobowy, to NIE jest zakazany (nawet jak ma TRUCK w nazwie) ---
     if 'OSOBOWY' in n:
         return False
-    # -------------------------------------------------------------------------------------
 
     if n in UNIX_ALIAS_MAPPING:
         return False
@@ -193,11 +288,11 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         if kurs_pln: mapa_kursow_do_eur[waluta] = kurs_pln / kurs_eur_pln
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
+
 # --- OBSŁUGA WEBFLEET I WYNAGRODZEŃ ---
 
 def zapisz_ustawienia_api(conn, account, username, password):
     with conn.session as s:
-        # Upsert (Insert or Update)
         data = {
             "webfleet_account": account,
             "webfleet_username": username,
@@ -223,18 +318,12 @@ def pobierz_ustawienia_api(conn):
 
 @st.cache_data(ttl=3600)
 def pobierz_przypisania_webfleet(account, username, password, data_start, data_stop):
-    """
-    Pobiera raport podróży z Webfleet, aby ustalić jaki kierowca jechał jakim autem.
-    """
     url = "https://csv.webfleet.com/extern"
-    
-    # Format daty dla Webfleet (ISO8601 subset or specific)
-    # Zwykle wymagają: YYYY-MM-DDThh:mm:ss
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
     params = {
-        'lang': 'de', # Lub pl, en
+        'lang': 'de',
         'account': account,
         'username': username,
         'password': password,
@@ -247,25 +336,18 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     try:
         response = requests.get(url, params=params, timeout=30)
         if response.status_code == 200:
-            # Webfleet zwraca CSV lub JSON. Tutaj prosimy o JSON.
-            # Uwaga: Parsowanie odpowiedzi zależy od rzeczywistej struktury Webfleet Connect
             data = response.json()
-            
-            # Przykładowa struktura (trzeba dostosować do realnej odpowiedzi):
-            # Zakładamy listę obiektów z polami: objectname, drivername, startdate, enddate
             lista_przypisan = []
-            
-            # Prowizoryczne parsowanie (Webfleet zwraca często listę wewnątrz klucza)
             items = data if isinstance(data, list) else data.get('trips', [])
             
             for trip in items:
                 pojazd = trip.get('objectname') or trip.get('objectuid')
                 kierowca = trip.get('drivername') or trip.get('driverid')
-                data_trip = trip.get('startdate') # string
+                data_trip = trip.get('startdate') 
                 
                 if pojazd and kierowca:
                     lista_przypisan.append({
-                        'data': data_trip[:10], # YYYY-MM-DD
+                        'data': data_trip[:10], 
                         'pojazd': pojazd,
                         'kierowca': kierowca
                     })
@@ -279,47 +361,8 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         st.error(f"Wyjątek przy łączeniu z Webfleet: {e}")
         return pd.DataFrame()
 
-def parsuj_plik_plac(plik_bytes):
-    """
-    Parsuje specyficzny format pliku 'KIEROWCY WYNAGRODZENIE...'
-    Opiera się na strukturze: Nazwisko w jednej linii, poniżej KWOTA.
-    """
-    try:
-        df = pd.read_csv(io.BytesIO(plik_bytes), header=None, on_bad_lines='skip')
-        wyniki = []
-        
-        aktualny_kierowca = None
-        
-        # Iterujemy po wierszach, szukając wzorca
-        for idx, row in df.iterrows():
-            col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
-            col2 = str(row[2]).strip() if pd.notna(row[2]) else ""
-            
-            # Wykrywanie nazwiska (zakładamy, że jest w kolumnie 1 i obok jest ILOSC DNI)
-            if "ILOSC DNI" in col2:
-                aktualny_kierowca = col1
-                
-            # Wykrywanie kwoty (zakładamy, że jest pod nazwiskiem, etykieta KWOTA w col 1)
-            # Wg snippetu: ,,KWOTA, 5429.25 (czyli col1 pusta, col2 KWOTA, col3 wartosc)
-            col2_check = str(row[2]).strip().upper() if pd.notna(row[2]) else ""
-            if "KWOTA" in col2_check and aktualny_kierowca:
-                try:
-                    wartosc = float(str(row[3]).replace(',', '.'))
-                    wyniki.append({
-                        'kierowca': aktualny_kierowca,
-                        'kwota_total': wartosc
-                    })
-                    aktualny_kierowca = None # Reset po znalezieniu kwoty
-                except:
-                    pass
-                    
-        return pd.DataFrame(wyniki)
-    except Exception as e:
-        st.error(f"Błąd parsowania pliku płac: {e}")
-        return pd.DataFrame()
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
-    # Pobieramy dane i budujemy full_text do przeszukiwania
     usluga = ""
     artykul = ""
     full_text = ""
@@ -327,15 +370,13 @@ def kategoryzuj_transakcje(row, zrodlo):
     if zrodlo == 'Eurowag':
         usluga = str(row.get('Usługa', '')).upper()
         artykul = str(row.get('Artykuł', '')).strip().upper()
-        # Eurowag: czasem typ paliwa jest w 'Produkt' (jeśli taka kolumna istnieje)
         produkt = str(row.get('Produkt', '')).strip().upper() if 'Produkt' in row else ""
         full_text = (usluga + " " + artykul + " " + produkt).upper()
         
     elif zrodlo == 'E100_PL':
         usluga = str(row.get('Usługa', '')).strip().upper()
         kategoria = str(row.get('Kategoria', '')).strip().upper()
-        brand = str(row.get('Brand', '')).strip().upper() # E100: Ważne! Tu bywa np. "Power Max" lub typ paliwa
-        # Łączymy wszystko, żeby nic nie umknęło
+        brand = str(row.get('Brand', '')).strip().upper() 
         full_text = (usluga + " " + kategoria + " " + brand).upper()
         artykul = kategoria if kategoria else usluga
 
@@ -345,51 +386,36 @@ def kategoryzuj_transakcje(row, zrodlo):
         full_text = (usluga + " " + artykul).upper()
         
     elif zrodlo == 'Fakturownia':
-        # Logika dla fakturowni - tutaj szukamy w produkcie
         full_text = str(row.get('Produkt/usługa', '')).upper()
-        # Zakładamy domyślnie, że import z Fakturowni to Przychód
-        return 'PRZYCHÓD', 'Usługa transportowa' # Fakturownia ma własną logikę w innej części kodu, tu default
+        return 'PRZYCHÓD', 'Usługa transportowa' 
     else:
         full_text = ""
 
-    # --- 1. OPŁATY DROGOWE ---
     if 'TOLL' in full_text or 'OPŁATA DROGOWA' in full_text or 'VIATOLL' in full_text or 'E-TOLL' in full_text or 'DROGOWE' in full_text:
         return 'OPŁATA', usluga if usluga else 'Opłata drogowa'
 
-    # --- 2. PALIWA (Rozszerzona logika) ---
-    
-    # LPG (Słowa kluczowe: LPG, Autogaz, Gaz płynny, GPL, Propane)
     if any(keyword in full_text for keyword in ['LPG', 'AUTOGAZ', 'GAZ PŁYNNY', 'GPL', 'PROPANE', 'BUTANE']):
         return 'PALIWO', 'LPG'
 
-    # Benzyna (Słowa kluczowe: Pb, 95, 98, Mogas, Petrol, Super, Natural, Unleaded)
-    # Uwaga: sprawdzamy " 95 " ze spacjami, żeby nie łapać końcówek numerów kart czy kwot
     benzyna_keywords = ['BENZYNA', 'GASOLINE', 'PETROL', 'MOGAS', 'EUROSUPER', 'SUPER 95', 'SUPER 98', 'NATURAL 95', 'UNLEADED', 'PB95', 'PB98', ' E5 ', ' E10 ']
     if any(keyword in full_text for keyword in benzyna_keywords):
         return 'PALIWO', 'Benzyna'
         
-    # Dodatkowe sprawdzenie dla "PB " na początku lub w środku
     if 'PB ' in full_text or ' PB' in full_text:
         return 'PALIWO', 'Benzyna'
 
-    # AdBlue
     if 'ADBLUE' in full_text or 'AD BLUE' in full_text:
         return 'PALIWO', 'AdBlue'
 
-    # Diesel (ON, Olej napędowy, Diesel)
     if 'DIESEL' in full_text or 'OLEJ NAPĘDOWY' in full_text:
         return 'PALIWO', 'Diesel'
     
-    # "ON" jest ryzykowne (np. "ZONE"), więc sprawdzamy jako oddzielne słowo
     if ' ON ' in (" " + full_text + " "): 
         return 'PALIWO', 'Diesel'
 
-    # --- 3. INNE ---
     if 'OPENLOOP' in full_text or 'VISA' in full_text or 'MYJNIA' in full_text or 'WASH' in full_text or 'PARKING' in full_text:
         return 'INNE', 'Płatność kartą/Inne'
         
-    # Domyślny zwrot, jeśli to paliwo ale nie zidentyfikowane powyżej (często Diesel w Eurowag to po prostu nazwa stacji)
-    # Jeśli kwota jest duża i jest litraż, to pewnie Diesel, ale dla bezpieczeństwa zostawmy jako INNE lub domyślnie Diesel jeśli ma "Power Max"
     if 'POWER MAX' in full_text or 'ECTO' in full_text:
         return 'PALIWO', 'Diesel'
 
@@ -423,13 +449,10 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     df_out = pd.DataFrame()
     df_out['data_transakcji'] = pd.to_datetime(df_e100['Data'] + ' ' + df_e100['Czas'], format='%d.%m.%Y %H:%M:%S', errors='coerce')
     
-    # 1. Pobieramy identyfikator
     df_out['identyfikator'] = df_e100['Numer samochodu'].fillna(df_e100['Numer karty'])
     
-    # 2. Mapowanie specjalne kart (Kacper, WGM)
     numer_karty_str = df_e100['Numer karty'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # Zachowujemy Twoje mapowanie
     df_out.loc[numer_karty_str.str.endswith('24'), 'identyfikator'] = 'WGM8463A'
     df_out.loc[numer_karty_str.str.endswith('40'), 'identyfikator'] = 'KACPER'
     
@@ -446,7 +469,6 @@ def normalizuj_e100_PL(df_e100, firma_tag):
     else:
         df_out['kraj'] = 'PL' 
 
-    # Używamy nowej funkcji kategoryzacji (automatycznie wykryje LPG lub Benzynę)
     kategorie = df_e100.apply(lambda row: kategoryzuj_transakcje(row, 'E100_PL'), axis=1)
     df_out['typ'] = [kat[0] for kat in kategorie]
     df_out['produkt'] = [kat[1] for kat in kategorie]
@@ -1108,7 +1130,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None                   
+    aktualna_data = None                    
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     def is_vehicle_line(line):
@@ -1429,21 +1451,148 @@ def to_excel_contractors(df_analiza_raw):
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
-    # --- NOWA SEKCJA: KONFIGURACJA WEBFLEET ---
+    # --- KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
         st.info("Wprowadź dane dostępowe do Webfleet Connect, aby pobierać dane o kierowcach.")
-        
         acc, user, pw = pobierz_ustawienia_api(conn)
-        
         with st.form("webfleet_config"):
             inp_account = st.text_input("Account (Nazwa konta)", value=acc if acc else "")
             inp_username = st.text_input("Username (Użytkownik)", value=user if user else "")
             inp_password = st.text_input("Password (Hasło)", value=pw if pw else "", type="password")
-            
-            btn_save_api = st.form_submit_button("Zapisz konfigurację API")
-            if btn_save_api:
+            if st.form_submit_button("Zapisz konfigurację API"):
                 zapisz_ustawienia_api(conn, inp_account, inp_username, inp_password)
                 
+    st.divider()
+
+    # --- SEKCJA: WYNAGRODZENIA (OBLICZANIE I ZAPIS) ---
+    st.markdown("### 💰 Analiza Wynagrodzeń (Rozliczenie Kierowców)")
+    with st.container(border=True):
+        st.info("1. Wgraj plik Excel. 2. Wybierz miesiąc. 3. System połączy to z Webfleet. 4. Zapisz wynik do bazy, aby widzieć go w Raporcie.")
+        
+        col_w1, col_w2 = st.columns([1, 2])
+        with col_w1:
+            rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=date.today().year)
+            plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls', 'csv'])
+
+        if plik_plac:
+            try:
+                # Wczytywanie pliku (Excel lub CSV)
+                if plik_plac.name.endswith('.csv'):
+                    sheet_names = ['Dane z CSV']
+                    df_dict = {'Dane z CSV': pd.read_csv(plik_plac, on_bad_lines='skip', header=None)}
+                else:
+                    xls_file = pd.ExcelFile(plik_plac)
+                    sheet_names = xls_file.sheet_names
+                    df_dict = {sn: pd.read_excel(xls_file, sheet_name=sn, header=None) for sn in sheet_names}
+                
+                with col_w2:
+                    wybrany_arkusz = st.selectbox("Wybierz Arkusz (Miesiąc)", sheet_names)
+                    
+                    # Automatyczne daty
+                    start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(wybrany_arkusz, rok_analizy)
+                    
+                    if start_auto:
+                        st.caption(f"Wykryto okres: {start_auto} - {stop_auto}")
+                        data_start_wf = start_auto
+                        data_stop_wf = stop_auto
+                    else:
+                        st.warning("Nie rozpoznano miesiąca. Wybierz daty ręcznie.")
+                        c_d1, c_d2 = st.columns(2)
+                        data_start_wf = c_d1.date_input("Data Start", value=date(rok_analizy, 1, 1))
+                        data_stop_wf = c_d2.date_input("Data Stop", value=date(rok_analizy, 1, 31))
+
+                    if st.button("🚀 Oblicz i Pokaż Wynik", type="primary"):
+                        st.session_state['temp_wynagrodzenia'] = None # Reset
+                        acc, user, pw = pobierz_ustawienia_api(conn)
+                        if not acc:
+                            st.error("Brak konfiguracji Webfleet!")
+                        else:
+                            with st.spinner(f"Pobieranie danych z Webfleet ({data_start_wf} - {data_stop_wf})..."):
+                                # 1. Parsowanie pliku
+                                df_wybrany = df_dict[wybrany_arkusz]
+                                df_place = parsuj_dataframe_plac(df_wybrany)
+                                
+                                if df_place.empty:
+                                    st.error("Brak danych 'KWOTA' w pliku.")
+                                else:
+                                    # 2. Webfleet
+                                    df_wf = pobierz_przypisania_webfleet(acc, user, pw, data_start_wf, data_stop_wf)
+                                    
+                                    if df_wf.empty:
+                                        st.warning("Brak tras Webfleet. Nie można przypisać aut.")
+                                        st.dataframe(df_place)
+                                    else:
+                                        # 3. Łączenie
+                                        statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
+                                        df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
+                                        statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
+                                        
+                                        merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
+                                        
+                                        total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
+                                        merged['udzial'] = merged['dni_jazdy'] / total_days
+                                        merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                                        
+                                        wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
+                                        wynik_pojazdy = wynik_pojazdy.sort_values(by='koszt_przypisany', ascending=False)
+                                        
+                                        # Zapis do sesji, aby umożliwić zapis do DB
+                                        st.session_state['temp_wynagrodzenia'] = {
+                                            'wynik': wynik_pojazdy,
+                                            'start': data_start_wf,
+                                            'stop': data_stop_wf
+                                        }
+                                        st.success("Obliczono! Sprawdź tabelę poniżej i ZAPISZ do bazy.")
+
+            except Exception as e:
+                st.error(f"Błąd: {e}")
+
+        # Wyświetlanie wyniku i przycisk ZAPISU
+        if st.session_state.get('temp_wynagrodzenia'):
+            data_pack = st.session_state['temp_wynagrodzenia']
+            df_wynik = data_pack['wynik']
+            
+            st.markdown(f"**Wyniki dla: {data_pack['start']} - {data_pack['stop']}**")
+            st.dataframe(df_wynik.style.format({'koszt_przypisany': '{:,.2f} PLN'}), use_container_width=True)
+            
+            if st.button("💾 ZAPISZ TE WYNAGRODZENIA DO BAZY DANYCH", type="primary", use_container_width=True):
+                with st.spinner("Zapisywanie..."):
+                    try:
+                        # 1. Usuwamy stare wynagrodzenia z tego miesiąca (żeby nie dublować)
+                        with conn.session as s:
+                            s.execute(text(f"""
+                                DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} 
+                                WHERE typ = 'WYNAGRODZENIE' 
+                                AND data_transakcji::date BETWEEN :d1 AND :d2
+                                AND firma = :firma
+                            """), {'d1': data_pack['start'], 'd2': data_pack['stop'], 'firma': wybrana_firma})
+                            s.commit()
+                        
+                        # 2. Przygotowujemy DataFrame do wgrania do tabeli transactions
+                        df_to_save = pd.DataFrame()
+                        df_to_save['data_transakcji'] = pd.to_datetime(data_pack['stop']) # Data = koniec miesiąca
+                        df_to_save['identyfikator'] = df_wynik['pojazd']
+                        # Zapisujemy jako kwota BRUTTO i NETTO (zakładamy to samo dla uproszczenia)
+                        df_to_save['kwota_netto'] = df_wynik['koszt_przypisany']
+                        df_to_save['kwota_brutto'] = df_wynik['koszt_przypisany']
+                        df_to_save['waluta'] = 'PLN'
+                        df_to_save['ilosc'] = 1
+                        df_to_save['produkt'] = 'Wynagrodzenie kierowcy (Webfleet)'
+                        df_to_save['typ'] = 'WYNAGRODZENIE'
+                        df_to_save['zrodlo'] = 'Excel+Webfleet'
+                        df_to_save['kraj'] = 'PL'
+                        df_to_save['firma'] = wybrana_firma
+                        df_to_save['kontrahent'] = 'Pracownicy'
+                        
+                        df_to_save.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
+                        st.success("✅ Zapisano wynagrodzenia w bazie! Są teraz widoczne w Raportach i Rentowności.")
+                        st.session_state['temp_wynagrodzenia'] = None # Clear po zapisie
+                        time.sleep(2)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Błąd zapisu do bazy: {e}")
+
     st.divider()
     
     col_up1, col_up2 = st.columns([1, 2])
@@ -1512,262 +1661,207 @@ def render_raport_content(conn, wybrana_firma):
         
         if min_max_date.empty or min_max_date.iloc[0, 0] is None:
             st.info("Baza danych jest pusta. Wgraj pliki w Panelu Admina.")
-        else:
-            domyslny_start = min_max_date.iloc[0, 0]
-            domyslny_stop = min_max_date.iloc[0, 1]
-            
-            with st.container(border=True):
-                st.markdown("##### Zakres Raportu")
-                col_r1, col_r2 = st.columns(2)
-                with col_r1:
-                    data_start_rap = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop, key="rap_start")
-                with col_r2:
-                    data_stop_rap = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop, key="rap_stop")
+            return
 
-            dane_z_bazy_full = pobierz_dane_z_bazy(conn, data_start_rap, data_stop_rap, wybrana_firma)
+        domyslny_start = min_max_date.iloc[0, 0]
+        domyslny_stop = min_max_date.iloc[0, 1]
+        
+        with st.container(border=True):
+            st.markdown("##### Zakres Raportu")
+            col_r1, col_r2 = st.columns(2)
+            with col_r1:
+                data_start_rap = st.date_input("Data Start", value=domyslny_start, min_value=domyslny_start, max_value=domyslny_stop, key="rap_start")
+            with col_r2:
+                data_stop_rap = st.date_input("Data Stop", value=domyslny_stop, min_value=domyslny_start, max_value=domyslny_stop, key="rap_stop")
+
+        dane_z_bazy_full = pobierz_dane_z_bazy(conn, data_start_rap, data_stop_rap, wybrana_firma)
+        
+        if dane_z_bazy_full.empty:
+            st.warning(f"Brak danych dla firmy {wybrana_firma} w wybranym zakresie dat.")
+        else:
+            dane_przygotowane, mapa_kursow = przygotuj_dane_paliwowe(dane_z_bazy_full.copy(), wybrana_firma)
             
-            if dane_z_bazy_full.empty:
-                st.warning(f"Brak danych dla firmy {wybrana_firma} w wybranym zakresie dat.")
-            else:
-                dane_przygotowane, mapa_kursow = przygotuj_dane_paliwowe(dane_z_bazy_full.copy(), wybrana_firma)
-                
-                if dane_przygotowane is None: st.stop()
-                
-                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne, sub_tab_wynagrodzenia = st.tabs(["Paliwo", "Opłaty Drogowe", "Pozostałe", "Wynagrodzenia"])
-                
-                with sub_tab_paliwo:
-                    df_paliwo = dane_przygotowane[dane_przygotowane['typ'] == 'PALIWO']
-                    if df_paliwo.empty:
-                        st.info("Brak danych o paliwie.")
-                    else:
-                        st.metric(label="Łącznie Paliwo (Brutto)", value=f"{df_paliwo['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+            if dane_przygotowane is None: st.stop()
+            
+            sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne, sub_tab_wynagrodzenia = st.tabs(["Paliwo", "Opłaty Drogowe", "Pozostałe", "Wynagrodzenia"])
+            
+            with sub_tab_paliwo:
+                df_paliwo = dane_przygotowane[dane_przygotowane['typ'] == 'PALIWO']
+                if df_paliwo.empty:
+                    st.info("Brak danych o paliwie.")
+                else:
+                    st.metric(label="Łącznie Paliwo (Brutto)", value=f"{df_paliwo['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+                    
+                    st.markdown("##### Wydatki paliwowe wg Kraju")
+                    if 'kraj' in df_paliwo.columns:
+                        df_kraje = df_paliwo.groupby('kraj').agg(
+                            Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                            Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                        ).sort_values(by='Suma_Brutto', ascending=False)
+                        df_kraje['VAT'] = df_kraje['Suma_Brutto'] - df_kraje['Suma_Netto']
+                        df_kraje = df_kraje[['Suma_Netto', 'VAT', 'Suma_Brutto']]
+                        st.bar_chart(df_kraje['Suma_Brutto'], color="#FF4B4B")
                         
-                        # --- Wykres Krajów (Bez zmian) ---
-                        st.markdown("##### Wydatki paliwowe wg Kraju")
-                        if 'kraj' in df_paliwo.columns:
-                            df_kraje = df_paliwo.groupby('kraj').agg(
-                                Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
-                                Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
-                            ).sort_values(by='Suma_Brutto', ascending=False)
-                            df_kraje['VAT'] = df_kraje['Suma_Brutto'] - df_kraje['Suma_Netto']
-                            df_kraje = df_kraje[['Suma_Netto', 'VAT', 'Suma_Brutto']]
-                            st.bar_chart(df_kraje['Suma_Brutto'], color="#FF4B4B")
+                        df_kraje_show = df_kraje.reset_index()
+                        df_kraje_show.insert(0, 'Lp.', range(1, 1 + len(df_kraje_show)))
+                        st.dataframe(df_kraje_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'VAT', 'Suma_Brutto']), use_container_width=True, hide_index=True)
+                    
+                    st.markdown("##### Szczegóły per Pojazd")
+                    podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
+                        Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                        Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                    )
+                    
+                    podsumowanie_litry = df_paliwo.groupby(['identyfikator_clean', 'produkt'])['ilosc'].sum().unstack(fill_value=0)
+                    
+                    desired_columns = ['Diesel', 'AdBlue', 'LPG', 'Benzyna']
+                    for col in desired_columns:
+                        if col not in podsumowanie_litry.columns:
+                            podsumowanie_litry[col] = 0
+                    
+                    podsumowanie_litry = podsumowanie_litry.rename(columns={
+                        'Diesel': 'Litry (Diesel)', 
+                        'AdBlue': 'Litry (AdBlue)',
+                        'LPG': 'Litry (LPG)',
+                        'Benzyna': 'Litry (Benzyna)'
+                    })
+                    
+                    podsumowanie_paliwo = podsumowanie_paliwo_kwoty.merge(podsumowanie_litry, left_index=True, right_index=True, how='left').fillna(0)
+                    podsumowanie_paliwo = podsumowanie_paliwo.sort_values(by='Kwota_Brutto_EUR', ascending=False)
+                    
+                    df_podsumowanie_show = podsumowanie_paliwo.reset_index()
+                    df_podsumowanie_show.insert(0, 'Lp.', range(1, 1 + len(df_podsumowanie_show)))
+                    
+                    cols_display = ['Lp.', 'identyfikator_clean', 'Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 
+                                    'Litry (Diesel)', 'Litry (AdBlue)', 'Litry (LPG)', 'Litry (Benzyna)']
+                    
+                    cols_display = [c for c in cols_display if c in df_podsumowanie_show.columns]
+
+                    format_dict = {
+                        'Kwota_Netto_EUR': '{:,.2f} EUR', 
+                        'Kwota_Brutto_EUR': '{:,.2f} EUR', 
+                        'Litry (Diesel)': '{:,.2f} L', 
+                        'Litry (AdBlue)': '{:,.2f} L',
+                        'Litry (LPG)': '{:,.2f} L',
+                        'Litry (Benzyna)': '{:,.2f} L'
+                    }
+
+                    st.dataframe(
+                        df_podsumowanie_show[cols_display].style.format(format_dict), 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+
+                    with st.expander("🔎 Pokaż pojedyncze transakcje"):
+                        lista_pojazdow_paliwo = ["--- Wybierz pojazd ---"] + sorted(list(df_paliwo['identyfikator_clean'].unique()))
+                        wybrany_pojazd_paliwo = st.selectbox("Wybierz identyfikator:", lista_pojazdow_paliwo)
+                        if wybrany_pojazd_paliwo != "--- Wybierz pojazd ---":
+                            df_szczegoly = df_paliwo[df_paliwo['identyfikator_clean'] == wybrany_pojazd_paliwo].sort_values(by='data_transakcji_dt', ascending=False)
+                            df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'produkt', 'kraj', 'ilosc', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
                             
-                            df_kraje_show = df_kraje.reset_index()
-                            df_kraje_show.insert(0, 'Lp.', range(1, 1 + len(df_kraje_show)))
-                            st.dataframe(df_kraje_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'VAT', 'Suma_Brutto']), use_container_width=True, hide_index=True)
-                        
-                        # --- Tabela Główna (Pojazdy i Rodzaje Paliw - ZMIANY) ---
-                        st.markdown("##### Szczegóły per Pojazd")
-                        podsumowanie_paliwo_kwoty = df_paliwo.groupby('identyfikator_clean').agg(
-                            Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
-                            Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
-                        )
-                        
-                        # Pivot table dla ilości litrów
-                        podsumowanie_litry = df_paliwo.groupby(['identyfikator_clean', 'produkt'])['ilosc'].sum().unstack(fill_value=0)
-                        
-                        # Upewniamy się, że mamy wszystkie kolumny (nawet jak są puste)
-                        desired_columns = ['Diesel', 'AdBlue', 'LPG', 'Benzyna']
-                        for col in desired_columns:
-                            if col not in podsumowanie_litry.columns:
-                                podsumowanie_litry[col] = 0
-                        
-                        # Zmieniamy nazwy na czytelniejsze
-                        podsumowanie_litry = podsumowanie_litry.rename(columns={
-                            'Diesel': 'Litry (Diesel)', 
-                            'AdBlue': 'Litry (AdBlue)',
-                            'LPG': 'Litry (LPG)',
-                            'Benzyna': 'Litry (Benzyna)'
-                        })
-                        
-                        podsumowanie_paliwo = podsumowanie_paliwo_kwoty.merge(podsumowanie_litry, left_index=True, right_index=True, how='left').fillna(0)
-                        podsumowanie_paliwo = podsumowanie_paliwo.sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                        
-                        df_podsumowanie_show = podsumowanie_paliwo.reset_index()
-                        df_podsumowanie_show.insert(0, 'Lp.', range(1, 1 + len(df_podsumowanie_show)))
-                        
-                        # Konfiguracja wyświetlania (kolejność)
-                        cols_display = ['Lp.', 'identyfikator_clean', 'Kwota_Netto_EUR', 'Kwota_Brutto_EUR', 
-                                        'Litry (Diesel)', 'Litry (AdBlue)', 'Litry (LPG)', 'Litry (Benzyna)']
-                        
-                        # Filtrujemy, żeby wyświetlić tylko te z listy, które faktycznie istnieją w danych
-                        cols_display = [c for c in cols_display if c in df_podsumowanie_show.columns]
+                            df_szczegoly_display = df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'kraj': 'Kraj', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                            df_szczegoly_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_display)))
+                            
+                            st.dataframe(
+                                df_szczegoly_display,
+                                use_container_width=True, hide_index=True,
+                                column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Litry": st.column_config.NumberColumn(format="%.2f L"),}
+                            )
+            
+            with sub_tab_oplaty:
+                  df_oplaty = dane_przygotowane[dane_przygotowane['typ'] == 'OPŁATA']
+                  if not df_oplaty.empty:
+                      st.metric(label="Łącznie Opłaty (Brutto)", value=f"{df_oplaty['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
 
-                        format_dict = {
-                            'Kwota_Netto_EUR': '{:,.2f} EUR', 
-                            'Kwota_Brutto_EUR': '{:,.2f} EUR', 
-                            'Litry (Diesel)': '{:,.2f} L', 
-                            'Litry (AdBlue)': '{:,.2f} L',
-                            'Litry (LPG)': '{:,.2f} L',
-                            'Litry (Benzyna)': '{:,.2f} L'
-                        }
+                      podsumowanie_oplaty = df_oplaty.groupby('identyfikator_clean').agg(
+                          Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                          Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                      ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
+                      
+                      df_oplaty_show = podsumowanie_oplaty.reset_index()
+                      df_oplaty_show.insert(0, 'Lp.', range(1, 1 + len(df_oplaty_show)))
+                      st.dataframe(df_oplaty_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
+                      
+                      with st.expander("🔎 Pokaż pojedyncze transakcje"):
+                          lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
+                          wybrany_pojazd_oplaty = st.selectbox("Wybierz identyfikator:", lista_pojazdow_oplaty, key="select_oplaty")
+                          if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
+                              df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
+                              df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                              
+                              df_szczegoly_oplaty_display = df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                              df_szczegoly_oplaty_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_oplaty_display)))
 
-                        st.dataframe(
-                            df_podsumowanie_show[cols_display].style.format(format_dict), 
-                            use_container_width=True, 
-                            hide_index=True
-                        )
+                              st.dataframe(
+                                  df_szczegoly_oplaty_display,
+                                  use_container_width=True, hide_index=True,
+                                  column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
+                              )
+                  else:
+                      st.info("Brak opłat drogowych.")
 
-                        # --- Szczegóły transakcji (Bez większych zmian, tylko labelki) ---
-                        with st.expander("🔎 Pokaż pojedyncze transakcje"):
-                            lista_pojazdow_paliwo = ["--- Wybierz pojazd ---"] + sorted(list(df_paliwo['identyfikator_clean'].unique()))
-                            wybrany_pojazd_paliwo = st.selectbox("Wybierz identyfikator:", lista_pojazdow_paliwo)
-                            if wybrany_pojazd_paliwo != "--- Wybierz pojazd ---":
-                                df_szczegoly = df_paliwo[df_paliwo['identyfikator_clean'] == wybrany_pojazd_paliwo].sort_values(by='data_transakcji_dt', ascending=False)
-                                df_szczegoly_display = df_szczegoly[['data_transakcji_dt', 'produkt', 'kraj', 'ilosc', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
-                                
-                                df_szczegoly_display = df_szczegoly_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Produkt', 'kraj': 'Kraj', 'ilosc': 'Litry', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
-                                df_szczegoly_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_display)))
-                                
-                                st.dataframe(
-                                    df_szczegoly_display,
-                                    use_container_width=True, hide_index=True,
-                                    column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Litry": st.column_config.NumberColumn(format="%.2f L"),}
-                                )
-                
-                with sub_tab_oplaty:
-                      df_oplaty = dane_przygotowane[dane_przygotowane['typ'] == 'OPŁATA']
-                      if not df_oplaty.empty:
-                          st.metric(label="Łącznie Opłaty (Brutto)", value=f"{df_oplaty['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+            with sub_tab_inne:
+                  df_inne = dane_przygotowane[dane_przygotowane['typ'] == 'INNE']
+                  if not df_inne.empty:
+                      st.metric(label="Łącznie Inne (Brutto)", value=f"{df_inne['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+                      
+                      podsumowanie_inne = df_inne.groupby('identyfikator_clean').agg(
+                          Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
+                          Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
+                      ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
+                      
+                      df_inne_show = podsumowanie_inne.reset_index()
+                      df_inne_show.insert(0, 'Lp.', range(1, 1 + len(df_inne_show)))
+                      st.dataframe(df_inne_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
 
-                          podsumowanie_oplaty = df_oplaty.groupby('identyfikator_clean').agg(
-                              Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
-                              Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
-                          ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                          
-                          # --- MODYFIKACJA LP ---
-                          df_oplaty_show = podsumowanie_oplaty.reset_index()
-                          df_oplaty_show.insert(0, 'Lp.', range(1, 1 + len(df_oplaty_show)))
-                          st.dataframe(df_oplaty_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
-                          
-                          with st.expander("🔎 Pokaż pojedyncze transakcje"):
-                              lista_pojazdow_oplaty = ["--- Wybierz pojazd ---"] + sorted(list(df_oplaty['identyfikator_clean'].unique()))
-                              wybrany_pojazd_oplaty = st.selectbox("Wybierz identyfikator:", lista_pojazdow_oplaty, key="select_oplaty")
-                              if wybrany_pojazd_oplaty != "--- Wybierz pojazd ---":
-                                  df_szczegoly_oplaty = df_oplaty[df_oplaty['identyfikator_clean'] == wybrany_pojazd_oplaty].sort_values(by='data_transakcji_dt', ascending=False)
-                                  df_szczegoly_oplaty_display = df_szczegoly_oplaty[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
-                                  
-                                  # --- MODYFIKACJA LP ---
-                                  df_szczegoly_oplaty_display = df_szczegoly_oplaty_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
-                                  df_szczegoly_oplaty_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_oplaty_display)))
+                      with st.expander("Pokaż pojedyncze transakcje"):
+                          lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
+                          wybrany_pojazd_inne = st.selectbox("Wybierz identyfikator:", lista_pojazdow_inne, key="select_inne")
+                          if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
+                              df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
+                              df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
+                              
+                              df_szczegoly_inne_display = df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
+                              df_szczegoly_inne_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_inne_display)))
 
-                                  st.dataframe(
-                                      df_szczegoly_oplaty_display,
-                                      use_container_width=True, hide_index=True,
-                                      column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
-                                  )
-                      else:
-                          st.info("Brak opłat drogowych.")
-
-                with sub_tab_inne:
-                      df_inne = dane_przygotowane[dane_przygotowane['typ'] == 'INNE']
-                      if not df_inne.empty:
-                          st.metric(label="Łącznie Inne (Brutto)", value=f"{df_inne['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
-                          
-                          podsumowanie_inne = df_inne.groupby('identyfikator_clean').agg(
-                              Kwota_Netto_EUR=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
-                              Kwota_Brutto_EUR=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
-                          ).sort_values(by='Kwota_Brutto_EUR', ascending=False)
-                          
-                          # --- MODYFIKACJA LP ---
-                          df_inne_show = podsumowanie_inne.reset_index()
-                          df_inne_show.insert(0, 'Lp.', range(1, 1 + len(df_inne_show)))
-                          st.dataframe(df_inne_show.style.format("{:,.2f} EUR", subset=['Kwota_Netto_EUR', 'Kwota_Brutto_EUR']), use_container_width=True, hide_index=True)
-
-                          with st.expander("Pokaż pojedyncze transakcje"):
-                              lista_pojazdow_inne = ["--- Wybierz pojazd ---"] + sorted(list(df_inne['identyfikator_clean'].unique()))
-                              wybrany_pojazd_inne = st.selectbox("Wybierz identyfikator:", lista_pojazdow_inne, key="select_inne")
-                              if wybrany_pojazd_inne != "--- Wybierz pojazd ---":
-                                  df_szczegoly_inne = df_inne[df_inne['identyfikator_clean'] == wybrany_pojazd_inne].sort_values(by='data_transakcji_dt', ascending=False)
-                                  df_szczegoly_inne_display = df_szczegoly_inne[['data_transakcji_dt', 'produkt', 'kraj', 'kwota_brutto_eur', 'kwota_netto_eur', 'zrodlo']]
-                                  
-                                  # --- MODYFIKACJA LP ---
-                                  df_szczegoly_inne_display = df_szczegoly_inne_display.rename(columns={'data_transakcji_dt': 'Data', 'produkt': 'Opis', 'kraj': 'Kraj', 'kwota_brutto_eur': 'Brutto (EUR)', 'kwota_netto_eur': 'Netto (EUR)', 'zrodlo': 'System'})
-                                  df_szczegoly_inne_display.insert(0, 'Lp.', range(1, 1 + len(df_szczegoly_inne_display)))
-
-                                  st.dataframe(
-                                      df_szczegoly_inne_display,
-                                      use_container_width=True, hide_index=True,
-                                      column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
-                                  )
-                      else:
-                          st.info("Brak innych wydatków.")
-                          # --- NOWA ZAWARTOŚĆ: WYNAGRODZENIA ---
+                              st.dataframe(
+                                  df_szczegoly_inne_display,
+                                  use_container_width=True, hide_index=True,
+                                  column_config={"Data": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"), "Brutto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"), "Netto (EUR)": st.column_config.NumberColumn(format="%.2f EUR"),}
+                              )
+                  else:
+                      st.info("Brak innych wydatków.")
+            
+            # --- ZAKŁADKA WYNAGRODZENIA (Z BAZY) ---
             with sub_tab_wynagrodzenia:
-                st.markdown("### Koszty Pracownicze")
+                # Pobieramy dane o typie WYNAGRODZENIE z df_z_bazy_full (przed filtracją prepared)
+                df_w = dane_z_bazy_full[dane_z_bazy_full['typ'] == 'WYNAGRODZENIE'].copy()
                 
-                col_w1, col_w2 = st.columns([1, 2])
-                with col_w1:
-                    st.caption("Wgraj plik z wynagrodzeniami (CSV z Excela) dla wybranego miesiąca.")
-                    plik_plac = st.file_uploader("Plik CSV Wynagrodzeń", type=['csv'])
-                
-                with col_w2:
-                     st.info("System pobierze dane z Webfleet, aby przypisać kierowców do pojazdów w wybranym okresie i rozdzielić koszty.")
-                
-                if plik_plac:
-                    acc, user, pw = pobierz_ustawienia_api(conn)
-                    if not acc or not user or not pw:
-                        st.error("Brak konfiguracji API Webfleet! Przejdź do Panelu Administratora.")
-                    else:
-                        if st.button("Analizuj Wynagrodzenia", type="primary"):
-                            with st.spinner("Pobieranie danych z Webfleet i przetwarzanie pliku..."):
-                                # 1. Parsowanie pliku płac
-                                df_place = parsuj_plik_plac(plik_plac.getvalue())
-                                
-                                if df_place.empty:
-                                    st.warning("Nie udało się odczytać kierowców z pliku. Sprawdź format.")
-                                else:
-                                    # 2. Pobieranie danych z Webfleet
-                                    df_wf = pobierz_przypisania_webfleet(acc, user, pw, data_start_rap, data_stop_rap)
-                                    
-                                    if df_wf.empty:
-                                        st.warning("Brak danych o trasach z Webfleet w tym okresie (lub błąd API).")
-                                        # Fallback: Pokaż tylko listę płac bez przypisania
-                                        st.dataframe(df_place)
-                                    else:
-                                        # 3. Logika przypisywania
-                                        # Liczymy ile dni każdy kierowca jeździł każdym autem
-                                        statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                        
-                                        # Normalizacja nazwisk (prosta)
-                                        df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
-                                        statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
-                                        
-                                        # Merge płac z jazdami
-                                        # Uwaga: To dopasowanie po nazwisku musi być dokładne. W praktyce może wymagać mapowania.
-                                        merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
-                                        
-                                        # Obliczanie kosztu na pojazd (proporcjonalnie do dni)
-                                        # Suma dni dla każdego kierowcy
-                                        total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
-                                        merged['udzial'] = merged['dni_jazdy'] / total_days
-                                        merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
-                                        
-                                        # Agregacja per Pojazd
-                                        wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
-                                        wynik_pojazdy = wynik_pojazdy.sort_values(by='koszt_przypisany', ascending=False)
-                                        
-                                        st.success("Obliczono koszty wynagrodzeń per pojazd.")
-                                        
-                                        c_sum1, c_sum2 = st.columns(2)
-                                        c_sum1.metric("Łączna kwota z pliku", f"{df_place['kwota_total'].sum():,.2f} PLN")
-                                        c_sum2.metric("Kwota przypisana do pojazdów", f"{wynik_pojazdy['koszt_przypisany'].sum():,.2f} PLN")
-                                        
-                                        st.markdown("##### Wyniki per Pojazd")
-                                        st.dataframe(
-                                            wynik_pojazdy.style.format({'koszt_przypisany': '{:,.2f} PLN'}),
-                                            use_container_width=True
-                                        )
-                                        
-                                        with st.expander("Szczegóły (Kierowca -> Pojazd)"):
-                                            st.dataframe(merged[['kierowca_x', 'pojazd', 'dni_jazdy', 'kwota_total', 'koszt_przypisany']])
+                if df_w.empty:
+                    st.info("Brak danych o wynagrodzeniach w tym okresie. Przejdź do Panelu Administratora, wgraj plik Excel i zapisz wyniki do bazy.")
+                else:
+                    # Konwersja na liczby dla pewności
+                    df_w['kwota_brutto'] = pd.to_numeric(df_w['kwota_brutto'], errors='coerce').fillna(0)
+                    
+                    suma_wyn = df_w['kwota_brutto'].sum()
+                    st.metric("Łączne Wynagrodzenia (Przypisane)", f"{suma_wyn:,.2f} PLN", border=True)
+                    
+                    # Agregacja per pojazd
+                    df_w['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_w['identyfikator'])
+                    grp_w = df_w.groupby('pojazd_clean')['kwota_brutto'].sum().sort_values(ascending=False).reset_index()
+                    grp_w.columns = ['Pojazd', 'Kwota (PLN)']
+                    grp_w.insert(0, 'Lp.', range(1, 1 + len(grp_w)))
+                    
+                    st.dataframe(grp_w.style.format({'Kwota (PLN)': '{:,.2f} PLN'}), use_container_width=True, hide_index=True)
+                    
+                    with st.expander("Szczegóły zapisów w bazie"):
+                        st.dataframe(df_w[['data_transakcji', 'identyfikator', 'kwota_brutto', 'zrodlo']])
+
     except Exception as e:
-        if "does not exist" in str(e):
-             st.warning("Baza danych nie jest gotowa. Przejdź do Panelu Admina.")
-        else:
-             st.error(f"Błąd: {e}")
+        st.error(f"Błąd raportu: {e}")
+
 def render_rentownosc_content(conn, wybrana_firma):
+    # --- BEZ ZMIAN W LOGICE RENTOWNOŚCI ---
     st.subheader("Analiza Rentowności")
     try:
         min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
@@ -1835,25 +1929,18 @@ def render_rentownosc_content(conn, wybrana_firma):
                                 koszty_baza_brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum')
                             )
                         
-                        # Pobieramy dane z pliku
                         _, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start_rent, data_stop_rent, wybrana_firma)
                         
-                        # --- MODYFIKACJA: FILTROWANIE REFAKTUR Z RENTOWNOŚCI ---
                         if df_analiza_raw is not None and not df_analiza_raw.empty:
-                            # Jeśli jesteśmy w HOLIER, usuwamy faktury wystawione na UNIX
                             if wybrana_firma == "HOLIER":
                                 maska_refaktura = df_analiza_raw['kontrahent'].astype(str).str.upper().str.contains("UNIX", na=False)
-                                # Usuwamy tylko przychody (faktury sprzedaży na Unix), zostawiamy koszty jeśli są
                                 maska_do_usuniecia = maska_refaktura & (df_analiza_raw['typ'] == 'Przychód (Subiekt)')
                                 df_analiza_raw = df_analiza_raw[~maska_do_usuniecia]
-                            
-                            # Jeśli jesteśmy w UNIX, usuwamy faktury wystawione na HOLIER (rzadkie, ale dla porządku)
                             elif wybrana_firma == "UNIX-TRANS":
                                 maska_refaktura = df_analiza_raw['kontrahent'].astype(str).str.upper().str.contains("HOLIER", na=False)
                                 maska_do_usuniecia = maska_refaktura & (df_analiza_raw['typ'] == 'Przychód (Subiekt)')
                                 df_analiza_raw = df_analiza_raw[~maska_do_usuniecia]
 
-                            # RE-AGREGACJA DANYCH PO FILTRACJI
                             df_przychody = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
                             df_przychody_netto = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
                             df_koszty = df_analiza_raw[df_analiza_raw['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
@@ -1861,7 +1948,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                             df_analiza_agreg = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
                         else:
                             df_analiza_agreg = pd.DataFrame(columns=['przychody_brutto', 'przychody_netto', 'koszty_inne_brutto', 'koszty_inne_netto'])
-                        # -------------------------------------------------------
 
                         st.session_state['dane_analizy_raw'] = df_analiza_raw 
                         
@@ -1872,7 +1958,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                             how='outer'
                         ).fillna(0)
                         
-                        # --- FILTRY SPECJALNE (PTU0002 i NONE) ---
                         maska_ptu_usun = df_rentownosc.index.astype(str).str.replace(" ", "").str.replace("-", "").str.contains("PTU0002")
                         df_rentownosc = df_rentownosc[~maska_ptu_usun]
                         
@@ -1907,7 +1992,6 @@ def render_rentownosc_content(conn, wybrana_firma):
                         st.session_state['raport_gotowy'] = True
                         st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
 
-        # --- SEKCJA WYNIKÓW ---
         if st.session_state.get('raport_gotowy', False):
              st.markdown("---")
              df_rentownosc = st.session_state['df_rentownosc']
@@ -2062,7 +2146,6 @@ def render_refaktury_content(conn, wybrana_firma):
             with c2:
                 data_stop_ref = st.date_input("Data Stop", value=domyslny_stop_ref, key="ref_stop")
             
-            # --- DODANE: ŁADOWANIE PLIKU DO RZECZYWISTYCH REFAKTUR ---
             plik_analizy = None 
             nazwa_pliku_analizy = "analiza.xlsx"
             if wybrana_firma == "UNIX-TRANS":
@@ -2071,17 +2154,14 @@ def render_refaktury_content(conn, wybrana_firma):
             zapisany_plik_bytes = wczytaj_plik_z_bazy(conn, nazwa_pliku_analizy)
             if zapisany_plik_bytes:
                 plik_analizy = io.BytesIO(zapisany_plik_bytes)
-            # -------------------------------------------------------------
             
         if st.button("🔎 Pokaż koszty do refaktury", type="primary"):
             df_holier_to_unix, df_unix_to_holier, _ = pobierz_dane_do_refaktury(conn, data_start_ref, data_stop_ref)
             
-            # Pobieramy dane z pliku (Subiekt/Fakturownia)
             df_rzeczywiste_refaktury = pd.DataFrame()
             if plik_analizy:
                 _, df_raw_file = przetworz_plik_analizy(plik_analizy, data_start_ref, data_stop_ref, wybrana_firma)
                 if df_raw_file is not None and not df_raw_file.empty:
-                    # Filtrujemy tylko Przychody wystawione na drugą firmę
                     firma_docelowa_str = "UNIX" if wybrana_firma == "HOLIER" else "HOLIER"
                     maska_kontrahent = df_raw_file['kontrahent'].astype(str).str.upper().str.contains(firma_docelowa_str, na=False)
                     maska_typ = df_raw_file['typ'] == 'Przychód (Subiekt)'
@@ -2093,7 +2173,6 @@ def render_refaktury_content(conn, wybrana_firma):
                 f"Rzeczywiste Refaktury (Wystawione przez {wybrana_firma})"
             ])
             
-            # --- TAB 1: HOLIER PLACI ZA UNIX ---
             with tab_h2u:
                 st.markdown("### Koszty Holiera na rzecz aut UNIX (Obliczone z kart paliwowych)")
                 if df_holier_to_unix is None or df_holier_to_unix.empty:
@@ -2126,7 +2205,6 @@ def render_refaktury_content(conn, wybrana_firma):
                             }
                         )
 
-            # --- TAB 2: UNIX PLACI ZA HOLIER ---
             with tab_u2h:
                 st.markdown("### Koszty UNIX na rzecz aut Holiera (Obliczone z kart paliwowych)")
                 if df_unix_to_holier is None or df_unix_to_holier.empty:
@@ -2159,7 +2237,6 @@ def render_refaktury_content(conn, wybrana_firma):
                             }
                         )
             
-            # --- TAB 3: RZECZYWISTE REFAKTURY Z PLIKU ---
             with tab_rzecz:
                 st.markdown(f"### Zaksięgowane Faktury Sprzedaży na rzecz drugiej firmy (z pliku)")
                 if df_rzeczywiste_refaktury.empty:
@@ -2168,22 +2245,22 @@ def render_refaktury_content(conn, wybrana_firma):
                     else:
                         st.info("Brak znalezionych refaktur w pliku (brak faktur sprzedaży na drugą firmę).")
                 else:
-                     col_rz1, col_rz2 = st.columns(2)
-                     col_rz1.metric("Wystawione (Netto)", f"{df_rzeczywiste_refaktury['kwota_netto_eur'].sum():,.2f} EUR", border=True)
-                     col_rz2.metric("Wystawione (Brutto)", f"{df_rzeczywiste_refaktury['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
-                     
-                     st.markdown("##### Podział na pojazdy")
-                     agg_rzecz = df_rzeczywiste_refaktury.groupby('pojazd_clean').agg(
+                      col_rz1, col_rz2 = st.columns(2)
+                      col_rz1.metric("Wystawione (Netto)", f"{df_rzeczywiste_refaktury['kwota_netto_eur'].sum():,.2f} EUR", border=True)
+                      col_rz2.metric("Wystawione (Brutto)", f"{df_rzeczywiste_refaktury['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+                      
+                      st.markdown("##### Podział na pojazdy")
+                      agg_rzecz = df_rzeczywiste_refaktury.groupby('pojazd_clean').agg(
                         Suma_Netto=pd.NamedAgg(column='kwota_netto_eur', aggfunc='sum'),
                         Suma_Brutto=pd.NamedAgg(column='kwota_brutto_eur', aggfunc='sum'),
                         Liczba_Faktur=pd.NamedAgg(column='opis', aggfunc='count')
                     ).sort_values(by='Suma_Brutto', ascending=False)
                     
-                     agg_rzecz_show = agg_rzecz.reset_index()
-                     agg_rzecz_show.insert(0, 'Lp.', range(1, 1 + len(agg_rzecz_show)))
-                     st.dataframe(agg_rzecz_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
-                     
-                     with st.expander("Szczegóły dokumentów"):
+                      agg_rzecz_show = agg_rzecz.reset_index()
+                      agg_rzecz_show.insert(0, 'Lp.', range(1, 1 + len(agg_rzecz_show)))
+                      st.dataframe(agg_rzecz_show.style.format("{:,.2f} EUR", subset=['Suma_Netto', 'Suma_Brutto']), use_container_width=True, hide_index=True)
+                      
+                      with st.expander("Szczegóły dokumentów"):
                         df_rzecz_show = df_rzeczywiste_refaktury[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].sort_values(by='data', ascending=False).copy()
                         df_rzecz_show.insert(0, 'Lp.', range(1, 1 + len(df_rzecz_show)))
                         
@@ -2204,7 +2281,6 @@ def render_porownanie_content(conn, wybrana_firma):
     st.subheader("Porównanie Okresów")
     st.caption(f"Analiza porównawcza dla firmy: {wybrana_firma}")
 
-    # --- DEFINICJE FUNKCJI KOLORUJĄCYCH ---
     def color_positive_good(val):
         if pd.isna(val) or val == 0: return ''
         color = '#c9f7c9' if val > 0 else '#ffbdbd' 
@@ -2214,9 +2290,7 @@ def render_porownanie_content(conn, wybrana_firma):
         if pd.isna(val) or val == 0: return ''
         color = '#c9f7c9' if val < 0 else '#ffbdbd' 
         return f'background-color: {color}; color: black'
-    # ---------------------------------------
 
-    # --- KONFIGURACJA DAT ---
     today = date.today()
     first_current = today.replace(day=1)
     last_month_end = first_current - pd.Timedelta(days=1)
@@ -2233,7 +2307,6 @@ def render_porownanie_content(conn, wybrana_firma):
             start_B = st.date_input("Start B", value=last_month_start, key="start_B")
             stop_B = st.date_input("Stop B", value=last_month_end, key="stop_B")
 
-    # --- OBSŁUGA PLIKU ---
     plik_analizy = None 
     nazwa_pliku_analizy = "analiza.xlsx"
     if wybrana_firma == "UNIX-TRANS":
@@ -2248,28 +2321,21 @@ def render_porownanie_content(conn, wybrana_firma):
         if uploaded:
             plik_analizy = uploaded
 
-    # --- FUNKCJA POBIERANIA DANYCH ---
     def pobierz_agregacje(d_start, d_stop):
-        # 1. Dane z Bazy
         df_baza = pobierz_dane_z_bazy(conn, d_start, d_stop, wybrana_firma)
         df_baza, _ = przygotuj_dane_paliwowe(df_baza.copy(), wybrana_firma)
         
         agg_baza = pd.DataFrame()
         if df_baza is not None and not df_baza.empty:
-            # Filtrowanie globalne zakazanych
             maska = df_baza['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
             df_baza = df_baza[~maska]
 
-            # --- FILTR USUWAJĄCY PTU0002 ---
             maska_ptu = df_baza['identyfikator_clean'].astype(str).str.replace(" ", "").str.contains("PTU0002", case=False)
             df_baza = df_baza[~maska_ptu]
             
-            # --- FILTR USUWAJĄCY NONE ---
             maska_none = df_baza['identyfikator_clean'].astype(str).str.upper() == "NONE"
             df_baza = df_baza[~maska_none]
-            # ----------------------------
             
-            # Pivot table
             agg_baza = df_baza.groupby(['identyfikator_clean', 'typ'])['kwota_brutto_eur'].sum().unstack(fill_value=0)
             for col in ['PALIWO', 'OPŁATA', 'INNE']:
                 if col not in agg_baza.columns: agg_baza[col] = 0.0
@@ -2278,13 +2344,11 @@ def render_porownanie_content(conn, wybrana_firma):
         else:
             agg_baza = pd.DataFrame(columns=['PALIWO', 'OPŁATA', 'INNE', 'SUMA_BAZA'])
 
-        # 2. Dane z Pliku
         agg_analiza = pd.DataFrame()
         if plik_analizy:
             plik_analizy.seek(0)
             df_agreg, _ = przetworz_plik_analizy(plik_analizy, d_start, d_stop, wybrana_firma)
             if df_agreg is not None and not df_agreg.empty:
-                # Filtr PTU i NONE dla pliku analizy
                 df_agreg = df_agreg[~df_agreg.index.astype(str).str.replace(" ", "").str.contains("PTU0002", case=False)]
                 df_agreg = df_agreg[df_agreg.index.astype(str).str.upper() != "NONE"]
                 
@@ -2294,14 +2358,12 @@ def render_porownanie_content(conn, wybrana_firma):
         if agg_analiza.empty:
             agg_analiza = pd.DataFrame(columns=['PRZYCHOD', 'KOSZT_SUBIEKT'])
 
-        # 3. Merge
         df_full = agg_baza.join(agg_analiza, how='outer').fillna(0)
         df_full['ZYSK'] = df_full.get('PRZYCHOD', 0) - df_full.get('SUMA_BAZA', 0) - df_full.get('KOSZT_SUBIEKT', 0)
         df_full['KOSZTY_TOTAL'] = df_full.get('SUMA_BAZA', 0) + df_full.get('KOSZT_SUBIEKT', 0)
         
         return df_full
 
-    # --- LOGIKA PRZYCISKU ---
     if 'por_data_ready' not in st.session_state:
         st.session_state.por_data_ready = False
 
@@ -2313,7 +2375,6 @@ def render_porownanie_content(conn, wybrana_firma):
             st.session_state.por_df_B = df_B
             st.session_state.por_data_ready = True
 
-    # --- WYŚWIETLANIE ---
     if st.session_state.por_data_ready:
         st.markdown("---")
         df_A = st.session_state.por_df_A
@@ -2321,7 +2382,6 @@ def render_porownanie_content(conn, wybrana_firma):
         
         tab_wydatki, tab_przychody, tab_zyski = st.tabs(["Wydatki", "Przychody", "Zyski"])
 
-        # === TAB 1: WYDATKI ===
         with tab_wydatki:
             st.markdown("#### Porównanie Wydatków")
             opcje_kosztow = ['PALIWO', 'OPŁATA', 'INNE', 'KOSZT_SUBIEKT']
@@ -2349,11 +2409,9 @@ def render_porownanie_content(conn, wybrana_firma):
                 df_merge['Różnica'] = df_merge['FILTERED_COST_A'] - df_merge['FILTERED_COST_B']
                 df_merge = df_merge.sort_values(by='FILTERED_COST_A', ascending=False)
                 
-                # --- MODYFIKACJA LP ---
                 df_merge_show = df_merge.reset_index()
                 df_merge_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_show)))
 
-                # Używamy subset=..., aby formatować tylko liczby
                 st.dataframe(
                     df_merge_show.style.format("{:,.2f} EUR", subset=['FILTERED_COST_A', 'FILTERED_COST_B', 'Różnica']).map(color_negative_good, subset=['Różnica']),
                     use_container_width=True,
@@ -2366,7 +2424,6 @@ def render_porownanie_content(conn, wybrana_firma):
                     }
                 )
 
-        # === TAB 2: PRZYCHODY ===
         with tab_przychody:
             st.markdown("#### Porównanie Przychodów")
             rev_A = df_A['PRZYCHOD'].sum()
@@ -2382,11 +2439,9 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_rev['Różnica'] = df_merge_rev['PRZYCHOD_A'] - df_merge_rev['PRZYCHOD_B']
             df_merge_rev = df_merge_rev.sort_values(by='PRZYCHOD_A', ascending=False)
             
-            # --- MODYFIKACJA LP ---
             df_merge_rev_show = df_merge_rev.reset_index()
             df_merge_rev_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_rev_show)))
 
-            # Używamy subset=..., aby formatować tylko liczby (TO BYŁO ŹRÓDŁEM BŁĘDU)
             st.dataframe(
                 df_merge_rev_show.style.format("{:,.2f} EUR", subset=['PRZYCHOD_A', 'PRZYCHOD_B', 'Różnica']).map(color_positive_good, subset=['Różnica']),
                 use_container_width=True,
@@ -2399,7 +2454,6 @@ def render_porownanie_content(conn, wybrana_firma):
                 }
             )
 
-        # === TAB 3: ZYSKI ===
         with tab_zyski:
             st.markdown("#### Porównanie Zysków (Brutto)")
             zysk_A = df_A['ZYSK'].sum()
@@ -2415,11 +2469,9 @@ def render_porownanie_content(conn, wybrana_firma):
             df_merge_zysk['Różnica'] = df_merge_zysk['ZYSK_A'] - df_merge_zysk['ZYSK_B']
             df_merge_zysk = df_merge_zysk.sort_values(by='ZYSK_A', ascending=False)
             
-            # --- MODYFIKACJA LP ---
             df_merge_zysk_show = df_merge_zysk.reset_index()
             df_merge_zysk_show.insert(0, 'Lp.', range(1, 1 + len(df_merge_zysk_show)))
             
-            # Używamy subset=..., aby formatować tylko liczby
             st.dataframe(
                 df_merge_zysk_show.style.format("{:,.2f} EUR", subset=['ZYSK_A', 'ZYSK_B', 'Różnica']).map(color_positive_good, subset=['ZYSK_A', 'ZYSK_B', 'Różnica']),
                 use_container_width=True,
@@ -2431,10 +2483,8 @@ def render_porownanie_content(conn, wybrana_firma):
                     "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
                 }
             )
-# --- GŁÓWNA APLIKACJA ---
+
 def main_app():
-    
-   
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
     if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
     if 'show_admin' not in st.session_state: st.session_state.show_admin = False
@@ -2494,6 +2544,7 @@ def main_app():
         if st.button("🧹 Wyczyść Cache"):
             st.cache_data.clear()
             st.rerun() 
+            
     try: conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
     except Exception as e: st.error("Błąd połączenia z DB."); st.stop()
 
