@@ -1547,46 +1547,50 @@ def render_admin_content(conn, wybrana_firma):
                         for i, nazwa_arkusza in enumerate(sheet_names):
                             pask_postepu.progress((i / len(sheet_names)), text=f"Przetwarzam arkusz: {nazwa_arkusza}...")
                             
+                            # --- POPRAWKA: SPOWALNIAMY PĘTLĘ (BŁĄD 8011) ---
+                            # Webfleet pozwala na ok. 1 zapytanie co 1.5 sekundy w standardowym limicie.
+                            # Dodajemy pauzę, żeby nie zablokowali konta.
+                            time.sleep(2.0) 
+                            
                             # 1. Próba ustalenia daty dla tego arkusza
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             
                             if not start_auto:
-                                # Jeśli arkusz nie jest miesiącem (np. "Podsumowanie"), pomijamy go
                                 continue
-                                
+                            
+                            # Logika pomijania przyszłości (żeby nie pytać o rok 2025/2026 bez sensu)
+                            if start_auto > date.today():
+                                continue
+
                             # 2. Parsowanie kwot z Excela
                             df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                             df_place = parsuj_dataframe_plac(df_sheet)
                             
                             if df_place.empty:
-                                continue # Brak danych w arkuszu
+                                continue 
                                 
-                            # 3. Pobranie danych z Webfleet dla tego okresu
-                            # (Korzysta z Twojej naprawionej funkcji ze spacją zamiast T)
+                            # 3. Pobranie danych z Webfleet
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
                             if df_wf.empty:
-                                st.warning(f"Arkusz {nazwa_arkusza}: Brak tras w Webfleet dla okresu {start_auto}-{stop_auto}")
+                                # Komunikat tylko w konsoli/logach, żeby nie śmiecić w UI
+                                print(f"Arkusz {nazwa_arkusza}: Brak tras ({start_auto})")
                                 continue
                                 
-                            # 4. Łączenie danych (Algorytm podziału kosztów)
+                            # 4. Łączenie danych
                             statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                             
-                            # Normalizacja nazwisk (duże litery, bez spacji)
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
                             statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
                             
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
-                            # Obliczanie udziału
                             total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
                             merged['udzial'] = merged['dni_jazdy'] / total_days
                             merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
                             
-                            # Agregacja per pojazd
                             wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
                             
-                            # Dodajemy kolumnę z datą końca miesiąca (potrzebne do zapisu w bazie)
                             wynik_pojazdy['data_ksiegowania'] = stop_auto
                             wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
                             
