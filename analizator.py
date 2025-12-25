@@ -318,8 +318,11 @@ def pobierz_ustawienia_api(conn):
 @st.cache_data(ttl=3600)
 def pobierz_przypisania_webfleet(account, username, password, data_start, data_stop):
     url = "https://csv.webfleet.com/extern"
-    range_from = f"{data_start}T00:00:00"
-    range_to = f"{data_stop}T23:59:59"
+    
+    # --- POPRAWKA: USUNĄŁEM "T", DODAŁEM SPACJĘ ---
+    # Webfleet woli format "2025-11-01 00:00:00" zamiast "2025-11-01T00:00:00"
+    range_from = f"{data_start} 00:00:00"
+    range_to = f"{data_stop} 23:59:59"
     
     # Twój klucz API
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
@@ -336,26 +339,35 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         'outputformat': 'json'
     }
     
-    # --- DEBUGOWANIE (WYŚWIETLANIE DANYCH NA EKRANIE) ---
-    st.write("--- TRYB DIAGNOSTYCZNY WEBFLEET ---")
-    st.write(f"Próba łączenia dla konta: {account}, user: {username}")
-    st.write(f"Zakres dat: {range_from} do {range_to}")
+    # --- DEBUGOWANIE (MOŻESZ ZOSTAWIĆ, ŻEBY WIDZIEĆ CZY DZIAŁA) ---
+    st.write(f"Wysyłam zapytanie dla dat: '{range_from}' do '{range_to}'")
     
     try:
         response = requests.get(url, params=params, timeout=30)
         
-        # Pokaż surową odpowiedź serwera na ekranie
-        st.write(f"Status kod: {response.status_code}")
-        st.text("Surowa odpowiedź serwera:")
-        st.code(response.text) # <--- TO JEST NAJWAŻNIEJSZE
+        # Jeśli nadal będzie błąd, wyświetlimy go
+        if response.status_code != 200:
+             st.error(f"Błąd HTTP: {response.status_code}")
+             st.code(response.text)
+
+        # Sprawdzamy czy w treści nie ma błędu logicznego (np. 9204)
+        try:
+            data = response.json()
+            # Czasami Webfleet zwraca 200 OK, ale w środku jest JSON z błędem
+            if isinstance(data, dict) and 'errorCode' in data:
+                 st.error(f"Webfleet zwrócił błąd logiczny: {data['errorCode']} - {data.get('errorMsg')}")
+                 return pd.DataFrame()
+        except:
+            pass # Jeśli to nie JSON, ignorujemy na razie
 
         if response.status_code == 200:
-            data = response.json()
             lista_przypisan = []
             items = data if isinstance(data, list) else data.get('trips', [])
             
             if not items:
-                st.warning("Webfleet zwrócił status 200 (OK), ale lista 'trips' jest pusta.")
+                st.warning("Połączenie OK, format daty OK, ale Webfleet twierdzi, że nie ma tras w tym terminie.")
+            else:
+                st.success(f"Sukces! Pobrano {len(items)} tras.")
             
             for trip in items:
                 pojazd = trip.get('objectname') or trip.get('objectuid')
@@ -371,7 +383,6 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
             
             return pd.DataFrame(lista_przypisan)
         else:
-            st.error(f"Błąd API Webfleet: {response.status_code} - {response.text}")
             return pd.DataFrame()
             
     except Exception as e:
@@ -1508,128 +1519,148 @@ def render_admin_content(conn, wybrana_firma):
     st.divider()
 
     # --- SEKCJA: WYNAGRODZENIA (OBLICZANIE I ZAPIS) ---
-    st.markdown("### 💰 Analiza Wynagrodzeń (Rozliczenie Kierowców)")
+    # --- SEKCJA: WYNAGRODZENIA (OBLICZANIE I ZAPIS - WSZYSTKIE MIESIĄCE) ---
+    st.markdown("### 💰 Analiza Wynagrodzeń (Wszystkie miesiące z pliku)")
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. Wybierz miesiąc. 3. System połączy to z Webfleet. 4. Zapisz wynik do bazy, aby widzieć go w Raporcie.")
+        st.info("1. Wgraj plik Excel z zakładkami (np. Styczeń, Luty...). 2. Kliknij 'Oblicz'. System przetworzy KAŻDY arkusz po kolei.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
             rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=date.today().year)
-            plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls', 'csv'])
+            plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
 
         if plik_plac:
-            try:
-                # Wczytywanie pliku (Excel lub CSV)
-                if plik_plac.name.endswith('.csv'):
-                    sheet_names = ['Dane z CSV']
-                    df_dict = {'Dane z CSV': pd.read_csv(plik_plac, on_bad_lines='skip', header=None)}
-                else:
-                    xls_file = pd.ExcelFile(plik_plac)
-                    sheet_names = xls_file.sheet_names
-                    df_dict = {sn: pd.read_excel(xls_file, sheet_name=sn, header=None) for sn in sheet_names}
+            if st.button("🚀 Oblicz WSZYSTKIE miesiące", type="primary"):
+                st.session_state['temp_wynagrodzenia'] = None # Reset
                 
-                with col_w2:
-                    wybrany_arkusz = st.selectbox("Wybierz Arkusz (Miesiąc)", sheet_names)
-                    
-                    # Automatyczne daty
-                    start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(wybrany_arkusz, rok_analizy)
-                    
-                    if start_auto:
-                        st.caption(f"Wykryto okres: {start_auto} - {stop_auto}")
-                        data_start_wf = start_auto
-                        data_stop_wf = stop_auto
-                    else:
-                        st.warning("Nie rozpoznano miesiąca. Wybierz daty ręcznie.")
-                        c_d1, c_d2 = st.columns(2)
-                        data_start_wf = c_d1.date_input("Data Start", value=date(rok_analizy, 1, 1))
-                        data_stop_wf = c_d2.date_input("Data Stop", value=date(rok_analizy, 1, 31))
-
-                    if st.button("🚀 Oblicz i Pokaż Wynik", type="primary"):
-                        st.session_state['temp_wynagrodzenia'] = None # Reset
-                        acc, user, pw = pobierz_ustawienia_api(conn)
-                        if not acc:
-                            st.error("Brak konfiguracji Webfleet!")
-                        else:
-                            with st.spinner(f"Pobieranie danych z Webfleet ({data_start_wf} - {data_stop_wf})..."):
-                                # 1. Parsowanie pliku
-                                df_wybrany = df_dict[wybrany_arkusz]
-                                df_place = parsuj_dataframe_plac(df_wybrany)
+                acc, user, pw = pobierz_ustawienia_api(conn)
+                if not acc:
+                    st.error("Brak konfiguracji Webfleet! Ustaw ją wyżej.")
+                else:
+                    # Wczytanie pliku Excel
+                    try:
+                        xls_file = pd.ExcelFile(plik_plac)
+                        sheet_names = xls_file.sheet_names
+                        
+                        lista_wynikow_miesiecznych = []
+                        pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
+                        
+                        # PĘTLA PO WSZYSTKICH ARKUSZACH
+                        for i, nazwa_arkusza in enumerate(sheet_names):
+                            pask_postepu.progress((i / len(sheet_names)), text=f"Przetwarzam arkusz: {nazwa_arkusza}...")
+                            
+                            # 1. Próba ustalenia daty dla tego arkusza
+                            start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
+                            
+                            if not start_auto:
+                                # Jeśli arkusz nie jest miesiącem (np. "Podsumowanie"), pomijamy go
+                                continue
                                 
-                                if df_place.empty:
-                                    st.error("Brak danych 'KWOTA' w pliku.")
-                                else:
-                                    # 2. Webfleet
-                                    df_wf = pobierz_przypisania_webfleet(acc, user, pw, data_start_wf, data_stop_wf)
-                                    
-                                    if df_wf.empty:
-                                        st.warning("Brak tras Webfleet. Nie można przypisać aut.")
-                                        st.dataframe(df_place)
-                                    else:
-                                        # 3. Łączenie
-                                        statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                        df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
-                                        statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
-                                        
-                                        merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
-                                        
-                                        total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
-                                        merged['udzial'] = merged['dni_jazdy'] / total_days
-                                        merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
-                                        
-                                        wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
-                                        wynik_pojazdy = wynik_pojazdy.sort_values(by='koszt_przypisany', ascending=False)
-                                        
-                                        # Zapis do sesji, aby umożliwić zapis do DB
-                                        st.session_state['temp_wynagrodzenia'] = {
-                                            'wynik': wynik_pojazdy,
-                                            'start': data_start_wf,
-                                            'stop': data_stop_wf
-                                        }
-                                        st.success("Obliczono! Sprawdź tabelę poniżej i ZAPISZ do bazy.")
-
-            except Exception as e:
-                st.error(f"Błąd: {e}")
+                            # 2. Parsowanie kwot z Excela
+                            df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
+                            df_place = parsuj_dataframe_plac(df_sheet)
+                            
+                            if df_place.empty:
+                                continue # Brak danych w arkuszu
+                                
+                            # 3. Pobranie danych z Webfleet dla tego okresu
+                            # (Korzysta z Twojej naprawionej funkcji ze spacją zamiast T)
+                            df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
+                            
+                            if df_wf.empty:
+                                st.warning(f"Arkusz {nazwa_arkusza}: Brak tras w Webfleet dla okresu {start_auto}-{stop_auto}")
+                                continue
+                                
+                            # 4. Łączenie danych (Algorytm podziału kosztów)
+                            statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
+                            
+                            # Normalizacja nazwisk (duże litery, bez spacji)
+                            df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
+                            statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
+                            
+                            merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
+                            
+                            # Obliczanie udziału
+                            total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
+                            merged['udzial'] = merged['dni_jazdy'] / total_days
+                            merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                            
+                            # Agregacja per pojazd
+                            wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
+                            
+                            # Dodajemy kolumnę z datą końca miesiąca (potrzebne do zapisu w bazie)
+                            wynik_pojazdy['data_ksiegowania'] = stop_auto
+                            wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
+                            
+                            lista_wynikow_miesiecznych.append(wynik_pojazdy)
+                            
+                        pask_postepu.empty()
+                        
+                        if not lista_wynikow_miesiecznych:
+                            st.warning("Nie udało się przeliczyć żadnego miesiąca. Sprawdź nazwy zakładek (np. STYCZEŃ) i dane w Webfleet.")
+                        else:
+                            # Łączymy wszystko w jedną dużą tabelę
+                            df_final_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True)
+                            st.session_state['temp_wynagrodzenia_all'] = df_final_all
+                            st.success(f"Przeliczono pomyślnie {len(lista_wynikow_miesiecznych)} miesięcy!")
+                            
+                    except Exception as e:
+                        st.error(f"Błąd podczas przetwarzania pliku: {e}")
 
         # Wyświetlanie wyniku i przycisk ZAPISU
-        if st.session_state.get('temp_wynagrodzenia'):
-            data_pack = st.session_state['temp_wynagrodzenia']
-            df_wynik = data_pack['wynik']
+        if st.session_state.get('temp_wynagrodzenia_all') is not None:
+            df_calosc = st.session_state['temp_wynagrodzenia_all']
             
-            st.markdown(f"**Wyniki dla: {data_pack['start']} - {data_pack['stop']}**")
-            st.dataframe(df_wynik.style.format({'koszt_przypisany': '{:,.2f} PLN'}), use_container_width=True)
+            st.markdown("##### Podgląd wyników (wszystkie miesiące):")
+            st.dataframe(
+                df_calosc.style.format({'koszt_przypisany': '{:,.2f} PLN'}), 
+                use_container_width=True,
+                hide_index=True
+            )
             
-            if st.button("💾 ZAPISZ TE WYNAGRODZENIA DO BAZY DANYCH", type="primary", use_container_width=True):
-                with st.spinner("Zapisywanie..."):
+            suma_total = df_calosc['koszt_przypisany'].sum()
+            st.metric("Łączna kwota do zapisania", f"{suma_total:,.2f} PLN")
+            
+            if st.button("💾 ZAPISZ WSZYSTKO DO BAZY", type="primary", use_container_width=True):
+                with st.spinner("Zapisywanie danych miesiąc po miesiącu..."):
                     try:
-                        # 1. Usuwamy stare wynagrodzenia z tego miesiąca (żeby nie dublować)
+                        # Grupujemy po dacie księgowania, żeby usuwać i wgrywać miesiącami
+                        grupy_miesieczne = df_calosc.groupby('data_ksiegowania')
+                        
+                        licznik = 0
                         with conn.session as s:
-                            s.execute(text(f"""
-                                DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} 
-                                WHERE typ = 'WYNAGRODZENIE' 
-                                AND data_transakcji::date BETWEEN :d1 AND :d2
-                                AND firma = :firma
-                            """), {'d1': data_pack['start'], 'd2': data_pack['stop'], 'firma': wybrana_firma})
+                            for data_konca, grupa in grupy_miesieczne:
+                                # 1. Wyznaczamy zakres dat dla tego konkretnego miesiąca do usunięcia starych danych
+                                # Data końca to np. 2024-01-31. Data początku to pierwszy dzień tego miesiąca.
+                                d_stop = data_konca
+                                d_start = d_stop.replace(day=1)
+                                
+                                # Usuwamy stare dane z tego miesiąca
+                                s.execute(text(f"""
+                                    DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} 
+                                    WHERE typ = 'WYNAGRODZENIE' 
+                                    AND data_transakcji::date BETWEEN :d1 AND :d2
+                                    AND firma = :firma
+                                """), {'d1': d_start, 'd2': d_stop, 'firma': wybrana_firma})
+                                
+                                # 2. Przygotowujemy dane do wgrania
+                                for _, wiersz in grupa.iterrows():
+                                    s.execute(text(f"""
+                                        INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI}
+                                        (data_transakcji, identyfikator, kwota_netto, kwota_brutto, waluta, ilosc, produkt, typ, zrodlo, kraj, firma, kontrahent)
+                                        VALUES (:dt, :ident, :kwota, :kwota, 'PLN', 1, :prod, 'WYNAGRODZENIE', 'Excel+Webfleet', 'PL', :firma, 'Pracownicy')
+                                    """), {
+                                        'dt': wiersz['data_ksiegowania'],
+                                        'ident': wiersz['pojazd'],
+                                        'kwota': wiersz['koszt_przypisany'],
+                                        'prod': f"Wynagrodzenie kierowcy ({wiersz['miesiac_opis']})",
+                                        'firma': wybrana_firma
+                                    })
+                                licznik += 1
                             s.commit()
-                        
-                        # 2. Przygotowujemy DataFrame do wgrania do tabeli transactions
-                        df_to_save = pd.DataFrame()
-                        df_to_save['data_transakcji'] = pd.to_datetime(data_pack['stop']) # Data = koniec miesiąca
-                        df_to_save['identyfikator'] = df_wynik['pojazd']
-                        # Zapisujemy jako kwota BRUTTO i NETTO (zakładamy to samo dla uproszczenia)
-                        df_to_save['kwota_netto'] = df_wynik['koszt_przypisany']
-                        df_to_save['kwota_brutto'] = df_wynik['koszt_przypisany']
-                        df_to_save['waluta'] = 'PLN'
-                        df_to_save['ilosc'] = 1
-                        df_to_save['produkt'] = 'Wynagrodzenie kierowcy (Webfleet)'
-                        df_to_save['typ'] = 'WYNAGRODZENIE'
-                        df_to_save['zrodlo'] = 'Excel+Webfleet'
-                        df_to_save['kraj'] = 'PL'
-                        df_to_save['firma'] = wybrana_firma
-                        df_to_save['kontrahent'] = 'Pracownicy'
-                        
-                        df_to_save.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
-                        st.success("✅ Zapisano wynagrodzenia w bazie! Są teraz widoczne w Raportach i Rentowności.")
-                        st.session_state['temp_wynagrodzenia'] = None # Clear po zapisie
+                            
+                        st.success(f"✅ Zapisano pomyślnie dane dla {licznik} miesięcy!")
+                        st.session_state['temp_wynagrodzenia_all'] = None # Czyścimy po zapisie
                         time.sleep(2)
                         st.rerun()
                         
