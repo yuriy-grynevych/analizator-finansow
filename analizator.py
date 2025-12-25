@@ -685,12 +685,16 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
         
     polaczone_df = pd.concat(lista_df_zunifikowanych, ignore_index=True)
     return polaczone_df, None
-# --- FUNKCJE BAZY DANYCH ---
 def setup_database(conn):
     with conn.session as s:
-        # --- Istniejąca tabela transakcji ---
+        # 1. Najpierw usuwamy stare tabele (UWAGA: TO KASUJE DANE!)
+        s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI}"))
+        s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.app_settings"))
+        s.commit()
+        
+        # 2. Tworzymy tabelę transakcji na nowo
         s.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
+            CREATE TABLE {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
                 id SERIAL PRIMARY KEY,
                 data_transakcji TIMESTAMP,
                 identyfikator VARCHAR(255),
@@ -707,9 +711,9 @@ def setup_database(conn):
             );
         """))
         
-        # --- NOWA TABELA: USTAWIENIA (API WEBFLEET) ---
+        # 3. Tworzymy tabelę ustawień (app_settings) na nowo
         s.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.app_settings (
+            CREATE TABLE {NAZWA_SCHEMATU}.app_settings (
                 setting_key VARCHAR(50) PRIMARY KEY,
                 setting_value TEXT
             );
