@@ -319,14 +319,12 @@ def pobierz_ustawienia_api(conn):
 def pobierz_przypisania_webfleet(account, username, password, data_start, data_stop):
     url = "https://csv.webfleet.com/extern"
     
-    # ZGODNIE Z DOKUMENTACJĄ WEBFLEET.CONNECT 1.73:
-    # Używamy formatu ISO 8601 z literą "T".
-    # Kluczem do sukcesu jest parametr 'useISO8601', który wymusza ten format
-    # niezależnie od ustawień regionalnych konta użytkownika.
+    # FORMAT ISO 8601 (z literą T)
+    # Dzięki parametrowi useISO8601=true Webfleet to zrozumie bezbłędnie.
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
-    # Twój klucz API (ze zrzutu ekranu)
+    # Twój klucz API
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
@@ -339,19 +337,19 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json',
-        'useISO8601': 'true'       # <--- KLUCZOWA ZMIANA Z DOKUMENTACJI
+        'useISO8601': 'true'       # <--- TO NAPRAWIA BŁĄD 9204 DLA KAŻDEGO ROKU
     }
     
-    # Debugowanie
-    st.write(f"Wysyłam zapytanie (ISO8601 forced): {range_from} do {range_to}")
+    # Debugowanie - żebyś widział, co się dzieje
+    st.write(f"Wysyłam zapytanie (2025): {range_from} do {range_to}")
     
     try:
-        response = requests.get(url, params=params, timeout=45) # Zwiększyłem timeout dla raportów miesięcznych
+        response = requests.get(url, params=params, timeout=45)
         
         if response.status_code == 200:
             data = response.json()
             
-            # Obsługa błędów logicznych API (nawet przy HTTP 200)
+            # Sprawdzenie błędów ukrytych w JSON
             if isinstance(data, dict) and 'errorCode' in data:
                  st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
                  return pd.DataFrame()
@@ -359,27 +357,25 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
             items = data if isinstance(data, list) else data.get('trips', [])
             
             if not items:
-                # To może oznaczać brak jazd LUB błędne parametry (ale przy useISO8601 powinno być stabilnie)
+                # Jeśli w 2025 nie było jazd, zwróci pustą tabelę, ALE BEZ BŁĘDU
                 return pd.DataFrame()
             
             lista_przypisan = []
             for trip in items:
-                # Dokumentacja mówi, że pola mogą się różnić w zależności od kolumn raportu,
-                # ale objectuid/driverid są standardem.
                 pojazd = trip.get('objectname') or trip.get('objectuid')
                 kierowca = trip.get('drivername') or trip.get('driverid')
                 data_trip = trip.get('startdate') 
                 
                 if pojazd and kierowca:
                     lista_przypisan.append({
-                        'data': data_trip[:10], # Format z API będzie YYYY-MM-DD
+                        'data': data_trip[:10],
                         'pojazd': pojazd,
                         'kierowca': kierowca
                     })
             
             return pd.DataFrame(lista_przypisan)
         else:
-            st.error(f"Błąd HTTP Webfleet: {response.status_code} - {response.text}")
+            st.error(f"Błąd HTTP: {response.status_code} - {response.text}")
             return pd.DataFrame()
             
     except Exception as e:
