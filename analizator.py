@@ -174,7 +174,6 @@ def parsuj_dataframe_plac(df):
         col0 = row.iloc[0].strip() if len(row) > 0 else ""
         col1 = row.iloc[1].strip() if len(row) > 1 else ""
         col2 = row.iloc[2].strip() if len(row) > 2 else ""
-        col3 = row.iloc[3].strip() if len(row) > 3 else ""
         
         # 1. Szukamy nazwiska. Często jest w kolumnie 0 lub 1, a obok "ILOSC DNI"
         # Sprawdzamy czy wiersz wygląda na nagłówek kierowcy
@@ -874,9 +873,15 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     if dane_z_bazy.empty:
         return dane_z_bazy, None
     
+    # [WAŻNE] Jeśli typ to WYNAGRODZENIE, zostawiamy go bez zmian
+    maska_wynagrodzenia = dane_z_bazy['typ'] == 'WYNAGRODZENIE'
+    df_wynagrodzenia = dane_z_bazy[maska_wynagrodzenia].copy()
+    
+    # Filtrujemy dane do obróbki paliwowej
+    dane_z_bazy = dane_z_bazy[~maska_wynagrodzenia]
     dane_z_bazy = dane_z_bazy[dane_z_bazy['zrodlo'] != 'Fakturownia']
 
-    if dane_z_bazy.empty:
+    if dane_z_bazy.empty and df_wynagrodzenia.empty:
         return dane_z_bazy, None
 
     dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
@@ -923,6 +928,22 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
         maska = dane_z_bazy.apply(filter_holier, axis=1)
         dane_z_bazy = dane_z_bazy[maska]
 
+    # Łączymy z powrotem wynagrodzenia, jeśli są
+    if not df_wynagrodzenia.empty:
+        # Dla wynagrodzeń też czyścimy klucz, żeby pasował do reszty
+        df_wynagrodzenia['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(df_wynagrodzenia['identyfikator'])
+        df_wynagrodzenia['data_transakcji_dt'] = pd.to_datetime(df_wynagrodzenia['data_transakcji'])
+        # Dodajemy kolumny numeryczne
+        df_wynagrodzenia['kwota_netto_num'] = pd.to_numeric(df_wynagrodzenia['kwota_netto'], errors='coerce').fillna(0.0)
+        df_wynagrodzenia['kwota_brutto_num'] = pd.to_numeric(df_wynagrodzenia['kwota_brutto'], errors='coerce').fillna(0.0)
+        # Zakładamy PLN -> EUR (uproszczone, bo raporty zwykle w EUR)
+        kurs_eur = pobierz_kurs_eur_pln() or 4.30
+        df_wynagrodzenia['kwota_netto_eur'] = df_wynagrodzenia['kwota_netto_num'] / kurs_eur
+        df_wynagrodzenia['kwota_brutto_eur'] = df_wynagrodzenia['kwota_brutto_num'] / kurs_eur
+        df_wynagrodzenia['kwota_finalna_eur'] = df_wynagrodzenia['kwota_brutto_eur']
+        
+        dane_z_bazy = pd.concat([dane_z_bazy, df_wynagrodzenia], ignore_index=True)
+
     if dane_z_bazy.empty:
         return dane_z_bazy, None
 
@@ -934,16 +955,20 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     unikalne_waluty = dane_z_bazy['waluta'].unique()
     mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
     
-    dane_z_bazy['kwota_netto_num'] = pd.to_numeric(dane_z_bazy['kwota_netto'], errors='coerce').fillna(0.0)
-    dane_z_bazy['kwota_brutto_num'] = pd.to_numeric(dane_z_bazy['kwota_brutto'], errors='coerce').fillna(0.0)
+    # Przeliczamy tylko te, które jeszcze nie mają (czyli paliwa)
+    maska_brak_eur = dane_z_bazy['kwota_netto_eur'].isna()
     
-    dane_z_bazy['kwota_netto_eur'] = dane_z_bazy.apply(
-        lambda row: row['kwota_netto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
-    )
-    dane_z_bazy['kwota_brutto_eur'] = dane_z_bazy.apply(
-        lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
-    )
-    dane_z_bazy['kwota_finalna_eur'] = dane_z_bazy['kwota_brutto_eur'] 
+    if maska_brak_eur.any():
+        dane_z_bazy.loc[maska_brak_eur, 'kwota_netto_num'] = pd.to_numeric(dane_z_bazy.loc[maska_brak_eur, 'kwota_netto'], errors='coerce').fillna(0.0)
+        dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto_num'] = pd.to_numeric(dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto'], errors='coerce').fillna(0.0)
+        
+        dane_z_bazy.loc[maska_brak_eur, 'kwota_netto_eur'] = dane_z_bazy[maska_brak_eur].apply(
+            lambda row: row['kwota_netto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
+        )
+        dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto_eur'] = dane_z_bazy[maska_brak_eur].apply(
+            lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
+        )
+        dane_z_bazy.loc[maska_brak_eur, 'kwota_finalna_eur'] = dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto_eur'] 
     
     return dane_z_bazy, mapa_kursow
 
