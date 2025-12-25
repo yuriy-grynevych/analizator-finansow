@@ -1545,20 +1545,23 @@ def render_admin_content(conn, wybrana_firma):
                         
                         # PĘTLA PO WSZYSTKICH ARKUSZACH
                         for i, nazwa_arkusza in enumerate(sheet_names):
+                            # Aktualizacja paska postępu
                             pask_postepu.progress((i / len(sheet_names)), text=f"Przetwarzam arkusz: {nazwa_arkusza}...")
                             
-                            # --- POPRAWKA: SPOWALNIAMY PĘTLĘ (BŁĄD 8011) ---
-                            # Webfleet pozwala na ok. 1 zapytanie co 1.5 sekundy w standardowym limicie.
-                            # Dodajemy pauzę, żeby nie zablokowali konta.
-                            time.sleep(2.0) 
+                            # --- POPRAWKA KRYTYCZNA: DŁUŻSZA PAUZA (BŁĄD 8011) ---
+                            # Webfleet ma limit zapytań na minutę. 
+                            # Czekamy 10 sekund między miesiącami, aby "ostudzić" połączenie.
+                            if i > 0: # Nie czekamy przed pierwszym, tylko przed kolejnymi
+                                time.sleep(10) 
                             
                             # 1. Próba ustalenia daty dla tego arkusza
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             
+                            # Jeśli nie udało się ustalić daty, pomijamy arkusz
                             if not start_auto:
                                 continue
                             
-                            # Logika pomijania przyszłości (żeby nie pytać o rok 2025/2026 bez sensu)
+                            # Pomijamy przyszłość (żeby nie pytać o rok 2026 itp.)
                             if start_auto > date.today():
                                 continue
 
@@ -1570,27 +1573,32 @@ def render_admin_content(conn, wybrana_firma):
                                 continue 
                                 
                             # 3. Pobranie danych z Webfleet
+                            # Funkcja używa teraz useISO8601=true, więc format daty jest bezpieczny
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
                             if df_wf.empty:
-                                # Komunikat tylko w konsoli/logach, żeby nie śmiecić w UI
+                                # Cicha informacja w konsoli, bez błędu dla użytkownika
                                 print(f"Arkusz {nazwa_arkusza}: Brak tras ({start_auto})")
                                 continue
                                 
-                            # 4. Łączenie danych
+                            # 4. Łączenie danych (Algorytm przypisania kosztów)
                             statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                             
+                            # Normalizacja nazwisk (duże litery, usunięcie spacji)
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
                             statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
                             
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
+                            # Obliczenie udziału kosztów
                             total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
                             merged['udzial'] = merged['dni_jazdy'] / total_days
                             merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
                             
+                            # Sumowanie per pojazd
                             wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
                             
+                            # Dodanie metadanych do zapisu
                             wynik_pojazdy['data_ksiegowania'] = stop_auto
                             wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
                             
