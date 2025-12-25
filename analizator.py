@@ -319,16 +319,18 @@ def pobierz_ustawienia_api(conn):
 def pobierz_przypisania_webfleet(account, username, password, data_start, data_stop):
     url = "https://csv.webfleet.com/extern"
     
-    # --- POPRAWKA: USUNĄŁEM "T", DODAŁEM SPACJĘ ---
-    # Webfleet woli format "2025-11-01 00:00:00" zamiast "2025-11-01T00:00:00"
-    range_from = f"{data_start} 00:00:00"
-    range_to = f"{data_stop} 23:59:59"
+    # ZGODNIE Z DOKUMENTACJĄ WEBFLEET.CONNECT 1.73:
+    # Używamy formatu ISO 8601 z literą "T".
+    # Kluczem do sukcesu jest parametr 'useISO8601', który wymusza ten format
+    # niezależnie od ustawień regionalnych konta użytkownika.
+    range_from = f"{data_start}T00:00:00"
+    range_to = f"{data_stop}T23:59:59"
     
-    # Twój klucz API
+    # Twój klucz API (ze zrzutu ekranu)
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
-        'lang': 'de',
+        'lang': 'de',              # Język komunikatów błędów
         'account': account,
         'username': username,
         'password': password,
@@ -336,57 +338,52 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         'action': 'showTripReportExtern',
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
-        'outputformat': 'json'
+        'outputformat': 'json',
+        'useISO8601': 'true'       # <--- KLUCZOWA ZMIANA Z DOKUMENTACJI
     }
     
-    # --- DEBUGOWANIE (MOŻESZ ZOSTAWIĆ, ŻEBY WIDZIEĆ CZY DZIAŁA) ---
-    st.write(f"Wysyłam zapytanie dla dat: '{range_from}' do '{range_to}'")
+    # Debugowanie
+    st.write(f"Wysyłam zapytanie (ISO8601 forced): {range_from} do {range_to}")
     
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, timeout=45) # Zwiększyłem timeout dla raportów miesięcznych
         
-        # Jeśli nadal będzie błąd, wyświetlimy go
-        if response.status_code != 200:
-             st.error(f"Błąd HTTP: {response.status_code}")
-             st.code(response.text)
-
-        # Sprawdzamy czy w treści nie ma błędu logicznego (np. 9204)
-        try:
-            data = response.json()
-            # Czasami Webfleet zwraca 200 OK, ale w środku jest JSON z błędem
-            if isinstance(data, dict) and 'errorCode' in data:
-                 st.error(f"Webfleet zwrócił błąd logiczny: {data['errorCode']} - {data.get('errorMsg')}")
-                 return pd.DataFrame()
-        except:
-            pass # Jeśli to nie JSON, ignorujemy na razie
-
         if response.status_code == 200:
-            lista_przypisan = []
+            data = response.json()
+            
+            # Obsługa błędów logicznych API (nawet przy HTTP 200)
+            if isinstance(data, dict) and 'errorCode' in data:
+                 st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
+                 return pd.DataFrame()
+
             items = data if isinstance(data, list) else data.get('trips', [])
             
             if not items:
-                st.warning("Połączenie OK, format daty OK, ale Webfleet twierdzi, że nie ma tras w tym terminie.")
-            else:
-                st.success(f"Sukces! Pobrano {len(items)} tras.")
+                # To może oznaczać brak jazd LUB błędne parametry (ale przy useISO8601 powinno być stabilnie)
+                return pd.DataFrame()
             
+            lista_przypisan = []
             for trip in items:
+                # Dokumentacja mówi, że pola mogą się różnić w zależności od kolumn raportu,
+                # ale objectuid/driverid są standardem.
                 pojazd = trip.get('objectname') or trip.get('objectuid')
                 kierowca = trip.get('drivername') or trip.get('driverid')
                 data_trip = trip.get('startdate') 
                 
                 if pojazd and kierowca:
                     lista_przypisan.append({
-                        'data': data_trip[:10], 
+                        'data': data_trip[:10], # Format z API będzie YYYY-MM-DD
                         'pojazd': pojazd,
                         'kierowca': kierowca
                     })
             
             return pd.DataFrame(lista_przypisan)
         else:
+            st.error(f"Błąd HTTP Webfleet: {response.status_code} - {response.text}")
             return pd.DataFrame()
             
     except Exception as e:
-        st.error(f"Wyjątek przy łączeniu z Webfleet: {e}")
+        st.error(f"Wyjątek: {e}")
         return pd.DataFrame()
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
