@@ -317,10 +317,14 @@ def pobierz_ustawienia_api(conn):
 
 @st.cache_data(ttl=3600)
 def pobierz_przypisania_webfleet(account, username, password, data_start, data_stop):
+    # 1. Sprawdzenie czy dane logowania są w ogóle podane
+    if not account or not username or not password:
+        st.error("BŁĄD: Brak danych logowania do Webfleet! Uzupełnij je w Panelu Administratora.")
+        return pd.DataFrame()
+
     url = "https://csv.webfleet.com/extern"
     
-    # FORMAT ISO 8601 (z literą T)
-    # Dzięki parametrowi useISO8601=true Webfleet to zrozumie bezbłędnie.
+    # Format ISO 8601 (T) + useISO8601=true
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
@@ -328,7 +332,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
-        'lang': 'de',              # Język komunikatów błędów
+        'lang': 'de',
         'account': account,
         'username': username,
         'password': password,
@@ -337,11 +341,11 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json',
-        'useISO8601': 'true'       # <--- TO NAPRAWIA BŁĄD 9204 DLA KAŻDEGO ROKU
+        'useISO8601': 'true'
     }
     
-    # Debugowanie - żebyś widział, co się dzieje
-    st.write(f"Wysyłam zapytanie (2025): {range_from} do {range_to}")
+    # Debug
+    # st.write(f"Pobieranie Webfleet: {range_from} - {range_to}")
     
     try:
         response = requests.get(url, params=params, timeout=45)
@@ -349,15 +353,15 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         if response.status_code == 200:
             data = response.json()
             
-            # Sprawdzenie błędów ukrytych w JSON
             if isinstance(data, dict) and 'errorCode' in data:
-                 st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
+                 # Ignorujemy błędy o braku danych, ale wyświetlamy inne
+                 if data['errorCode'] != 9204: 
+                     st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
                  return pd.DataFrame()
 
             items = data if isinstance(data, list) else data.get('trips', [])
             
             if not items:
-                # Jeśli w 2025 nie było jazd, zwróci pustą tabelę, ALE BEZ BŁĘDU
                 return pd.DataFrame()
             
             lista_przypisan = []
@@ -366,7 +370,8 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
                 kierowca = trip.get('drivername') or trip.get('driverid')
                 data_trip = trip.get('startdate') 
                 
-                if pojazd and kierowca:
+                # --- POPRAWKA: Sprawdzamy czy data_trip istnieje przed użyciem [:10] ---
+                if pojazd and kierowca and data_trip:
                     lista_przypisan.append({
                         'data': data_trip[:10],
                         'pojazd': pojazd,
@@ -375,11 +380,11 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
             
             return pd.DataFrame(lista_przypisan)
         else:
-            st.error(f"Błąd HTTP: {response.status_code} - {response.text}")
+            st.error(f"Błąd HTTP: {response.status_code}")
             return pd.DataFrame()
             
     except Exception as e:
-        st.error(f"Wyjątek: {e}")
+        st.error(f"Wyjątek Webfleet: {e}")
         return pd.DataFrame()
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
