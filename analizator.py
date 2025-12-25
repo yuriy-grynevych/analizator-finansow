@@ -1533,7 +1533,7 @@ def render_raport_content(conn, wybrana_firma):
                 
                 if dane_przygotowane is None: st.stop()
                 
-                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne = st.tabs(["Paliwo", "Opłaty Drogowe", "Pozostałe", "Wynagrodzenia"])
+                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne, sub_tab_wynagrodzenia = st.tabs(["Paliwo", "Opłaty Drogowe", "Pozostałe", "Wynagrodzenia"])
                 
                 with sub_tab_paliwo:
                     df_paliwo = dane_przygotowane[dane_przygotowane['typ'] == 'PALIWO']
