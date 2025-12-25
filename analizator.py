@@ -321,7 +321,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
-    # --- TUTAJ DODAŁEM TWÓJ KLUCZ ZE ZDJĘCIA ---
+    # Twój klucz API
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
@@ -329,19 +329,33 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         'account': account,
         'username': username,
         'password': password,
-        'apikey': api_key,  # <--- Klucz jest wysyłany tutaj
+        'apikey': api_key,
         'action': 'showTripReportExtern',
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json'
     }
     
+    # --- DEBUGOWANIE (WYŚWIETLANIE DANYCH NA EKRANIE) ---
+    st.write("--- TRYB DIAGNOSTYCZNY WEBFLEET ---")
+    st.write(f"Próba łączenia dla konta: {account}, user: {username}")
+    st.write(f"Zakres dat: {range_from} do {range_to}")
+    
     try:
         response = requests.get(url, params=params, timeout=30)
+        
+        # Pokaż surową odpowiedź serwera na ekranie
+        st.write(f"Status kod: {response.status_code}")
+        st.text("Surowa odpowiedź serwera:")
+        st.code(response.text) # <--- TO JEST NAJWAŻNIEJSZE
+
         if response.status_code == 200:
             data = response.json()
             lista_przypisan = []
             items = data if isinstance(data, list) else data.get('trips', [])
+            
+            if not items:
+                st.warning("Webfleet zwrócił status 200 (OK), ale lista 'trips' jest pusta.")
             
             for trip in items:
                 pojazd = trip.get('objectname') or trip.get('objectuid')
@@ -357,7 +371,6 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
             
             return pd.DataFrame(lista_przypisan)
         else:
-            # Wyświetli błąd, jeśli dane logowania są złe mimo klucza
             st.error(f"Błąd API Webfleet: {response.status_code} - {response.text}")
             return pd.DataFrame()
             
