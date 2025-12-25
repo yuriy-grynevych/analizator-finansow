@@ -921,6 +921,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
                 return True
             dane_paliwo = dane_paliwo[dane_paliwo.apply(filter_holier, axis=1)]
 
+        # --- POPRAWKA: Inicjalizacja kolumn nawet jak puste po filtracji ---
         if not dane_paliwo.empty:
             if 'kraj' not in dane_paliwo.columns: dane_paliwo['kraj'] = 'Nieznany'
             
@@ -933,6 +934,13 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
             dane_paliwo['kwota_netto_eur'] = dane_paliwo.apply(lambda row: row['kwota_netto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
             dane_paliwo['kwota_brutto_eur'] = dane_paliwo.apply(lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
             dane_paliwo['kwota_finalna_eur'] = dane_paliwo['kwota_brutto_eur']
+        else:
+            # GWARANCJA ISTNIENIA KOLUMN
+            dane_paliwo['kwota_netto_eur'] = 0.0
+            dane_paliwo['kwota_brutto_eur'] = 0.0
+            dane_paliwo['kwota_finalna_eur'] = 0.0
+            dane_paliwo['kwota_netto_num'] = 0.0
+            dane_paliwo['kwota_brutto_num'] = 0.0
 
     # --- B. PRZETWARZANIE WYNAGRODZEŃ ---
     if not df_wynagrodzenia.empty:
@@ -953,6 +961,12 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     # --- C. ŁĄCZENIE ---
     dane_finalne = pd.concat([dane_paliwo, df_wynagrodzenia], ignore_index=True)
     
+    # Dodatkowe zabezpieczenie wynikowego DataFrame
+    if 'kwota_netto_eur' not in dane_finalne.columns:
+        dane_finalne['kwota_netto_eur'] = 0.0
+    if 'kwota_brutto_eur' not in dane_finalne.columns:
+        dane_finalne['kwota_brutto_eur'] = 0.0
+
     return dane_finalne, mapa_kursow
 
 # --- LOGIKA REFAKTUR ---
