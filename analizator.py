@@ -321,11 +321,15 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
+    # --- TUTAJ DODAŁEM TWÓJ KLUCZ ZE ZDJĘCIA ---
+    api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
+
     params = {
         'lang': 'de',
         'account': account,
         'username': username,
         'password': password,
+        'apikey': api_key,  # <--- Klucz jest wysyłany tutaj
         'action': 'showTripReportExtern',
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
@@ -353,13 +357,13 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
             
             return pd.DataFrame(lista_przypisan)
         else:
+            # Wyświetli błąd, jeśli dane logowania są złe mimo klucza
             st.error(f"Błąd API Webfleet: {response.status_code} - {response.text}")
             return pd.DataFrame()
             
     except Exception as e:
         st.error(f"Wyjątek przy łączeniu z Webfleet: {e}")
         return pd.DataFrame()
-
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
     usluga = ""
