@@ -8,6 +8,7 @@ from datetime import date
 from sqlalchemy import text
 import io
 import os
+import json
 
 # --- USTAWIENIA STRONY ---
 icon_image = "⛟" 
@@ -192,7 +193,130 @@ def pobierz_wszystkie_kursy(waluty_lista, kurs_eur_pln):
         if kurs_pln: mapa_kursow_do_eur[waluta] = kurs_pln / kurs_eur_pln
         else: mapa_kursow_do_eur[waluta] = 0.0
     return mapa_kursow_do_eur
+# --- OBSŁUGA WEBFLEET I WYNAGRODZEŃ ---
 
+def zapisz_ustawienia_api(conn, account, username, password):
+    with conn.session as s:
+        # Upsert (Insert or Update)
+        data = {
+            "webfleet_account": account,
+            "webfleet_username": username,
+            "webfleet_password": password
+        }
+        for k, v in data.items():
+            s.execute(text(f"""
+                INSERT INTO {NAZWA_SCHEMATU}.app_settings (setting_key, setting_value)
+                VALUES (:key, :val)
+                ON CONFLICT (setting_key) DO UPDATE SET setting_value = :val
+            """), {"key": k, "val": v})
+        s.commit()
+    st.toast("Zapisano ustawienia API Webfleet.")
+
+def pobierz_ustawienia_api(conn):
+    try:
+        df = conn.query(f"SELECT * FROM {NAZWA_SCHEMATU}.app_settings")
+        if df.empty: return None, None, None
+        settings = dict(zip(df['setting_key'], df['setting_value']))
+        return settings.get('webfleet_account'), settings.get('webfleet_username'), settings.get('webfleet_password')
+    except Exception:
+        return None, None, None
+
+@st.cache_data(ttl=3600)
+def pobierz_przypisania_webfleet(account, username, password, data_start, data_stop):
+    """
+    Pobiera raport podróży z Webfleet, aby ustalić jaki kierowca jechał jakim autem.
+    """
+    url = "https://csv.webfleet.com/extern"
+    
+    # Format daty dla Webfleet (ISO8601 subset or specific)
+    # Zwykle wymagają: YYYY-MM-DDThh:mm:ss
+    range_from = f"{data_start}T00:00:00"
+    range_to = f"{data_stop}T23:59:59"
+    
+    params = {
+        'lang': 'de', # Lub pl, en
+        'account': account,
+        'username': username,
+        'password': password,
+        'action': 'showTripReportExtern',
+        'rangefrom_string': range_from,
+        'rangeto_string': range_to,
+        'outputformat': 'json'
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        if response.status_code == 200:
+            # Webfleet zwraca CSV lub JSON. Tutaj prosimy o JSON.
+            # Uwaga: Parsowanie odpowiedzi zależy od rzeczywistej struktury Webfleet Connect
+            data = response.json()
+            
+            # Przykładowa struktura (trzeba dostosować do realnej odpowiedzi):
+            # Zakładamy listę obiektów z polami: objectname, drivername, startdate, enddate
+            lista_przypisan = []
+            
+            # Prowizoryczne parsowanie (Webfleet zwraca często listę wewnątrz klucza)
+            items = data if isinstance(data, list) else data.get('trips', [])
+            
+            for trip in items:
+                pojazd = trip.get('objectname') or trip.get('objectuid')
+                kierowca = trip.get('drivername') or trip.get('driverid')
+                data_trip = trip.get('startdate') # string
+                
+                if pojazd and kierowca:
+                    lista_przypisan.append({
+                        'data': data_trip[:10], # YYYY-MM-DD
+                        'pojazd': pojazd,
+                        'kierowca': kierowca
+                    })
+            
+            return pd.DataFrame(lista_przypisan)
+        else:
+            st.error(f"Błąd API Webfleet: {response.status_code} - {response.text}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"Wyjątek przy łączeniu z Webfleet: {e}")
+        return pd.DataFrame()
+
+def parsuj_plik_plac(plik_bytes):
+    """
+    Parsuje specyficzny format pliku 'KIEROWCY WYNAGRODZENIE...'
+    Opiera się na strukturze: Nazwisko w jednej linii, poniżej KWOTA.
+    """
+    try:
+        df = pd.read_csv(io.BytesIO(plik_bytes), header=None, on_bad_lines='skip')
+        wyniki = []
+        
+        aktualny_kierowca = None
+        
+        # Iterujemy po wierszach, szukając wzorca
+        for idx, row in df.iterrows():
+            col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
+            col2 = str(row[2]).strip() if pd.notna(row[2]) else ""
+            
+            # Wykrywanie nazwiska (zakładamy, że jest w kolumnie 1 i obok jest ILOSC DNI)
+            if "ILOSC DNI" in col2:
+                aktualny_kierowca = col1
+                
+            # Wykrywanie kwoty (zakładamy, że jest pod nazwiskiem, etykieta KWOTA w col 1)
+            # Wg snippetu: ,,KWOTA, 5429.25 (czyli col1 pusta, col2 KWOTA, col3 wartosc)
+            col2_check = str(row[2]).strip().upper() if pd.notna(row[2]) else ""
+            if "KWOTA" in col2_check and aktualny_kierowca:
+                try:
+                    wartosc = float(str(row[3]).replace(',', '.'))
+                    wyniki.append({
+                        'kierowca': aktualny_kierowca,
+                        'kwota_total': wartosc
+                    })
+                    aktualny_kierowca = None # Reset po znalezieniu kwoty
+                except:
+                    pass
+                    
+        return pd.DataFrame(wyniki)
+    except Exception as e:
+        st.error(f"Błąd parsowania pliku płac: {e}")
+        return pd.DataFrame()
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
     # Pobieramy dane i budujemy full_text do przeszukiwania
@@ -539,7 +663,7 @@ def wczytaj_i_zunifikuj_pliki(przeslane_pliki, wybrana_firma_upload):
 # --- FUNKCJE BAZY DANYCH ---
 def setup_database(conn):
     with conn.session as s:
-        s.execute(text(f"DROP TABLE IF EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI}"))
+        # --- Istniejąca tabela transakcji ---
         s.execute(text(f"""
             CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.{NAZWA_TABELI} (
                 id SERIAL PRIMARY KEY,
@@ -557,8 +681,15 @@ def setup_database(conn):
                 kontrahent VARCHAR(255)
             );
         """))
+        
+        # --- NOWA TABELA: USTAWIENIA (API WEBFLEET) ---
+        s.execute(text(f"""
+            CREATE TABLE IF NOT EXISTS {NAZWA_SCHEMATU}.app_settings (
+                setting_key VARCHAR(50) PRIMARY KEY,
+                setting_value TEXT
+            );
+        """))
         s.commit()
-
 def setup_file_database(conn):
     try:
         with conn.session as s:
@@ -1298,6 +1429,23 @@ def to_excel_contractors(df_analiza_raw):
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
+    # --- NOWA SEKCJA: KONFIGURACJA WEBFLEET ---
+    with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
+        st.info("Wprowadź dane dostępowe do Webfleet Connect, aby pobierać dane o kierowcach.")
+        
+        acc, user, pw = pobierz_ustawienia_api(conn)
+        
+        with st.form("webfleet_config"):
+            inp_account = st.text_input("Account (Nazwa konta)", value=acc if acc else "")
+            inp_username = st.text_input("Username (Użytkownik)", value=user if user else "")
+            inp_password = st.text_input("Password (Hasło)", value=pw if pw else "", type="password")
+            
+            btn_save_api = st.form_submit_button("Zapisz konfigurację API")
+            if btn_save_api:
+                zapisz_ustawienia_api(conn, inp_account, inp_username, inp_password)
+                
+    st.divider()
+    
     col_up1, col_up2 = st.columns([1, 2])
     
     with col_up1:
@@ -1385,7 +1533,7 @@ def render_raport_content(conn, wybrana_firma):
                 
                 if dane_przygotowane is None: st.stop()
                 
-                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne = st.tabs(["Paliwo", "Opłaty Drogowe", "Pozostałe"])
+                sub_tab_paliwo, sub_tab_oplaty, sub_tab_inne = st.tabs(["Paliwo", "Opłaty Drogowe", "Pozostałe", "Wynagrodzenia"])
                 
                 with sub_tab_paliwo:
                     df_paliwo = dane_przygotowane[dane_przygotowane['typ'] == 'PALIWO']
@@ -1545,6 +1693,75 @@ def render_raport_content(conn, wybrana_firma):
                                   )
                       else:
                           st.info("Brak innych wydatków.")
+                          # --- NOWA ZAWARTOŚĆ: WYNAGRODZENIA ---
+            with sub_tab_wynagrodzenia:
+                st.markdown("### Koszty Pracownicze")
+                
+                col_w1, col_w2 = st.columns([1, 2])
+                with col_w1:
+                    st.caption("Wgraj plik z wynagrodzeniami (CSV z Excela) dla wybranego miesiąca.")
+                    plik_plac = st.file_uploader("Plik CSV Wynagrodzeń", type=['csv'])
+                
+                with col_w2:
+                     st.info("System pobierze dane z Webfleet, aby przypisać kierowców do pojazdów w wybranym okresie i rozdzielić koszty.")
+                
+                if plik_plac:
+                    acc, user, pw = pobierz_ustawienia_api(conn)
+                    if not acc or not user or not pw:
+                        st.error("Brak konfiguracji API Webfleet! Przejdź do Panelu Administratora.")
+                    else:
+                        if st.button("Analizuj Wynagrodzenia", type="primary"):
+                            with st.spinner("Pobieranie danych z Webfleet i przetwarzanie pliku..."):
+                                # 1. Parsowanie pliku płac
+                                df_place = parsuj_plik_plac(plik_plac.getvalue())
+                                
+                                if df_place.empty:
+                                    st.warning("Nie udało się odczytać kierowców z pliku. Sprawdź format.")
+                                else:
+                                    # 2. Pobieranie danych z Webfleet
+                                    df_wf = pobierz_przypisania_webfleet(acc, user, pw, data_start_rap, data_stop_rap)
+                                    
+                                    if df_wf.empty:
+                                        st.warning("Brak danych o trasach z Webfleet w tym okresie (lub błąd API).")
+                                        # Fallback: Pokaż tylko listę płac bez przypisania
+                                        st.dataframe(df_place)
+                                    else:
+                                        # 3. Logika przypisywania
+                                        # Liczymy ile dni każdy kierowca jeździł każdym autem
+                                        statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
+                                        
+                                        # Normalizacja nazwisk (prosta)
+                                        df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
+                                        statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
+                                        
+                                        # Merge płac z jazdami
+                                        # Uwaga: To dopasowanie po nazwisku musi być dokładne. W praktyce może wymagać mapowania.
+                                        merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
+                                        
+                                        # Obliczanie kosztu na pojazd (proporcjonalnie do dni)
+                                        # Suma dni dla każdego kierowcy
+                                        total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
+                                        merged['udzial'] = merged['dni_jazdy'] / total_days
+                                        merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                                        
+                                        # Agregacja per Pojazd
+                                        wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
+                                        wynik_pojazdy = wynik_pojazdy.sort_values(by='koszt_przypisany', ascending=False)
+                                        
+                                        st.success("Obliczono koszty wynagrodzeń per pojazd.")
+                                        
+                                        c_sum1, c_sum2 = st.columns(2)
+                                        c_sum1.metric("Łączna kwota z pliku", f"{df_place['kwota_total'].sum():,.2f} PLN")
+                                        c_sum2.metric("Kwota przypisana do pojazdów", f"{wynik_pojazdy['koszt_przypisany'].sum():,.2f} PLN")
+                                        
+                                        st.markdown("##### Wyniki per Pojazd")
+                                        st.dataframe(
+                                            wynik_pojazdy.style.format({'koszt_przypisany': '{:,.2f} PLN'}),
+                                            use_container_width=True
+                                        )
+                                        
+                                        with st.expander("Szczegóły (Kierowca -> Pojazd)"):
+                                            st.dataframe(merged[['kierowca_x', 'pojazd', 'dni_jazdy', 'kwota_total', 'koszt_przypisany']])
     except Exception as e:
         if "does not exist" in str(e):
              st.warning("Baza danych nie jest gotowa. Przejdź do Panelu Admina.")
