@@ -868,109 +868,92 @@ def bezpieczne_czyszczenie_klucza(s_identyfikatorow):
             
     return s_str.apply(clean_key)
 
-# --- PRZYGOTOWANIE DANYCH ---
+# --- POPRAWIONA FUNKCJA PRZYGOTOWANIA DANYCH ---
 def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
     if dane_z_bazy.empty:
         return dane_z_bazy, None
     
-    # [WAŻNE] Jeśli typ to WYNAGRODZENIE, zostawiamy go bez zmian
+    # 1. Rozdzielamy Wynagrodzenia i Paliwo/Opłaty
     maska_wynagrodzenia = dane_z_bazy['typ'] == 'WYNAGRODZENIE'
     df_wynagrodzenia = dane_z_bazy[maska_wynagrodzenia].copy()
     
-    # Filtrujemy dane do obróbki paliwowej
-    dane_z_bazy = dane_z_bazy[~maska_wynagrodzenia]
-    dane_z_bazy = dane_z_bazy[dane_z_bazy['zrodlo'] != 'Fakturownia']
+    dane_paliwo = dane_z_bazy[~maska_wynagrodzenia].copy()
+    dane_paliwo = dane_paliwo[dane_paliwo['zrodlo'] != 'Fakturownia']
 
-    if dane_z_bazy.empty and df_wynagrodzenia.empty:
-        return dane_z_bazy, None
+    # Jeśli nie ma żadnych danych do przetworzenia
+    if dane_paliwo.empty and df_wynagrodzenia.empty:
+        return pd.DataFrame(), None
 
-    dane_z_bazy['data_transakcji_dt'] = pd.to_datetime(dane_z_bazy['data_transakcji'])
-    dane_z_bazy['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_z_bazy['identyfikator'])
+    # Pobieramy kurs
+    kurs_eur = pobierz_kurs_eur_pln()
+    if not kurs_eur: kurs_eur = 4.30 # Fallback
     
-    # --- FILTR DLA UNIX-TRANS ---
-    if firma_kontekst == "UNIX-TRANS":
-        def filter_unix(row):
-            pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
-            
-            # Jeśli firma to UNIX-TRANS, sprawdzamy czy auto jest we flocie UNIXa
-            if row['firma'] == 'UNIX-TRANS':
-                if pojazd in UNIX_FLOTA_CONFIG:
-                    return True
-                # --- POPRAWKA: Pokaż też Trucka Osobowego w raporcie paliwowym (dla widoczności) ---
-                if 'TRUCK_OSOBOWY' in pojazd or 'TRUCKOSOBOWY' in pojazd or 'KACPER' in pojazd:
-                    return True
-                # ---------------------------------------------------------------------------------
-                else:
-                    return False
-            
-            # Jeśli firma to HOLIER (ale płacił Unix przez udostępnienie), sprawdzamy czy to auto UNIXa
-            if row['firma'] == 'HOLIER':
+    mapa_kursow = {}
+    
+    # --- A. PRZETWARZANIE PALIWA I OPŁAT ---
+    if not dane_paliwo.empty:
+        dane_paliwo['data_transakcji_dt'] = pd.to_datetime(dane_paliwo['data_transakcji'])
+        dane_paliwo['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(dane_paliwo['identyfikator'])
+        
+        # Filtrowanie firm (Unix/Holier)
+        if firma_kontekst == "UNIX-TRANS":
+            def filter_unix(row):
+                pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
+                if row['firma'] == 'UNIX-TRANS':
+                    if pojazd in UNIX_FLOTA_CONFIG: return True
+                    if 'TRUCK_OSOBOWY' in pojazd or 'TRUCKOSOBOWY' in pojazd or 'KACPER' in pojazd: return True
+                    else: return False
+                if row['firma'] == 'HOLIER':
+                    if pojazd in UNIX_FLOTA_CONFIG:
+                        data_tr = row['data_transakcji_dt'].date()
+                        start_date = UNIX_FLOTA_CONFIG[pojazd]
+                        if data_tr >= start_date: return True
+                return False
+            dane_paliwo = dane_paliwo[dane_paliwo.apply(filter_unix, axis=1)]
+        
+        elif firma_kontekst == "HOLIER":
+            def filter_holier(row):
+                pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
                 if pojazd in UNIX_FLOTA_CONFIG:
                     data_tr = row['data_transakcji_dt'].date()
                     start_date = UNIX_FLOTA_CONFIG[pojazd]
-                    if data_tr >= start_date:
-                        return True
-            return False
-        maska = dane_z_bazy.apply(filter_unix, axis=1)
-        dane_z_bazy = dane_z_bazy[maska]
-    
-    # --- FILTR DLA HOLIER ---
-    elif firma_kontekst == "HOLIER":
-        def filter_holier(row):
-            pojazd = str(row['identyfikator_clean']).upper().replace(" ", "").replace("-", "")
-            # Ukrywamy koszty aut UNIXa, które są przypisane do UNIXa
-            if pojazd in UNIX_FLOTA_CONFIG:
-                data_tr = row['data_transakcji_dt'].date()
-                start_date = UNIX_FLOTA_CONFIG[pojazd]
-                if data_tr >= start_date:
-                    return False # Ukryj, bo jest w Unixie
-            return True
-        maska = dane_z_bazy.apply(filter_holier, axis=1)
-        dane_z_bazy = dane_z_bazy[maska]
+                    if data_tr >= start_date: return False
+                return True
+            dane_paliwo = dane_paliwo[dane_paliwo.apply(filter_holier, axis=1)]
 
-    # Łączymy z powrotem wynagrodzenia, jeśli są
+        if not dane_paliwo.empty:
+            if 'kraj' not in dane_paliwo.columns: dane_paliwo['kraj'] = 'Nieznany'
+            
+            unikalne_waluty = dane_paliwo['waluta'].unique()
+            mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
+            
+            dane_paliwo['kwota_netto_num'] = pd.to_numeric(dane_paliwo['kwota_netto'], errors='coerce').fillna(0.0)
+            dane_paliwo['kwota_brutto_num'] = pd.to_numeric(dane_paliwo['kwota_brutto'], errors='coerce').fillna(0.0)
+            
+            dane_paliwo['kwota_netto_eur'] = dane_paliwo.apply(lambda row: row['kwota_netto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
+            dane_paliwo['kwota_brutto_eur'] = dane_paliwo.apply(lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
+            dane_paliwo['kwota_finalna_eur'] = dane_paliwo['kwota_brutto_eur']
+
+    # --- B. PRZETWARZANIE WYNAGRODZEŃ ---
     if not df_wynagrodzenia.empty:
-        # Dla wynagrodzeń też czyścimy klucz, żeby pasował do reszty
         df_wynagrodzenia['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(df_wynagrodzenia['identyfikator'])
         df_wynagrodzenia['data_transakcji_dt'] = pd.to_datetime(df_wynagrodzenia['data_transakcji'])
-        # Dodajemy kolumny numeryczne
         df_wynagrodzenia['kwota_netto_num'] = pd.to_numeric(df_wynagrodzenia['kwota_netto'], errors='coerce').fillna(0.0)
         df_wynagrodzenia['kwota_brutto_num'] = pd.to_numeric(df_wynagrodzenia['kwota_brutto'], errors='coerce').fillna(0.0)
-        # Zakładamy PLN -> EUR (uproszczone, bo raporty zwykle w EUR)
-        kurs_eur = pobierz_kurs_eur_pln() or 4.30
+        
+        # Przeliczenie PLN -> EUR dla wynagrodzeń
         df_wynagrodzenia['kwota_netto_eur'] = df_wynagrodzenia['kwota_netto_num'] / kurs_eur
         df_wynagrodzenia['kwota_brutto_eur'] = df_wynagrodzenia['kwota_brutto_num'] / kurs_eur
         df_wynagrodzenia['kwota_finalna_eur'] = df_wynagrodzenia['kwota_brutto_eur']
         
-        dane_z_bazy = pd.concat([dane_z_bazy, df_wynagrodzenia], ignore_index=True)
+        # Uzupełnienie brakujących kolumn
+        if 'produkt' not in df_wynagrodzenia.columns: df_wynagrodzenia['produkt'] = 'Wynagrodzenie'
+        if 'ilosc' not in df_wynagrodzenia.columns: df_wynagrodzenia['ilosc'] = 1
 
-    if dane_z_bazy.empty:
-        return dane_z_bazy, None
-
-    if 'kraj' not in dane_z_bazy.columns:
-        dane_z_bazy['kraj'] = 'Nieznany'
+    # --- C. ŁĄCZENIE ---
+    dane_finalne = pd.concat([dane_paliwo, df_wynagrodzenia], ignore_index=True)
     
-    kurs_eur = pobierz_kurs_eur_pln()
-    if not kurs_eur: return None, None
-    unikalne_waluty = dane_z_bazy['waluta'].unique()
-    mapa_kursow = pobierz_wszystkie_kursy(unikalne_waluty, kurs_eur)
-    
-    # Przeliczamy tylko te, które jeszcze nie mają (czyli paliwa)
-    maska_brak_eur = dane_z_bazy['kwota_netto_eur'].isna()
-    
-    if maska_brak_eur.any():
-        dane_z_bazy.loc[maska_brak_eur, 'kwota_netto_num'] = pd.to_numeric(dane_z_bazy.loc[maska_brak_eur, 'kwota_netto'], errors='coerce').fillna(0.0)
-        dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto_num'] = pd.to_numeric(dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto'], errors='coerce').fillna(0.0)
-        
-        dane_z_bazy.loc[maska_brak_eur, 'kwota_netto_eur'] = dane_z_bazy[maska_brak_eur].apply(
-            lambda row: row['kwota_netto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
-        )
-        dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto_eur'] = dane_z_bazy[maska_brak_eur].apply(
-            lambda row: row['kwota_brutto_num'] * mapa_kursow.get(row['waluta'], 0.0), axis=1
-        )
-        dane_z_bazy.loc[maska_brak_eur, 'kwota_finalna_eur'] = dane_z_bazy.loc[maska_brak_eur, 'kwota_brutto_eur'] 
-    
-    return dane_z_bazy, mapa_kursow
+    return dane_finalne, mapa_kursow
 
 # --- LOGIKA REFAKTUR ---
 def pobierz_dane_do_refaktury(conn, data_start, data_stop):
