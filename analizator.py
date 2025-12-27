@@ -211,30 +211,24 @@ def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
     nazwa_clean = str(nazwa_arkusza).upper().strip()
     znaleziony_rok = rok_domyslny
     
-    # 1. Szukamy roku w nazwie (np. "2024", "2025", "24", "25")
-    # Najpierw pełny rok 4-cyfrowy
-    match_rok_full = re.search(r'202[0-9]', nazwa_clean)
-    if match_rok_full:
-        znaleziony_rok = int(match_rok_full.group(0))
-        nazwa_clean = nazwa_clean.replace(str(znaleziony_rok), "") # Usuwamy rok z nazwy
-    else:
-        # Szukamy roku 2-cyfrowego na końcu po kropce lub spacji (np. ".25" lub " 25")
-        match_rok_short = re.search(r'[. ](2[0-9])$', nazwa_clean)
-        if match_rok_short:
-            znaleziony_rok = 2000 + int(match_rok_short.group(1))
-            nazwa_clean = nazwa_clean.replace(match_rok_short.group(0), "")
+    # 1. Agresywne szukanie roku (2023, 2024, 2025)
+    match_rok = re.search(r'(202[0-9])', nazwa_clean)
+    if match_rok:
+        znaleziony_rok = int(match_rok.group(1))
+        # Usuwamy rok z nazwy, żeby nie mylił przy szukaniu miesiąca (np. 01.2025 -> 01.)
+        nazwa_clean = nazwa_clean.replace(match_rok.group(1), "") 
 
-    # 2. Szukamy miesiąca
+    # 2. Szukanie miesiąca
     miesiac = MAPA_MIESIECY_PL.get(nazwa_clean.strip())
     
+    # Jeśli nie ma nazwy słownej, szukamy cyfr (np. "01.", "12")
     if not miesiac:
-        # Szukamy cyfr miesiąca (np. "01", "12")
+        # Szukamy cyfr 1-12, które mogą być miesiącem
         match_miesiac = re.search(r'\b(0?[1-9]|1[0-2])\b', nazwa_clean)
         if match_miesiac:
             miesiac = int(match_miesiac.group(1))
 
     if not miesiac:
-        # Dopasowanie częściowe nazwy miesiąca
         for k, v in MAPA_MIESIECY_PL.items():
             if k in nazwa_clean:
                 miesiac = v
@@ -1513,7 +1507,22 @@ def to_excel_contractors(df_analiza_raw):
 
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
-    
+    # --- PRZYCISK TESTOWY WEBFLEET ---
+    if st.button("🧪 TEST POŁĄCZENIA (Sprawdź 1 dzień)"):
+        acc, user, pw = pobierz_ustawienia_api(conn)
+        # Tu wpisz datę, kiedy NA PEWNO były jazdy
+        test_start = "2024-06-15" 
+        test_stop = "2024-06-15"
+        
+        st.info(f"Testuję pobieranie dla: {test_start}")
+        df_test = pobierz_przypisania_webfleet(acc, user, pw, date(2024, 6, 15), date(2024, 6, 15))
+        
+        if df_test.empty:
+            st.error("BŁĄD: Webfleet zwrócił 0 tras nawet dla tego dnia. Konto nie ma dostępu do aut!")
+        else:
+            st.success(f"SUKCES: Pobrano {len(df_test)} tras!")
+            st.dataframe(df_test.head())
+    # ---------------------------------
     # --- KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
         st.info("Wprowadź dane dostępowe do Webfleet Connect, aby pobierać dane o kierowcach.")
