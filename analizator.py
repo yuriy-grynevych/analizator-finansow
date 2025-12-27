@@ -1055,92 +1055,91 @@ def pobierz_dane_do_refaktury(conn, data_start, data_stop):
 
     return df_holier_to_unix, df_unix_to_holier, mapa_kursow
 
-# --- PARSOWANIE ANALIZY ---
 @st.cache_data 
 def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_firma):
     if wybrana_firma == "UNIX-TRANS":
-         df_csv = None
-         try:
-             plik_content = przeslany_plik_bytes.getvalue()
-         except:
-             plik_content = przeslany_plik_bytes 
+        df_csv = None
+        try:
+            plik_content = przeslany_plik_bytes.getvalue()
+        except:
+            plik_content = przeslany_plik_bytes 
 
-         encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1']
-         separators = [',', ';', '\t']
-         
-         for enc in encodings_to_try:
-             for sep in separators:
-                 try:
-                     temp_df = pd.read_csv(io.BytesIO(plik_content), sep=sep, engine='python', encoding=enc, on_bad_lines='skip')
-                     cols = temp_df.columns
-                     is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols)
-                     if is_fakt:
-                         df_csv = temp_df
-                         break
-                 except:
-                     continue
-             if df_csv is not None:
-                 break
-         
-         if df_csv is None:
-             try:
-                 df_csv = pd.read_excel(io.BytesIO(plik_content))
-             except:
-                 pass
+        encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1250', 'latin1']
+        separators = [',', ';', '\t']
+        
+        for enc in encodings_to_try:
+            for sep in separators:
+                try:
+                    temp_df = pd.read_csv(io.BytesIO(plik_content), sep=sep, engine='python', encoding=enc, on_bad_lines='skip')
+                    cols = temp_df.columns
+                    is_fakt = any('Sprzedaj' in c for c in cols) or any('NIP' in c for c in cols)
+                    if is_fakt:
+                        df_csv = temp_df
+                        break
+                except:
+                    continue
+            if df_csv is not None:
+                break
+        
+        if df_csv is None:
+            try:
+                df_csv = pd.read_excel(io.BytesIO(plik_content))
+            except:
+                pass
 
-         if df_csv is None:
-             st.error("Nie udało się odczytać pliku analizy UNIX (Fakturownia).")
-             return None, None
+        if df_csv is None:
+            st.error("Nie udało się odczytać pliku analizy UNIX (Fakturownia).")
+            return None, None
 
-         try:
-             df_zunifikowane = normalizuj_fakturownia(df_csv, "UNIX-TRANS")
-             
-             kurs_eur = pobierz_kurs_eur_pln()
-             if not kurs_eur: return None, None
-             mapa_kursow = pobierz_wszystkie_kursy(df_zunifikowane['waluta'].unique(), kurs_eur)
-             
-             df_zunifikowane['kwota_netto_eur'] = df_zunifikowane.apply(lambda row: row['kwota_netto'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
-             df_zunifikowane['kwota_brutto_eur'] = df_zunifikowane.apply(lambda row: row['kwota_brutto'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
+        try:
+            df_zunifikowane = normalizuj_fakturownia(df_csv, "UNIX-TRANS")
+            
+            kurs_eur = pobierz_kurs_eur_pln()
+            if not kurs_eur: return None, None
+            mapa_kursow = pobierz_wszystkie_kursy(df_zunifikowane['waluta'].unique(), kurs_eur)
+            
+            df_zunifikowane['kwota_netto_eur'] = df_zunifikowane.apply(lambda row: row['kwota_netto'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
+            df_zunifikowane['kwota_brutto_eur'] = df_zunifikowane.apply(lambda row: row['kwota_brutto'] * mapa_kursow.get(row['waluta'], 0.0), axis=1)
 
-             df_zunifikowane = df_zunifikowane[
-                (df_zunifikowane['data_transakcji'].dt.date >= data_start) & 
-                (df_zunifikowane['data_transakcji'].dt.date <= data_stop)
-             ]
-             
-             df_wyniki = df_zunifikowane.copy()
-             df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
-             
-             # --- FILTR ZALICZEK ---
-             maska_zaliczka_pojazd = df_wyniki['pojazd_clean'].astype(str).str.contains('ZALICZKA', case=False, na=False)
-             maska_zaliczka_opis = df_wyniki['produkt'].astype(str).str.contains('ZALICZKA', case=False, na=False)
-             df_wyniki = df_wyniki[~(maska_zaliczka_pojazd | maska_zaliczka_opis)]
-             
-             df_wyniki['typ'] = df_wyniki['typ'].fillna('Koszt (Subiekt)')
-             df_wyniki['typ'] = df_wyniki['typ'].replace({
-                 'PRZYCHÓD': 'Przychód (Subiekt)', 
-                 'KOSZT': 'Koszt (Subiekt)'
-             })
-             
-             df_wyniki['opis'] = df_wyniki['produkt']
-             df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
-             
-             if 'kontrahent' not in df_wyniki.columns:
-                 df_wyniki['kontrahent'] = 'Brak Kontrahenta'
-             else:
-                 df_wyniki['kontrahent'] = df_wyniki['kontrahent'].fillna('Brak Kontrahenta')
-             
-             df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
-             df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
-             
-             df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
-             df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
+            df_zunifikowane = df_zunifikowane[
+               (df_zunifikowane['data_transakcji'].dt.date >= data_start) & 
+               (df_zunifikowane['data_transakcji'].dt.date <= data_stop)
+            ]
+            
+            df_wyniki = df_zunifikowane.copy()
+            df_wyniki['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_wyniki['identyfikator'])
+            
+            # --- FILTR ZALICZEK ---
+            maska_zaliczka_pojazd = df_wyniki['pojazd_clean'].astype(str).str.contains('ZALICZKA', case=False, na=False)
+            maska_zaliczka_opis = df_wyniki['produkt'].astype(str).str.contains('ZALICZKA', case=False, na=False)
+            df_wyniki = df_wyniki[~(maska_zaliczka_pojazd | maska_zaliczka_opis)]
+            
+            df_wyniki['typ'] = df_wyniki['typ'].fillna('Koszt (Subiekt)')
+            df_wyniki['typ'] = df_wyniki['typ'].replace({
+                'PRZYCHÓD': 'Przychód (Subiekt)', 
+                'KOSZT': 'Koszt (Subiekt)'
+            })
+            
+            df_wyniki['opis'] = df_wyniki['produkt']
+            df_wyniki['data'] = df_wyniki['data_transakcji'].dt.date
+            
+            if 'kontrahent' not in df_wyniki.columns:
+                df_wyniki['kontrahent'] = 'Brak Kontrahenta'
+            else:
+                df_wyniki['kontrahent'] = df_wyniki['kontrahent'].fillna('Brak Kontrahenta')
+            
+            df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+            df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+            
+            df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
+            df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
 
-             df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
-             return df_agregacja, df_wyniki
+            df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
+            return df_agregacja, df_wyniki
 
-         except Exception as e:
-             st.error(f"Błąd przetwarzania danych Unix: {e}")
-             return None, None
+        except Exception as e:
+            st.error(f"Błąd przetwarzania danych Unix: {e}")
+            return None, None
 
     # --- KROK 2: SCIEŻKA DLA HOLIER (SUBIEKT EXCEL) ---
     MAPA_WALUT_PLIKU = {
@@ -1187,7 +1186,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     lista_aktualnych_pojazdow = [] 
     aktualny_kontrahent = None 
     ostatnia_etykieta_pojazdu = None
-    aktualna_data = None                    
+    aktualna_data = None                     
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$') 
     
     def is_vehicle_line(line):
@@ -1373,7 +1372,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     
     df_wyniki = df_wyniki[~df_wyniki['pojazd_clean'].str.contains('ZALICZKA', case=False, na=False)]
 
-def zaawansowane_czyszczenie_korekt(df):
+    def zaawansowane_czyszczenie_korekt(df):
         if df.empty: return df
         try:
             df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
@@ -1406,15 +1405,14 @@ def zaawansowane_czyszczenie_korekt(df):
             return df_clean.drop(columns=['temp_month'])
         return df_clean
 
-df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
+    df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
     df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
-df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
-df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
-df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
-df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
-st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów.")
+    df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
+    df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
+    df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
+    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów.")
     return df_agregacja, df_wyniki
-
 @st.cache_data
 def to_excel_extended(df_summary, df_subiekt_raw, df_fuel_raw):
     output = io.BytesIO()
