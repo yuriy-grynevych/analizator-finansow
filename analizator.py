@@ -1505,32 +1505,56 @@ def to_excel_contractors(df_analiza_raw):
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
-    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (NAPRAWA POŁĄCZENIA) ---
-    if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia)"):
+   # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (NAPRAWA POŁĄCZENIA) ---
+    if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia i grupy)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         
-        # TEST 1: Sprawdzamy dzień roboczy (ŚRODA 12.06.2024 - na pewno były jazdy)
+        # KROK 0: Sprawdźmy jakie grupy widzi ten użytkownik (Z DOKUMENTACJI)
+        st.info("Krok 0: Sprawdzam dostępne Grupy Pojazdów dla tego użytkownika...")
+        url_groups = "https://csv.webfleet.com/extern"
+        params_groups = {
+            'lang': 'de',
+            'account': acc,
+            'username': user,
+            'password': pw,
+            'apikey': "bfe90323-83d4-45c1-839b-df6efdeaafba",
+            'action': 'showObjectGroups',
+            'outputformat': 'json'
+        }
+        try:
+            rg = requests.get(url_groups, params=params_groups, timeout=10)
+            if rg.status_code == 200:
+                groups_data = rg.json()
+                if isinstance(groups_data, list):
+                    st.write("📋 Wykryte grupy pojazdów:", pd.DataFrame(groups_data))
+                else:
+                    st.write("📋 Wykryte grupy (raw):", groups_data)
+            else:
+                st.error(f"Nie udało się pobrać grup: {rg.status_code}")
+        except Exception as e:
+            st.error(f"Błąd pobierania grup: {e}")
+
+        # TEST 1: Sprawdzamy dzień roboczy
         test_start = date(2024, 6, 12)
         st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
-        # Pobieramy dane (funkcja ma wbudowane useISO8601=true)
+        # Pobieramy dane
         df_test = pobierz_przypisania_webfleet(acc, user, pw, test_start, test_start)
         
         if not df_test.empty:
-            st.success(f"✅ SUKCES! Znaleziono {len(df_test)} tras w dniu roboczym. Konto działa i widzi auta!")
+            st.success(f"✅ SUKCES! Znaleziono {len(df_test)} tras. Konto działa!")
             st.dataframe(df_test.head())
         else:
-            st.warning("⚠️ Brak tras w dniu roboczym. Sprawdzam, czy konto w ogóle widzi pojazdy...")
+            st.warning("⚠️ Brak tras. Sprawdzam listę pojazdów...")
             
-            # TEST 2: Pobieranie samej listy pojazdów
-            api_key_hardcoded = "bfe90323-83d4-45c1-839b-df6efdeaafba"
+            # TEST 2: Pobieranie listy pojazdów
             url_obj = "https://csv.webfleet.com/extern"
             params_obj = {
                 'lang': 'de',
                 'account': acc,
                 'username': user,
                 'password': pw,
-                'apikey': api_key_hardcoded,
+                'apikey': "bfe90323-83d4-45c1-839b-df6efdeaafba",
                 'action': 'showObjectReportExtern', 
                 'outputformat': 'json'
             }
@@ -1541,34 +1565,34 @@ def render_admin_content(conn, wybrana_firma):
                     objs = data_obj if isinstance(data_obj, list) else data_obj.get('objects', [])
                     
                     if objs:
-                    st.error(f"❌ DZIWNA SYTUACJA: Konto widzi {len(objs)} pojazdów, ale nie pobiera tras.")
-                    
-                    # --- NOWA LOGIKA DIAGNOSTYKI ---
-                    aktywne_auta = []
-                    for o in objs:
-                        msg_time_str = str(o.get('msgtime', ''))
-                        # Szukamy aut, które nadały sygnał w 2024 lub 2025 roku
-                        if '2024' in msg_time_str or '2025' in msg_time_str:
-                            aktywne_auta.append(o)
-                    
-                    if aktywne_auta:
-                        st.warning(f"⚠️ Znalazłem {len(aktywne_auta)} aut aktywnych w 2024/2025 roku (np. {aktywne_auta[0].get('objectname')}).")
-                        st.info("Skoro są aktywne auta, a brak tras -> SPRAWDŹ UPRAWNIENIA w Webfleet (Krok 2).")
-                        st.json(aktywne_auta[0])
+                        st.error(f"❌ Konto widzi {len(objs)} pojazdów, ale brak tras.")
+                        
+                        # Szukamy aktywnego auta
+                        aktywne = []
+                        for o in objs:
+                            # Sprawdź msgtime (ostatni sygnał GPS)
+                            czas = str(o.get('msgtime', ''))
+                            if '2024' in czas or '2025' in czas:
+                                aktywne.append(o)
+                        
+                        if aktywne:
+                            st.success(f"✅ Znaleziono {len(aktywne)} AKTYWNYCH aut (rok 2024/25)!")
+                            st.write("Przykład aktywnego auta:", aktywne[0])
+                            st.info("Skoro auto jest aktywne, a brak tras -> PROBLEM JEST W FILTRACH API LUB PARAMETRACH 'TRIP REPORT'.")
+                        else:
+                            st.error("💀 WSZYSTKIE POJAZDY SĄ STARE (brak sygnału w 2024/25).")
+                            st.write("Pierwsze auto z listy (stare):", objs[0])
+                            st.markdown("""
+                            **Możliwe przyczyny wg dokumentacji:**
+                            1. **Zła nazwa konta (Account):** Masz dostęp do archiwalnego konta firmy, a nie bieżącego (np. `Firma_OLD` vs `Firma`).
+                            2. **Grupa obiektów:** Użytkownik widzi tylko grupę 'Default' która zawiera stary tabor.
+                            """)
                     else:
-                        st.error("💀 WSZYSTKIE POJAZDY SĄ NIEAKTYWNE (Stare daty logowania).")
-                        st.write("Przykładowe (stare) auto:", objs[0])
-                        st.info("Prawdopodobnie logujesz się na konto z archiwalnymi pojazdami lub GPS-y nie działają.")
-                    # -------------------------------
-                    else:
-                        st.error("❌ KONTO PUSTE: Logowanie poprawne, ale użytkownik nie widzi ŻADNYCH pojazdów.")
-                        st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Administracja -> Użytkownicy. Wybierz 'direkt-hsN', wejdź w 'Uprawnienia' i upewnij się, że ma dostęp do 'Wszystkie pojazdy'.")
+                        st.error("❌ Lista pojazdów jest pusta.")
                 else:
-                    st.error(f"Błąd połączenia przy pobieraniu listy aut: {r.status_code}")
-                    st.code(r.text)
+                    st.error(f"Błąd HTTP: {r.status_code}")
             except Exception as e:
-                st.error(f"Błąd krytyczny testu: {e}")
-    
+                st.error(f"Błąd: {e}")
     # --- 2. KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
         st.info("Wprowadź dane dostępowe do Webfleet Connect.")
