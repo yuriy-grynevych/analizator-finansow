@@ -1506,7 +1506,7 @@ def to_excel_contractors(df_analiza_raw):
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
-    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (Z NAPRAWIONĄ DATĄ) ---
+    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (NAPRAWA POŁĄCZENIA) ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         
@@ -1514,6 +1514,7 @@ def render_admin_content(conn, wybrana_firma):
         test_start = date(2024, 6, 12)
         st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
+        # Pobieramy dane (funkcja ma wbudowane useISO8601=true)
         df_test = pobierz_przypisania_webfleet(acc, user, pw, test_start, test_start)
         
         if not df_test.empty:
@@ -1568,10 +1569,11 @@ def render_admin_content(conn, wybrana_firma):
     # --- 3. ANALIZA WYNAGRODZEŃ (PEŁNA PĘTLA) ---
     st.markdown("### 💰 Analiza Wynagrodzeń (Wszystkie miesiące z pliku)")
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. Ustaw ROK. 3. Kliknij 'Oblicz'.")
+        st.info("1. Wgraj plik Excel. 2. Ustaw ROK (Domyślny). 3. Kliknij 'Oblicz'.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
+            # Domyślnie rok 2024, bo taki masz w pliku
             rok_analizy = st.number_input("Rok rozliczeniowy (Domyślny)", min_value=2023, max_value=2030, value=2024) 
             plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
 
@@ -1593,15 +1595,15 @@ def render_admin_content(conn, wybrana_firma):
                         for i, nazwa_arkusza in enumerate(sheet_names):
                             pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
                             
-                            # PAUZA 15 SEKUND (Wymagana przez Webfleet dla długich okresów)
+                            # PAUZA ANTY-BLOKADOWA (15 SEKUND)
                             if i > 0: 
                                 time.sleep(15) 
 
-                            # 1. Ustalanie daty (korzysta z poprawionej funkcji daty w reszcie pliku)
+                            # 1. Ustalanie daty (korzysta z poprawionej funkcji daty)
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             
                             if not start_auto:
-                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie rozpoznano daty.")
+                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie rozpoznano miesiąca/roku.")
                                 continue
                             
                             if start_auto > date.today():
@@ -1634,7 +1636,7 @@ def render_admin_content(conn, wybrana_firma):
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
                             if merged.empty:
-                                st.error(f"❌ Arkusz '{nazwa_arkusza}': Brak dopasowań nazwisk! (Dane są, ale nazwiska inne)")
+                                st.error(f"❌ Arkusz '{nazwa_arkusza}': Brak dopasowań nazwisk!")
                                 continue
                             
                             total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
@@ -1650,7 +1652,7 @@ def render_admin_content(conn, wybrana_firma):
                         pask_postepu.empty()
                         
                         if not lista_wynikow_miesiecznych:
-                            st.error("Nie udało się przeliczyć żadnego miesiąca.")
+                            st.error("Nie udało się przeliczyć żadnego miesiąca. Sprawdź powyższe błędy.")
                         else:
                             df_final_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True)
                             st.session_state['temp_wynagrodzenia_all'] = df_final_all
@@ -1666,9 +1668,9 @@ def render_admin_content(conn, wybrana_firma):
             st.markdown("##### Podgląd wyników:")
             st.dataframe(df_calosc.style.format({'koszt_przypisany': '{:,.2f} PLN'}), use_container_width=True, hide_index=True)
             
-            suma_total = df_calosc['koszt_przypisany'].sum()
-            st.metric("Łączna kwota do zapisania", f"{suma_total:,.2f} PLN")
-
+            suma = df_calosc['koszt_przypisany'].sum()
+            st.metric("Suma do zapisania", f"{suma:,.2f} PLN")
+            
             if st.button("💾 ZAPISZ WSZYSTKO DO BAZY", type="primary", use_container_width=True):
                 with st.spinner("Zapisywanie..."):
                     try:
