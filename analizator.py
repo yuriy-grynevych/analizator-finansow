@@ -1564,7 +1564,7 @@ def render_admin_content(conn, wybrana_firma):
                     data_obj = r.json()
                     objs = data_obj if isinstance(data_obj, list) else data_obj.get('objects', [])
                     
-                   if objs:
+                if objs:
                         # --- NOWA LOGIKA DIAGNOSTYKI ---
                         aktywne_auta = []
                         for o in objs:
