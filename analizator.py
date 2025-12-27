@@ -1503,8 +1503,8 @@ def to_excel_contractors(df_analiza_raw):
             formatted.to_excel(writer, sheet_name=safe_name, index=False)
     return output.getvalue()
 
-# --- HELPERY DO RENDEROWANIA ZAWARTOŚCI ZAKŁADEK (WYCIĄGNIĘTE Z MAIN) ---
-
+def render_admin_content(conn, wybrana_firma):
+    st.subheader("Zarządzanie Danymi")
 # --- RZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
