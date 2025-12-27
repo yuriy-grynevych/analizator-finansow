@@ -1543,72 +1543,81 @@ def render_admin_content(conn, wybrana_firma):
                         lista_wynikow_miesiecznych = []
                         pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
                         
-                       # PĘTLA PO WSZYSTKICH ARKUSZACH (WERSJA DIAGNOSTYCZNA)
+                     # PĘTLA DIAGNOSTYCZNA "BEZ TAJEMNIC"
+                        st.write("--- ROZPOCZYNAM DIAGNOZĘ ---")
                         for i, nazwa_arkusza in enumerate(sheet_names):
-                            pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
+                            st.markdown(f"#### Analiza arkusza: {nazwa_arkusza}")
                             
-                            if i > 0: 
-                                time.sleep(2) # Krótsza pauza do testów
-                            
-                            # 1. Ustalanie daty
+                            # 1. Pauza dla Webfleet
+                            if i > 0: time.sleep(2)
+
+                            # 2. Sprawdzanie daty
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             
                             if not start_auto:
-                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie rozpoznano miesiąca w nazwie.")
+                                st.error(f"❌ POMIJAM: Nie udało się ustalić daty na podstawie nazwy '{nazwa_arkusza}'.")
                                 continue
                             
+                            st.write(f"📅 Ustalona data: {start_auto} do {stop_auto}")
+                            
                             if start_auto > date.today():
+                                st.warning("⚠️ POMIJAM: Data jest w przyszłości.")
                                 continue
 
-                            # 2. Parsowanie Excela
+                            # 3. Sprawdzanie Excela
                             df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                             df_place = parsuj_dataframe_plac(df_sheet)
                             
                             if df_place.empty:
-                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie znaleziono tabeli z KWOTAMI w Excelu.")
-                                continue 
-                                
-                            # 3. Pobieranie z Webfleet
+                                st.error("❌ POMIJAM: Nie znaleziono danych w Excelu (brak kolumny 'KWOTA' lub nazwisk).")
+                                st.write("Pierwsze 5 wierszy arkusza (sprawdź nagłówki):")
+                                st.dataframe(df_sheet.head())
+                                continue
+                            else:
+                                st.success(f"✅ Excel OK: Znaleziono {len(df_place)} pracowników.")
+
+                            # 4. Sprawdzanie Webfleet
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
-                            # --- DIAGNOSTYKA ---
-                            with st.expander(f"🔍 Szczegóły dla: {nazwa_arkusza} ({start_auto})"):
-                                st.write(f"Webfleet znalazł tras: {len(df_wf)}")
-                                st.write(f"Excel znalazł pracowników: {len(df_place)}")
-                                
-                                if not df_wf.empty:
-                                    st.write("Przykładowi kierowcy z Webfleet:", df_wf['kierowca'].unique()[:5])
-                                if not df_place.empty:
-                                    st.write("Przykładowi kierowcy z Excela:", df_place['kierowca'].unique()[:5])
-                            # -------------------
-
                             if df_wf.empty:
+                                st.error(f"❌ POMIJAM: Webfleet zwrócił 0 tras dla okresu {start_auto}.")
+                                st.info("Podpowiedź: Czy rok w polu 'Rok rozliczeniowy' (2024/2025) jest poprawny?")
                                 continue
-                                
-                            # 4. Łączenie
+                            else:
+                                st.success(f"✅ Webfleet OK: Znaleziono {len(df_wf)} tras.")
+
+                            # 5. Sprawdzanie Łączenia (Nazwiska)
                             statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                             
-                            # Normalizacja (usuwamy spacje i robimy DUŻE LITERY)
+                            # Normalizacja
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
                             statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
                             
-                            # Łączymy tabele
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
-                            # Jeśli po połączeniu tabela jest pusta -> Różne nazwiska!
-                            if merged.empty and not df_wf.empty and not df_place.empty:
-                                st.error(f"❌ BŁĄD DOPASOWANIA w {nazwa_arkusza}! Webfleet i Excel mają dane, ale nazwiska się nie pokrywają. Sprawdź sekcję 'Szczegóły' powyżej.")
+                            if merged.empty:
+                                st.error("❌ BŁĄD KRYTYCZNY: Dane są, ale nazwiska się nie łączą!")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write("Nazwiska z Webfleet (przykłady):")
+                                    st.write(statystyki_kierowcow['kierowca_norm'].unique()[:10])
+                                with col2:
+                                    st.write("Nazwiska z Excela (przykłady):")
+                                    st.write(df_place['kierowca_norm'].unique()[:10])
+                                continue
                             
-                            if not merged.empty:
-                                total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
-                                merged['udzial'] = merged['dni_jazdy'] / total_days
-                                merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
-                                
-                                wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
-                                wynik_pojazdy['data_ksiegowania'] = stop_auto
-                                wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
-                                
-                                lista_wynikow_miesiecznych.append(wynik_pojazdy)
+                            # SUKCES
+                            st.success(f"🏆 SUKCES: Połączono {len(merged)} rekordów! Dodaję do wyniku.")
+                            
+                            total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
+                            merged['udzial'] = merged['dni_jazdy'] / total_days
+                            merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                            
+                            wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
+                            wynik_pojazdy['data_ksiegowania'] = stop_auto
+                            wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
+                            
+                            lista_wynikow_miesiecznych.append(wynik_pojazdy)
                             
                         pask_postepu.empty()
                         
