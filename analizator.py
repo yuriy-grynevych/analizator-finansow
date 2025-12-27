@@ -327,86 +327,107 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         st.error("BŁĄD: Brak danych logowania do Webfleet!")
         return pd.DataFrame()
 
-    url = "https://csv.webfleet.com/extern"
+    base_url = "https://csv.webfleet.com/extern"
+    # Klucz API z pliku referencyjnego
+    api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
     
-    # Format ISO 8601
+    # Formatowanie dat zgodnie ze skryptem referencyjnym
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
-    
-    api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
-    # ZMIANA: Używamy showLogbookExtern zamiast showTripReportExtern
-    params = {
+    # --- PRÓBA 1: showTripReportExtern (Wzorowane na system-ulepszony-v2.py) ---
+    # To jest najlepsze źródło do przypisania KIEROWCA <-> POJAZD
+    params_trip = {
         'lang': 'pl',
         'account': account,
         'apikey': api_key,
-        'action': 'showLogbookExtern',  # <--- ZMIANA ENDPOINTU
+        'username': username,
+        'password': password,
+        'action': 'showTripReportExtern', 
+        'range_pattern': 'ud',          # <--- KLUCZOWY PARAMETR Z PLIKU REFERENCYJNEGO
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json',
         'useISO8601': 'true'
     }
-    
+
     try:
-        response = requests.get(url, params=params, auth=(username, password), timeout=60)
+        # st.write(f"DEBUG: Wysyłam zapytanie TripReport dla {data_start} - {data_stop}")
+        response = requests.get(base_url, params=params_trip, timeout=60)
         
         if response.status_code == 200:
             data = response.json()
             
-            # Obsługa błędów API
+            # Webfleet zwraca listę bezpośrednio lub w kluczu
+            items = data if isinstance(data, list) else data.get('trips', [])
+            
+            # Sprawdź czy nie ma błędu API w odpowiedzi
             if isinstance(data, dict) and 'errorCode' in data:
-                 # 9204 = brak danych (to ok), inne to błędy
-                 if data['errorCode'] != 9204: 
-                     st.error(f"Webfleet Logbook Error: {data['errorCode']} - {data.get('errorMsg')}")
-                 return pd.DataFrame()
+                 if data['errorCode'] != 9204: # 9204 to po prostu brak danych
+                     print(f"Webfleet Trip Error: {data['errorCode']}")
+            
+            if items:
+                lista_przypisan = []
+                for item in items:
+                    # TripReport ma jasne pola: drivername, objectname, start_time
+                    kierowca = item.get('drivername')
+                    pojazd = item.get('objectname')
+                    start_time = item.get('start_time') # np. 2025-10-08T07:15:00...
 
-            # Logbook czasem zwraca listę bezpośrednio, czasem w kluczu
-            items = []
-            if isinstance(data, list):
-                items = data
-            elif isinstance(data, dict):
-                # Logbook może zwracać różne klucze w zależności od wersji, szukamy najpopularniejszych
-                items = data.get('logbook', data.get('trips', []))
-            
-            if not items:
-                return pd.DataFrame()
-            
-            lista_przypisan = []
-            for item in items:
-                # Logbook ma inne klucze daty niż TripReport
-                # Szukamy: log_date, datetime lub startdate
-                raw_date = item.get('log_date') or item.get('datetime') or item.get('startdate')
+                    if kierowca and pojazd and start_time:
+                        lista_przypisan.append({
+                            'data': start_time[:10], # Wyciągamy YYYY-MM-DD
+                            'pojazd': pojazd,
+                            'kierowca': kierowca
+                        })
                 
-                pojazd = item.get('objectname') or item.get('objectuid')
-                kierowca = item.get('drivername') or item.get('driverid')
-                
-                # Pobieramy tylko te wpisy, które mają komplet danych
-                if pojazd and kierowca and raw_date:
-                    lista_przypisan.append({
-                        'data': raw_date[:10], # YYYY-MM-DD
-                        'pojazd': pojazd,
-                        'kierowca': kierowca
-                    })
-            
-            df = pd.DataFrame(lista_przypisan)
-            
-            if df.empty:
-                return df
+                df = pd.DataFrame(lista_przypisan)
+                if not df.empty:
+                    # Usuwamy duplikaty (jeden kierowca mógł mieć 5 tras tym samym autem jednego dnia)
+                    df = df.drop_duplicates(subset=['data', 'pojazd', 'kierowca'])
+                    # st.success(f"Pobrano dane z Raportu Tras: {len(df)} wpisów")
+                    return df
 
-            # KLUCZOWE DLA LOGBOOKA:
-            # Logbook generuje wiele wpisów dziennie dla tego samego kierowcy.
-            # Musimy usunąć duplikaty, aby policzyć "Dni Jazdy", a nie "Liczbę zdarzeń".
-            df = df.drop_duplicates(subset=['data', 'pojazd', 'kierowca'])
-            
-            return df
-
-        else:
-            st.error(f"Błąd HTTP: {response.status_code}")
-            return pd.DataFrame()
-            
     except Exception as e:
-        st.error(f"Wyjątek Webfleet: {e}")
-        return pd.DataFrame()
+        st.warning(f"Błąd przy pobieraniu TripReport: {e}")
+
+    # --- PRÓBA 2: showLogbookExtern (Twoja obecna metoda - jako zapas) ---
+    # Uruchamiamy tylko jeśli TripReport nic nie zwrócił
+    
+    # st.info("Próbuję metody zapasowej (Logbook)...")
+    params_log = params_trip.copy()
+    params_log['action'] = 'showLogbookExtern' 
+    # Logbook też lubi range_pattern='ud', choć działał Ci bez tego
+    
+    try:
+        response = requests.get(base_url, params=params_log, timeout=60)
+        if response.status_code == 200:
+            data = response.json()
+            items = []
+            if isinstance(data, list): items = data
+            elif isinstance(data, dict): items = data.get('logbook', data.get('trips', []))
+
+            if items:
+                lista_przypisan = []
+                for item in items:
+                    raw_date = item.get('log_date') or item.get('datetime') or item.get('startdate')
+                    pojazd = item.get('objectname') or item.get('objectuid')
+                    kierowca = item.get('drivername') or item.get('driverid')
+                    
+                    if pojazd and kierowca and raw_date:
+                        lista_przypisan.append({
+                            'data': raw_date[:10],
+                            'pojazd': pojazd,
+                            'kierowca': kierowca
+                        })
+                
+                df = pd.DataFrame(lista_przypisan)
+                if not df.empty:
+                    return df.drop_duplicates(subset=['data', 'pojazd', 'kierowca'])
+    except Exception:
+        pass
+
+    return pd.DataFrame()
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
     usluga = ""
