@@ -1486,6 +1486,7 @@ def to_excel_contractors(df_analiza_raw):
         summary = summary.reset_index()
         summary.insert(0, 'Lp.', range(1, 1 + len(summary)))
         summary.to_excel(writer, sheet_name='Podsumowanie', index=False)
+        
         unique_contractors = sorted(df_revenues['kontrahent'].unique())
         for kontrahent in unique_contractors:
             safe_name = re.sub(r'[\\/*?:\[\]]', '', str(kontrahent))[:30]
