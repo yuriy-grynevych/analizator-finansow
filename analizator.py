@@ -1407,7 +1407,7 @@ def zaawansowane_czyszczenie_korekt(df):
         return df_clean
 
 df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
-df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+    df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
 df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
 df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
 df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
