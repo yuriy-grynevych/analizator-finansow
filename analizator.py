@@ -1505,23 +1505,55 @@ def to_excel_contractors(df_analiza_raw):
 
 # --- HELPERY DO RENDEROWANIA ZAWARTOŚCI ZAKŁADEK (WYCIĄGNIĘTE Z MAIN) ---
 
-def render_admin_content(conn, wybrana_firma):
-    st.subheader("Zarządzanie Danymi")
-    # --- PRZYCISK TESTOWY WEBFLEET ---
-    if st.button("🧪 TEST POŁĄCZENIA (Sprawdź 1 dzień)"):
+# --- PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
+    if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
-        # Tu wpisz datę, kiedy NA PEWNO były jazdy
-        test_start = "2024-06-15" 
-        test_stop = "2024-06-15"
         
-        st.info(f"Testuję pobieranie dla: {test_start}")
-        df_test = pobierz_przypisania_webfleet(acc, user, pw, date(2024, 6, 15), date(2024, 6, 15))
+        # TEST 1: Sprawdzamy dzień roboczy (ŚRODA 12.06.2024)
+        test_start = date(2025, 20, 11)
+        st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
-        if df_test.empty:
-            st.error("BŁĄD: Webfleet zwrócił 0 tras nawet dla tego dnia. Konto nie ma dostępu do aut!")
-        else:
-            st.success(f"SUKCES: Pobrano {len(df_test)} tras!")
+        df_test = pobierz_przypisania_webfleet(acc, user, pw, test_start, test_start)
+        
+        if not df_test.empty:
+            st.success(f"✅ SUKCES! Znaleziono {len(df_test)} tras w dniu roboczym. Konto działa!")
             st.dataframe(df_test.head())
+        else:
+            st.warning("⚠️ Brak tras w dniu roboczym. Sprawdzam, czy konto w ogóle widzi pojazdy...")
+            
+            # TEST 2: Pobieranie samej listy pojazdów (showObjectReportExtern)
+            # To nam powie, czy użytkownik ma zablokowany dostęp do floty.
+            url_obj = "https://csv.webfleet.com/extern"
+            params_obj = {
+                'lang': 'de',
+                'account': acc,
+                'username': user,
+                'password': pw,
+                'apikey': "bfe90323-83d4-45c1-839b-df6efdeaafba",
+                'action': 'showObjectReportExtern', 
+                'outputformat': 'json'
+            }
+            try:
+                r = requests.get(url_obj, params=params_obj, timeout=30)
+                if r.status_code == 200:
+                    data_obj = r.json()
+                    # Czasami lista jest wprost, czasami w kluczu
+                    objs = data_obj if isinstance(data_obj, list) else data_obj.get('objects', [])
+                    
+                    if objs:
+                        st.error(f"❌ DZIWNA SYTUACJA: Konto widzi {len(objs)} pojazdów, ale nie pobiera tras.")
+                        st.write("Oto pierwsze auto, jakie widzi system:")
+                        st.json(objs[0])
+                        st.write("Być może format daty nadal jest problemem, albo auta nie mają podłączonych terminali?")
+                    else:
+                        st.error("❌ KONTO PUSTE: Logowanie poprawne, ale użytkownik nie widzi ŻADNYCH pojazdów.")
+                        st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Administracja -> Użytkownicy. Wybierz 'direkt-hsN', wejdź w 'Uprawnienia' i upewnij się, że ma dostęp do 'Wszystkie pojazdy' lub odpowiedniej grupy.")
+                else:
+                    st.error(f"Błąd połączenia przy pobieraniu listy aut: {r.status_code}")
+                    st.code(r.text)
+            except Exception as e:
+                st.error(f"Błąd krytyczny: {e}")
+    # ---------------------------------
     # ---------------------------------
     # --- KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
