@@ -1666,18 +1666,44 @@ def render_admin_content(conn, wybrana_firma):
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
                             if not merged.empty:
+                                # Obliczamy udział
                                 total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
                                 merged['udzial'] = merged['dni_jazdy'] / total_days
                                 merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
-                                wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
-                                wynik_pojazdy['data_ksiegowania'] = stop_auto
-                                wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
-                                lista_wynikow_miesiecznych.append(wynik_pojazdy)
+                                
+                                # --- ZMIANA: ZAMIAST GRUPOWAĆ, POKAZUJEMY SZCZEGÓŁY ---
+                                # Stary kod (ukrywał kierowcę):
+                                # wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
+                                
+                                # Nowy kod (pokazuje kierowcę i skąd wzięła się kwota):
+                                wynik_szczegolowy = merged[[
+                                    'pojazd', 
+                                    'kierowca_norm', 
+                                    'dni_jazdy', 
+                                    'kwota_total', # Ile kierowca zarobił łącznie w miesiącu
+                                    'koszt_przypisany' # Ile z tego przypadło na to auto
+                                ]].copy()
+                                
+                                # Zmieniamy nazwy dla czytelności
+                                wynik_szczegolowy = wynik_szczegolowy.rename(columns={
+                                    'kierowca_norm': 'Kierowca',
+                                    'kwota_total': 'Pełna Wypłata',
+                                    'dni_jazdy': 'Dni na aucie'
+                                })
+
+                                wynik_szczegolowy['data_ksiegowania'] = stop_auto
+                                wynik_szczegolowy['miesiac_opis'] = nazwa_arkusza
+                                
+                                lista_wynikow_miesiecznych.append(wynik_szczegolowy)
                             
                         pask_postepu.empty()
                         
                         if lista_wynikow_miesiecznych:
                             df_final_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True)
+                            
+                            # Sortowanie dla czytelności: Najpierw Pojazd, potem Data
+                            df_final_all = df_final_all.sort_values(by=['pojazd', 'data_ksiegowania'])
+                            
                             st.session_state['temp_wynagrodzenia_all'] = df_final_all
                             st.balloons()
                             st.success(f"Przeliczono pomyślnie {len(lista_wynikow_miesiecznych)} miesięcy!")
