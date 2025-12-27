@@ -1541,25 +1541,25 @@ def render_admin_content(conn, wybrana_firma):
                     objs = data_obj if isinstance(data_obj, list) else data_obj.get('objects', [])
                     
                     if objs:
-    st.error(f"❌ DZIWNA SYTUACJA: Konto widzi {len(objs)} pojazdów, ale nie pobiera tras dla daty {test_start}.")
-    
-    # --- NOWA LOGIKA DIAGNOSTYKI ---
-    aktywne_auta = []
-    for o in objs:
-        msg_time_str = o.get('msgtime', '')
-        # Szukamy aut, które nadały sygnał w 2024 lub 2025 roku
-        if '2024' in msg_time_str or '2025' in msg_time_str:
-            aktywne_auta.append(o)
-    
-    if aktywne_auta:
-        st.warning(f"⚠️ Znalazłem {len(aktywne_auta)} aut aktywnych w 2024/2025 roku. Przykład aktywnego auta:")
-        st.json(aktywne_auta[0])
-        st.info("Jeżeli to auto jeździło 12.06.2024, a brak tras - SPRAWDŹ UPRAWNIENIA 'showTripReportExtern' w Webfleet.")
-    else:
-        st.error("💀 WSZYSTKIE POJAZDY SĄ NIEAKTYWNE (Stare daty logowania).")
-        st.write("Przykładowe (stare) auto:", objs[0])
-        st.info("Prawdopodobnie logujesz się na konto z archiwalnymi pojazdami lub GPS-y nie działają.")
-    # -------------------------------
+                    st.error(f"❌ DZIWNA SYTUACJA: Konto widzi {len(objs)} pojazdów, ale nie pobiera tras.")
+                    
+                    # --- NOWA LOGIKA DIAGNOSTYKI ---
+                    aktywne_auta = []
+                    for o in objs:
+                        msg_time_str = str(o.get('msgtime', ''))
+                        # Szukamy aut, które nadały sygnał w 2024 lub 2025 roku
+                        if '2024' in msg_time_str or '2025' in msg_time_str:
+                            aktywne_auta.append(o)
+                    
+                    if aktywne_auta:
+                        st.warning(f"⚠️ Znalazłem {len(aktywne_auta)} aut aktywnych w 2024/2025 roku (np. {aktywne_auta[0].get('objectname')}).")
+                        st.info("Skoro są aktywne auta, a brak tras -> SPRAWDŹ UPRAWNIENIA w Webfleet (Krok 2).")
+                        st.json(aktywne_auta[0])
+                    else:
+                        st.error("💀 WSZYSTKIE POJAZDY SĄ NIEAKTYWNE (Stare daty logowania).")
+                        st.write("Przykładowe (stare) auto:", objs[0])
+                        st.info("Prawdopodobnie logujesz się na konto z archiwalnymi pojazdami lub GPS-y nie działają.")
+                    # -------------------------------
                     else:
                         st.error("❌ KONTO PUSTE: Logowanie poprawne, ale użytkownik nie widzi ŻADNYCH pojazdów.")
                         st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Administracja -> Użytkownicy. Wybierz 'direkt-hsN', wejdź w 'Uprawnienia' i upewnij się, że ma dostęp do 'Wszystkie pojazdy'.")
