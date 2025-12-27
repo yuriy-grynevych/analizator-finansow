@@ -1589,7 +1589,7 @@ def render_admin_content(conn, wybrana_firma):
                             Zaloguj się do Webfleet i sprawdź dokładnie nazwę konta w prawym górnym rogu lub w umowie.
                             """)
                         # -------------------------------
-                    else:
+                else:
         except Exception as e:
             st.error(f"Błąd: {e}")
     # --- 2. KONFIGURACJA WEBFLEET ---
