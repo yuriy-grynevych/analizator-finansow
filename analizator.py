@@ -158,51 +158,42 @@ MAPA_MIESIECY_PL = {
 }
 
 def parsuj_dataframe_plac(df):
-    """
-    Parsuje DataFrame wczytany z arkusza Excela.
-    Szuka wierszy ze słowem 'KWOTA'.
-    """
     wyniki = []
     aktualny_kierowca = None
-    
-    # Konwersja na stringi i czyszczenie
     df = df.astype(str)
     
-    # Iterujemy po wierszach
     for idx, row in df.iterrows():
-        # Pobieramy pierwsze kilka kolumn (zakładamy, że struktura jest w pierwszych kolumnach)
-        col0 = row.iloc[0].strip() if len(row) > 0 else ""
-        col1 = row.iloc[1].strip() if len(row) > 1 else ""
-        col2 = row.iloc[2].strip() if len(row) > 2 else ""
+        # Pobieramy pierwsze 3 kolumny
+        col0 = str(row.iloc[0]).strip().upper() if len(row) > 0 else ""
+        col1 = str(row.iloc[1]).strip().upper() if len(row) > 1 else ""
+        col2 = str(row.iloc[2]).strip().upper() if len(row) > 2 else ""
         
-        # 1. Szukamy nazwiska. Często jest w kolumnie 0 lub 1, a obok "ILOSC DNI"
-        # Sprawdzamy czy wiersz wygląda na nagłówek kierowcy
-        tekst_wiersza = (col0 + " " + col1).upper()
-        if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza:
-            # Zakładamy, że nazwisko jest w pierwszej niepustej komórce tego wiersza (przed ILOSC DNI)
-            if col0 and col0.upper() != "NAN":
-                aktualny_kierowca = col0
-            elif col1 and "ILOSC" not in col1.upper() and col1.upper() != "NAN":
-                aktualny_kierowca = col1
+        tekst_wiersza = (col0 + " " + col1 + " " + col2).upper()
+        
+        # 1. Szukamy nazwiska (zakładamy że jest przy "ILOŚĆ DNI" lub "DNI")
+        if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza or "DNI JAZDY" in tekst_wiersza:
+            # Nazwisko jest zazwyczaj w pierwszej niepustej komórce tego wiersza
+            kandydaci = [c for c in [col0, col1, col2] if c and c != "NAN" and "ILOSC" not in c and "DNI" not in c]
+            if kandydaci:
+                aktualny_kierowca = kandydaci[0]
             continue
             
-        # 2. Szukamy słowa "KWOTA"
-        # Wg opisu: wiersz zawiera "KWOTA"
-        if "KWOTA" in col0.upper() or "KWOTA" in col1.upper() or "KWOTA" in col2.upper():
+        # 2. Szukamy KWOTY (Słowa kluczowe: KWOTA, DO WYPŁATY, RAZEM)
+        SŁOWA_KLUCZOWE = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
+        if any(s in tekst_wiersza for s in SŁOWA_KLUCZOWE):
             if aktualny_kierowca:
                 try:
                     wartosc = 0.0
                     found = False
-                    # Szukamy liczby w tym samym wierszu
                     for val in row:
                         val_str = str(val).replace(',', '.').replace(' ', '').replace('zł', '').replace('pln', '')
-                        if not val_str or val_str.upper() == 'NAN' or "KWOTA" in val_str.upper():
+                        if not val_str or val_str.upper() == 'NAN' or any(s in val_str.upper() for s in SŁOWA_KLUCZOWE):
                             continue
                         try:
-                            # Jeśli to liczba, bierzemy jako kwotę
                             wartosc = float(val_str)
-                            found = True
-                            break # Bierzemy pierwszą napotkaną liczbę po etykiecie KWOTA
+                            if wartosc > 0: # Ignorujemy zera
+                                found = True
+                                break 
                         except:
                             continue
                     
@@ -216,36 +207,39 @@ def parsuj_dataframe_plac(df):
                     pass
                     
     return pd.DataFrame(wyniki)
-
 def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
     nazwa_clean = str(nazwa_arkusza).upper().strip()
-    
-    # 1. PRÓBA ZNALEZIENIA ROKU W NAZWIE ARKUSZA (np. "01.2025", "Styczeń 2024")
     znaleziony_rok = rok_domyslny
-    match_rok = re.search(r'202[0-9]', nazwa_clean)
-    if match_rok:
-        znaleziony_rok = int(match_rok.group(0))
-        # Usuwamy rok z nazwy, żeby nie mylił przy szukaniu miesiąca
-        nazwa_clean = nazwa_clean.replace(str(znaleziony_rok), "").strip()
-
-    # 2. SZUKANIE MIESIĄCA (Słownie lub Cyfrowo)
-    miesiac = MAPA_MIESIECY_PL.get(nazwa_clean)
     
-    # Jeśli nie znaleziono po nazwie słownej, szukamy cyfr (np. "01.", "06")
+    # 1. Szukamy roku w nazwie (np. "2024", "2025", "24", "25")
+    # Najpierw pełny rok 4-cyfrowy
+    match_rok_full = re.search(r'202[0-9]', nazwa_clean)
+    if match_rok_full:
+        znaleziony_rok = int(match_rok_full.group(0))
+        nazwa_clean = nazwa_clean.replace(str(znaleziony_rok), "") # Usuwamy rok z nazwy
+    else:
+        # Szukamy roku 2-cyfrowego na końcu po kropce lub spacji (np. ".25" lub " 25")
+        match_rok_short = re.search(r'[. ](2[0-9])$', nazwa_clean)
+        if match_rok_short:
+            znaleziony_rok = 2000 + int(match_rok_short.group(1))
+            nazwa_clean = nazwa_clean.replace(match_rok_short.group(0), "")
+
+    # 2. Szukamy miesiąca
+    miesiac = MAPA_MIESIECY_PL.get(nazwa_clean.strip())
+    
     if not miesiac:
-        # Szukamy cyfr na początku lub końcu (np. "01", "1", "01.")
+        # Szukamy cyfr miesiąca (np. "01", "12")
         match_miesiac = re.search(r'\b(0?[1-9]|1[0-2])\b', nazwa_clean)
         if match_miesiac:
             miesiac = int(match_miesiac.group(1))
 
-    # Jeśli nadal nic, próbujemy dopasowania częściowego z mapy
     if not miesiac:
+        # Dopasowanie częściowe nazwy miesiąca
         for k, v in MAPA_MIESIECY_PL.items():
             if k in nazwa_clean:
                 miesiac = v
                 break
     
-    # 3. ZWRACANIE WYNIKU
     if miesiac:
         _, last_day = calendar.monthrange(znaleziony_rok, miesiac)
         start = date(znaleziony_rok, miesiac, 1)
