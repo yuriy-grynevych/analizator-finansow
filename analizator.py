@@ -330,6 +330,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     url = "https://csv.webfleet.com/extern"
     
     # Format ISO 8601 (T)
+    # Dodajemy pełny zakres godzin, aby objąć cały dzień
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
@@ -337,11 +338,12 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
-        'lang': 'pl',              # Zmienione na 'pl' jak w działającym skrypcie
+        'lang': 'pl',
         'account': account,
         'apikey': api_key,
         'action': 'showTripReportExtern',
-        'range_pattern': 'ud',     # <--- KLUCZOWA POPRAWKA Z TWOJEGO SKRYPTU!
+        # --- KLUCZOWA ZMIANA: DODANIE range_pattern ---
+        'range_pattern': 'ud',     
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json',
@@ -349,15 +351,16 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     }
     
     try:
-        # Zmiana sposobu autoryzacji na taki jak w działającym skrypcie (auth=...)
-        # Jest to bezpieczniejsze dla haseł ze znakami specjalnymi
+        # Zmiana sposobu autoryzacji na 'auth' (jak w działającym skrypcie)
+        # To eliminuje problemy z hasłami zawierającymi znaki specjalne
         response = requests.get(url, params=params, auth=(username, password), timeout=45)
         
         if response.status_code == 200:
             data = response.json()
             
+            # Obsługa błędów API wewnątrz JSON
             if isinstance(data, dict) and 'errorCode' in data:
-                 # Ignorujemy błąd o braku danych (9204), inne pokazujemy
+                 # Kod 9204 oznacza po prostu brak danych w tym okresie (to nie awaria)
                  if data['errorCode'] != 9204: 
                      st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
                  return pd.DataFrame()
@@ -373,10 +376,10 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
                 kierowca = trip.get('drivername') or trip.get('driverid')
                 data_trip = trip.get('startdate') 
                 
-                # Zabezpieczenie przed brakującymi danymi
+                # Zabezpieczenie przed brakującymi danymi w wierszu
                 if pojazd and kierowca and data_trip:
                     lista_przypisan.append({
-                        'data': data_trip[:10],
+                        'data': data_trip[:10], # Wyciągamy samą datę YYYY-MM-DD
                         'pojazd': pojazd,
                         'kierowca': kierowca
                     })
