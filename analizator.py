@@ -328,15 +328,15 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         return pd.DataFrame()
 
     base_url = "https://csv.webfleet.com/extern"
-    # Klucz API z pliku referencyjnego
+    # Klucz API (ten sam co w pliku referencyjnym)
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
     
-    # Formatowanie dat zgodnie ze skryptem referencyjnym
+    # Formatowanie dat zgodnie z wymogami Webfleet
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
 
-    # --- PRÓBA 1: showTripReportExtern (Wzorowane na system-ulepszony-v2.py) ---
-    # To jest najlepsze źródło do przypisania KIEROWCA <-> POJAZD
+    # --- GLÓWNA METODA: showTripReportExtern ---
+    # To jest metoda, która zadziałała w Twoim Teście nr 1
     params_trip = {
         'lang': 'pl',
         'account': account,
@@ -344,7 +344,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
         'username': username,
         'password': password,
         'action': 'showTripReportExtern', 
-        'range_pattern': 'ud',          # <--- KLUCZOWY PARAMETR Z PLIKU REFERENCYJNEGO
+        'range_pattern': 'ud',          # <--- TO NAPRAWIŁO POBIERANIE (User Defined dates)
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json',
@@ -352,81 +352,52 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     }
 
     try:
-        # st.write(f"DEBUG: Wysyłam zapytanie TripReport dla {data_start} - {data_stop}")
         response = requests.get(base_url, params=params_trip, timeout=60)
         
         if response.status_code == 200:
             data = response.json()
             
-            # Webfleet zwraca listę bezpośrednio lub w kluczu
-            items = data if isinstance(data, list) else data.get('trips', [])
-            
-            # Sprawdź czy nie ma błędu API w odpowiedzi
+            # Obsługa błędów API
             if isinstance(data, dict) and 'errorCode' in data:
-                 if data['errorCode'] != 9204: # 9204 to po prostu brak danych
-                     print(f"Webfleet Trip Error: {data['errorCode']}")
+                 # Kod 9204 oznacza "Brak danych w tym okresie" - to nie jest błąd krytyczny
+                 if data['errorCode'] != 9204: 
+                     st.warning(f"Webfleet API: {data.get('errorMsg')} (Kod: {data['errorCode']})")
+                 return pd.DataFrame()
+
+            # Webfleet może zwrócić listę bezpośrednio lub w kluczu
+            items = data if isinstance(data, list) else data.get('trips', [])
             
             if items:
                 lista_przypisan = []
                 for item in items:
-                    # TripReport ma jasne pola: drivername, objectname, start_time
+                    # TripReport zwraca czyste dane:
+                    # drivername -> Nazwisko kierowcy
+                    # objectname -> Rejestracja/Nazwa pojazdu
+                    # start_time -> Data rozpoczęcia trasy
+                    
                     kierowca = item.get('drivername')
                     pojazd = item.get('objectname')
-                    start_time = item.get('start_time') # np. 2025-10-08T07:15:00...
+                    start_time = item.get('start_time') 
 
-                    if kierowca and pojazd and start_time:
+                    # Filtrujemy puste wpisy (np. jazda bez karty kierowcy)
+                    if pojazd and start_time and kierowca:
                         lista_przypisan.append({
-                            'data': start_time[:10], # Wyciągamy YYYY-MM-DD
+                            'data': start_time[:10], # Wyciągamy samą datę YYYY-MM-DD
                             'pojazd': pojazd,
                             'kierowca': kierowca
                         })
                 
                 df = pd.DataFrame(lista_przypisan)
+                
                 if not df.empty:
-                    # Usuwamy duplikaty (jeden kierowca mógł mieć 5 tras tym samym autem jednego dnia)
+                    # Usuwamy duplikaty (kierowca mógł zrobić 5 tras jednego dnia tym samym autem -> liczy się jako 1 dzień pracy)
                     df = df.drop_duplicates(subset=['data', 'pojazd', 'kierowca'])
-                    # st.success(f"Pobrano dane z Raportu Tras: {len(df)} wpisów")
                     return df
 
     except Exception as e:
-        st.warning(f"Błąd przy pobieraniu TripReport: {e}")
+        st.error(f"Błąd połączenia z Webfleet: {e}")
 
-    # --- PRÓBA 2: showLogbookExtern (Twoja obecna metoda - jako zapas) ---
-    # Uruchamiamy tylko jeśli TripReport nic nie zwrócił
-    
-    # st.info("Próbuję metody zapasowej (Logbook)...")
-    params_log = params_trip.copy()
-    params_log['action'] = 'showLogbookExtern' 
-    # Logbook też lubi range_pattern='ud', choć działał Ci bez tego
-    
-    try:
-        response = requests.get(base_url, params=params_log, timeout=60)
-        if response.status_code == 200:
-            data = response.json()
-            items = []
-            if isinstance(data, list): items = data
-            elif isinstance(data, dict): items = data.get('logbook', data.get('trips', []))
-
-            if items:
-                lista_przypisan = []
-                for item in items:
-                    raw_date = item.get('log_date') or item.get('datetime') or item.get('startdate')
-                    pojazd = item.get('objectname') or item.get('objectuid')
-                    kierowca = item.get('drivername') or item.get('driverid')
-                    
-                    if pojazd and kierowca and raw_date:
-                        lista_przypisan.append({
-                            'data': raw_date[:10],
-                            'pojazd': pojazd,
-                            'kierowca': kierowca
-                        })
-                
-                df = pd.DataFrame(lista_przypisan)
-                if not df.empty:
-                    return df.drop_duplicates(subset=['data', 'pojazd', 'kierowca'])
-    except Exception:
-        pass
-
+    # Jeśli nic nie znaleziono lub wystąpił błąd
     return pd.DataFrame()
 # --- KATEGORYZACJA TRANSAKCJI ---
 def kategoryzuj_transakcje(row, zrodlo):
