@@ -329,7 +329,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
 
     url = "https://csv.webfleet.com/extern"
     
-    # Format ISO 8601 (T) + useISO8601=true
+    # Format ISO 8601 (T)
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
@@ -337,29 +337,26 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
-        'lang': 'de',
+        'lang': 'pl',              # Zmienione na 'pl' jak w działającym skrypcie
         'account': account,
-        'username': username,
-        'password': password,
         'apikey': api_key,
         'action': 'showTripReportExtern',
+        'range_pattern': 'ud',     # <--- KLUCZOWA POPRAWKA Z TWOJEGO SKRYPTU!
         'rangefrom_string': range_from,
         'rangeto_string': range_to,
         'outputformat': 'json',
         'useISO8601': 'true'
     }
     
-    # Debug
-    # st.write(f"Pobieranie Webfleet: {range_from} - {range_to}")
-    
     try:
-        response = requests.get(url, params=params, timeout=45)
+        # Zmiana sposobu autoryzacji na taki jak w działającym skrypcie (auth=...)
+        # Jest to bezpieczniejsze dla haseł ze znakami specjalnymi
+        response = requests.get(url, params=params, auth=(username, password), timeout=45)
         
         if response.status_code == 200:
             data = response.json()
             
             if isinstance(data, dict) and 'errorCode' in data:
-                 # Ignorujemy błędy o braku danych, ale wyświetlamy inne
                  if data['errorCode'] != 9204: 
                      st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
                  return pd.DataFrame()
@@ -375,7 +372,6 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
                 kierowca = trip.get('drivername') or trip.get('driverid')
                 data_trip = trip.get('startdate') 
                 
-                # --- POPRAWKA: Sprawdzamy czy data_trip istnieje przed użyciem [:10] ---
                 if pojazd and kierowca and data_trip:
                     lista_przypisan.append({
                         'data': data_trip[:10],
