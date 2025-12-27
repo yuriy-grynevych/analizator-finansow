@@ -1569,7 +1569,7 @@ def render_admin_content(conn, wybrana_firma):
                             st.markdown(f"#### Analiza arkusza: {nazwa_arkusza}")
                             
                             # 1. Pauza dla Webfleet
-                            if i > 0: time.sleep(2)
+                            if i > 0: time.sleep(15)
 
                             # 2. Sprawdzanie daty
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
