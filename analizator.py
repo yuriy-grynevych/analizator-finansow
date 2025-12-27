@@ -1591,8 +1591,8 @@ def render_admin_content(conn, wybrana_firma):
                         # ------------------------------
                 else:
                     st.error("❌ Lista pojazdów jest pusta.")
-                else:
-                    st.error(f"Błąd HTTP: {r.status_code}")
+            else:
+                st.error(f"Błąd HTTP: {r.status_code}")
             except Exception as e:
                 st.error(f"Błąd: {e}")
     # --- 2. KONFIGURACJA WEBFLEET ---
