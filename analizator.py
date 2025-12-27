@@ -1593,8 +1593,8 @@ def render_admin_content(conn, wybrana_firma):
                     st.error("❌ Lista pojazdów jest pusta.")
             else:
                 st.error(f"Błąd HTTP: {r.status_code}")
-            except Exception as e:
-                st.error(f"Błąd: {e}")
+        except Exception as e:
+            st.error(f"Błąd: {e}")
     # --- 2. KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
         st.info("Wprowadź dane dostępowe do Webfleet Connect.")
