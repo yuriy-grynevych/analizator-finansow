@@ -1373,7 +1373,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
     
     df_wyniki = df_wyniki[~df_wyniki['pojazd_clean'].str.contains('ZALICZKA', case=False, na=False)]
 
-    def zaawansowane_czyszczenie_korekt(df):
+def zaawansowane_czyszczenie_korekt(df):
         if df.empty: return df
         try:
             df['temp_month'] = pd.to_datetime(df['data']).dt.to_period('M')
