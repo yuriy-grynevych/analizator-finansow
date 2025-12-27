@@ -1588,10 +1588,8 @@ def render_admin_content(conn, wybrana_firma):
                             Wiele firm ma np. konto `UNIX_TRANS` (stare) i `UNIX_TRANS_2` (nowe).
                             Zaloguj się do Webfleet i sprawdź dokładnie nazwę konta w prawym górnym rogu lub w umowie.
                             """)
-                        # ------------------------------
-                else:
-                    st.error("❌ Lista pojazdów jest pusta.")
-            
+                        # -------------------------------
+                    else:
         except Exception as e:
             st.error(f"Błąd: {e}")
     # --- 2. KONFIGURACJA WEBFLEET ---
