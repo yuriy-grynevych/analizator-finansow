@@ -1407,12 +1407,12 @@ def zaawansowane_czyszczenie_korekt(df):
         return df_clean
 
 df_wyniki = zaawansowane_czyszczenie_korekt(df_wyniki)
-    df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
-    df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
-    df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
-    df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
-    df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
-    st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów.")
+df_przychody = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('przychody_brutto')
+df_przychody_netto = df_wyniki[df_wyniki['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('przychody_netto')
+df_koszty = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('koszty_inne_brutto')
+df_koszty_netto = df_wyniki[df_wyniki['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('koszty_inne_netto')
+df_agregacja = pd.concat([df_przychody, df_przychody_netto, df_koszty, df_koszty_netto], axis=1).fillna(0)
+st.success(f"Plik analizy przetworzony pomyślnie. Znaleziono {len(df_wyniki)} wpisów.")
     return df_agregacja, df_wyniki
 
 @st.cache_data
