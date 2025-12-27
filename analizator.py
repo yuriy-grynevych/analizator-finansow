@@ -1510,7 +1510,7 @@ def render_admin_content(conn, wybrana_firma):
         acc, user, pw = pobierz_ustawienia_api(conn)
         
         # TEST 1: Sprawdzamy dzień roboczy (ŚRODA 12.06.2024)
-        test_start = date(2025, 20, 11)
+        test_start = date(2025, 11, 20)
         st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
         df_test = pobierz_przypisania_webfleet(acc, user, pw, test_start, test_start)
