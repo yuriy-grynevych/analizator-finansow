@@ -1505,7 +1505,7 @@ def to_excel_contractors(df_analiza_raw):
 
 # --- HELPERY DO RENDEROWANIA ZAWARTOŚCI ZAKŁADEK (WYCIĄGNIĘTE Z MAIN) ---
 
-# --- PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
+# --- RZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         
