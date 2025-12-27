@@ -1505,31 +1505,32 @@ def to_excel_contractors(df_analiza_raw):
 
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
-# --- RZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
+    
+    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (Z NAPRAWIONĄ DATĄ) ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         
-        # TEST 1: Sprawdzamy dzień roboczy (ŚRODA 12.06.2024)
-        test_start = date(2025, 11, 20)
+        # TEST 1: Sprawdzamy dzień roboczy (ŚRODA 12.06.2024 - na pewno były jazdy)
+        test_start = date(2024, 6, 12)
         st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
         df_test = pobierz_przypisania_webfleet(acc, user, pw, test_start, test_start)
         
         if not df_test.empty:
-            st.success(f"✅ SUKCES! Znaleziono {len(df_test)} tras w dniu roboczym. Konto działa!")
+            st.success(f"✅ SUKCES! Znaleziono {len(df_test)} tras w dniu roboczym. Konto działa i widzi auta!")
             st.dataframe(df_test.head())
         else:
             st.warning("⚠️ Brak tras w dniu roboczym. Sprawdzam, czy konto w ogóle widzi pojazdy...")
             
-            # TEST 2: Pobieranie samej listy pojazdów (showObjectReportExtern)
-            # To nam powie, czy użytkownik ma zablokowany dostęp do floty.
+            # TEST 2: Pobieranie samej listy pojazdów
+            api_key_hardcoded = "bfe90323-83d4-45c1-839b-df6efdeaafba"
             url_obj = "https://csv.webfleet.com/extern"
             params_obj = {
                 'lang': 'de',
                 'account': acc,
                 'username': user,
                 'password': pw,
-                'apikey': "bfe90323-83d4-45c1-839b-df6efdeaafba",
+                'apikey': api_key_hardcoded,
                 'action': 'showObjectReportExtern', 
                 'outputformat': 'json'
             }
@@ -1537,27 +1538,23 @@ def render_admin_content(conn, wybrana_firma):
                 r = requests.get(url_obj, params=params_obj, timeout=30)
                 if r.status_code == 200:
                     data_obj = r.json()
-                    # Czasami lista jest wprost, czasami w kluczu
                     objs = data_obj if isinstance(data_obj, list) else data_obj.get('objects', [])
                     
                     if objs:
                         st.error(f"❌ DZIWNA SYTUACJA: Konto widzi {len(objs)} pojazdów, ale nie pobiera tras.")
-                        st.write("Oto pierwsze auto, jakie widzi system:")
-                        st.json(objs[0])
-                        st.write("Być może format daty nadal jest problemem, albo auta nie mają podłączonych terminali?")
+                        st.write("Pierwsze auto z listy:", objs[0])
                     else:
                         st.error("❌ KONTO PUSTE: Logowanie poprawne, ale użytkownik nie widzi ŻADNYCH pojazdów.")
-                        st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Administracja -> Użytkownicy. Wybierz 'direkt-hsN', wejdź w 'Uprawnienia' i upewnij się, że ma dostęp do 'Wszystkie pojazdy' lub odpowiedniej grupy.")
+                        st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Administracja -> Użytkownicy. Wybierz 'direkt-hsN', wejdź w 'Uprawnienia' i upewnij się, że ma dostęp do 'Wszystkie pojazdy'.")
                 else:
                     st.error(f"Błąd połączenia przy pobieraniu listy aut: {r.status_code}")
                     st.code(r.text)
             except Exception as e:
-                st.error(f"Błąd krytyczny: {e}")
-    # ---------------------------------
-    # ---------------------------------
-    # --- KONFIGURACJA WEBFLEET ---
+                st.error(f"Błąd krytyczny testu: {e}")
+    
+    # --- 2. KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
-        st.info("Wprowadź dane dostępowe do Webfleet Connect, aby pobierać dane o kierowcach.")
+        st.info("Wprowadź dane dostępowe do Webfleet Connect.")
         acc, user, pw = pobierz_ustawienia_api(conn)
         with st.form("webfleet_config"):
             inp_account = st.text_input("Account (Nazwa konta)", value=acc if acc else "")
@@ -1568,98 +1565,77 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # --- SEKCJA: WYNAGRODZENIA (OBLICZANIE I ZAPIS) ---
-    # --- SEKCJA: WYNAGRODZENIA (OBLICZANIE I ZAPIS - WSZYSTKIE MIESIĄCE) ---
+    # --- 3. ANALIZA WYNAGRODZEŃ (PEŁNA PĘTLA) ---
     st.markdown("### 💰 Analiza Wynagrodzeń (Wszystkie miesiące z pliku)")
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel z zakładkami (np. Styczeń, Luty...). 2. Kliknij 'Oblicz'. System przetworzy KAŻDY arkusz po kolei.")
+        st.info("1. Wgraj plik Excel. 2. Ustaw ROK. 3. Kliknij 'Oblicz'.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
-            rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=date.today().year)
+            rok_analizy = st.number_input("Rok rozliczeniowy (Domyślny)", min_value=2023, max_value=2030, value=2024) 
             plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
 
         if plik_plac:
             if st.button("🚀 Oblicz WSZYSTKIE miesiące", type="primary"):
-                st.session_state['temp_wynagrodzenia'] = None # Reset
+                st.session_state['temp_wynagrodzenia_all'] = None 
                 
                 acc, user, pw = pobierz_ustawienia_api(conn)
                 if not acc:
                     st.error("Brak konfiguracji Webfleet! Ustaw ją wyżej.")
                 else:
-                    # Wczytanie pliku Excel
                     try:
                         xls_file = pd.ExcelFile(plik_plac)
                         sheet_names = xls_file.sheet_names
-                        
                         lista_wynikow_miesiecznych = []
                         pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
                         
-                     # PĘTLA DIAGNOSTYCZNA "BEZ TAJEMNIC"
-                        st.write("--- ROZPOCZYNAM DIAGNOZĘ ---")
+                        st.write("--- LOGI ANALIZY ---")
                         for i, nazwa_arkusza in enumerate(sheet_names):
-                            st.markdown(f"#### Analiza arkusza: {nazwa_arkusza}")
+                            pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
                             
-                            # 1. Pauza dla Webfleet
-                            if i > 0: time.sleep(15)
+                            # PAUZA 15 SEKUND (Wymagana przez Webfleet dla długich okresów)
+                            if i > 0: 
+                                time.sleep(15) 
 
-                            # 2. Sprawdzanie daty
+                            # 1. Ustalanie daty (korzysta z poprawionej funkcji daty w reszcie pliku)
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             
                             if not start_auto:
-                                st.error(f"❌ POMIJAM: Nie udało się ustalić daty na podstawie nazwy '{nazwa_arkusza}'.")
+                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie rozpoznano daty.")
                                 continue
-                            
-                            st.write(f"📅 Ustalona data: {start_auto} do {stop_auto}")
                             
                             if start_auto > date.today():
-                                st.warning("⚠️ POMIJAM: Data jest w przyszłości.")
+                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Data z przyszłości ({start_auto}). Pomijam.")
                                 continue
 
-                            # 3. Sprawdzanie Excela
+                            # 2. Parsowanie Excela
                             df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                             df_place = parsuj_dataframe_plac(df_sheet)
                             
                             if df_place.empty:
-                                st.error("❌ POMIJAM: Nie znaleziono danych w Excelu (brak kolumny 'KWOTA' lub nazwisk).")
-                                st.write("Pierwsze 5 wierszy arkusza (sprawdź nagłówki):")
-                                st.dataframe(df_sheet.head())
-                                continue
-                            else:
-                                st.success(f"✅ Excel OK: Znaleziono {len(df_place)} pracowników.")
-
-                            # 4. Sprawdzanie Webfleet
+                                st.error(f"❌ Arkusz '{nazwa_arkusza}': Nie znaleziono kolumny KWOTA/DO WYPŁATY.")
+                                continue 
+                                
+                            # 3. Pobieranie Webfleet
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
                             if df_wf.empty:
-                                st.error(f"❌ POMIJAM: Webfleet zwrócił 0 tras dla okresu {start_auto}.")
-                                st.info("Podpowiedź: Czy rok w polu 'Rok rozliczeniowy' (2024/2025) jest poprawny?")
+                                st.error(f"❌ Arkusz '{nazwa_arkusza}': Webfleet zwrócił 0 tras dla okresu {start_auto}.")
                                 continue
                             else:
-                                st.success(f"✅ Webfleet OK: Znaleziono {len(df_wf)} tras.")
+                                st.success(f"✅ Arkusz '{nazwa_arkusza}': Webfleet OK ({len(df_wf)} tras). Excel OK ({len(df_place)} osób).")
 
-                            # 5. Sprawdzanie Łączenia (Nazwiska)
+                            # 4. Łączenie
                             statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                             
-                            # Normalizacja
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
                             statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
                             
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
                             if merged.empty:
-                                st.error("❌ BŁĄD KRYTYCZNY: Dane są, ale nazwiska się nie łączą!")
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.write("Nazwiska z Webfleet (przykłady):")
-                                    st.write(statystyki_kierowcow['kierowca_norm'].unique()[:10])
-                                with col2:
-                                    st.write("Nazwiska z Excela (przykłady):")
-                                    st.write(df_place['kierowca_norm'].unique()[:10])
+                                st.error(f"❌ Arkusz '{nazwa_arkusza}': Brak dopasowań nazwisk! (Dane są, ale nazwiska inne)")
                                 continue
-                            
-                            # SUKCES
-                            st.success(f"🏆 SUKCES: Połączono {len(merged)} rekordów! Dodaję do wyniku.")
                             
                             total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
                             merged['udzial'] = merged['dni_jazdy'] / total_days
@@ -1674,45 +1650,35 @@ def render_admin_content(conn, wybrana_firma):
                         pask_postepu.empty()
                         
                         if not lista_wynikow_miesiecznych:
-                            st.warning("Nie udało się przeliczyć żadnego miesiąca. Sprawdź nazwy zakładek (np. STYCZEŃ) i dane w Webfleet.")
+                            st.error("Nie udało się przeliczyć żadnego miesiąca.")
                         else:
-                            # Łączymy wszystko w jedną dużą tabelę
                             df_final_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True)
                             st.session_state['temp_wynagrodzenia_all'] = df_final_all
+                            st.balloons()
                             st.success(f"Przeliczono pomyślnie {len(lista_wynikow_miesiecznych)} miesięcy!")
                             
                     except Exception as e:
                         st.error(f"Błąd podczas przetwarzania pliku: {e}")
 
-        # Wyświetlanie wyniku i przycisk ZAPISU
+        # Wyświetlanie wyniku i zapis
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
             df_calosc = st.session_state['temp_wynagrodzenia_all']
-            
-            st.markdown("##### Podgląd wyników (wszystkie miesiące):")
-            st.dataframe(
-                df_calosc.style.format({'koszt_przypisany': '{:,.2f} PLN'}), 
-                use_container_width=True,
-                hide_index=True
-            )
+            st.markdown("##### Podgląd wyników:")
+            st.dataframe(df_calosc.style.format({'koszt_przypisany': '{:,.2f} PLN'}), use_container_width=True, hide_index=True)
             
             suma_total = df_calosc['koszt_przypisany'].sum()
             st.metric("Łączna kwota do zapisania", f"{suma_total:,.2f} PLN")
-            
+
             if st.button("💾 ZAPISZ WSZYSTKO DO BAZY", type="primary", use_container_width=True):
-                with st.spinner("Zapisywanie danych miesiąc po miesiącu..."):
+                with st.spinner("Zapisywanie..."):
                     try:
-                        # Grupujemy po dacie księgowania, żeby usuwać i wgrywać miesiącami
                         grupy_miesieczne = df_calosc.groupby('data_ksiegowania')
-                        
                         licznik = 0
                         with conn.session as s:
                             for data_konca, grupa in grupy_miesieczne:
-                                # 1. Wyznaczamy zakres dat dla tego konkretnego miesiąca do usunięcia starych danych
-                                # Data końca to np. 2024-01-31. Data początku to pierwszy dzień tego miesiąca.
                                 d_stop = data_konca
                                 d_start = d_stop.replace(day=1)
                                 
-                                # Usuwamy stare dane z tego miesiąca
                                 s.execute(text(f"""
                                     DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} 
                                     WHERE typ = 'WYNAGRODZENIE' 
@@ -1720,7 +1686,6 @@ def render_admin_content(conn, wybrana_firma):
                                     AND firma = :firma
                                 """), {'d1': d_start, 'd2': d_stop, 'firma': wybrana_firma})
                                 
-                                # 2. Przygotowujemy dane do wgrania
                                 for _, wiersz in grupa.iterrows():
                                     s.execute(text(f"""
                                         INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI}
@@ -1735,72 +1700,48 @@ def render_admin_content(conn, wybrana_firma):
                                     })
                                 licznik += 1
                             s.commit()
-                            
-                        st.success(f"✅ Zapisano pomyślnie dane dla {licznik} miesięcy!")
-                        st.session_state['temp_wynagrodzenia_all'] = None # Czyścimy po zapisie
+                        st.success(f"Zapisano {licznik} miesięcy!")
+                        st.session_state['temp_wynagrodzenia_all'] = None
                         time.sleep(2)
                         st.rerun()
-                        
                     except Exception as e:
-                        st.error(f"Błąd zapisu do bazy: {e}")
+                        st.error(f"Błąd zapisu: {e}")
 
     st.divider()
     
+    # --- 4. SEKCJA WGRYWANIA PLIKÓW PALIWOWYCH ---
     col_up1, col_up2 = st.columns([1, 2])
-    
     with col_up1:
-        st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy i wgraj do bazy.")
+        st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy.")
         firma_upload = st.selectbox("Przypisz plik do firmy:", FIRMY, index=FIRMY.index(wybrana_firma))
-        
     with col_up2:
         with st.container(border=True):
-            przeslane_pliki = st.file_uploader(
-                "Wybierz pliki (Eurowag, E100, Fakturownia)",
-                accept_multiple_files=True,
-                type=['xlsx', 'xls', 'csv']
-            )
+            przeslane_pliki = st.file_uploader("Wybierz pliki (Eurowag, E100, Fakturownia)", accept_multiple_files=True, type=['xlsx', 'xls', 'csv'])
             if przeslane_pliki:
                 if st.button("Przetwórz i wgraj do bazy", type="primary", use_container_width=True):
-                    with st.spinner("Wczytywanie i unifikowanie plików..."):
+                    with st.spinner("Przetwarzanie..."):
                         dane_do_wgrania, blad = wczytaj_i_zunifikuj_pliki(przeslane_pliki, firma_upload)
-                    if blad:
-                        st.error(blad)
-                    elif dane_do_wgrania is None or dane_do_wgrania.empty:
-                        st.error("Nie udało się przetworzyć żadnych danych. Sprawdź pliki.")
-                    else:
-                        st.success(f"Zunifikowano {len(dane_do_wgrania)} nowych transakcji dla firmy {firma_upload}.")
-                        with st.spinner("Zapisywanie danych w bazie..."):
-                            try:
-                                dane_do_wgrania.to_sql(
-                                    NAZWA_TABELI, 
-                                    conn.engine, 
-                                    if_exists='append', 
-                                    index=False, 
-                                    schema=NAZWA_SCHEMATU
-                                )
-                            except Exception as e:
-                                st.error(f"Błąd podczas zapisu do bazy: {e}")
-                                st.stop()
-                        st.success("Dane zostały pomyślnie zapisane w bazie!")
-                        with st.spinner("Czyszczenie duplikatów..."):
+                    if blad: st.error(blad)
+                    elif dane_do_wgrania is not None:
+                        try:
+                            dane_do_wgrania.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
+                            st.success(f"Wgrano {len(dane_do_wgrania)} rekordów.")
                             wyczysc_duplikaty(conn)
-                        st.success("Baza danych została oczyszczona.")
+                        except Exception as e: st.error(f"Błąd zapisu: {e}")
 
     st.markdown("---")
+    
+    # --- 5. STREFA NIEBEZPIECZNA ---
     with st.expander("⚠️ Strefa Niebezpieczna (Reset Bazy)", expanded=False):
-        st.warning("Poniższe operacje usuwają dane! Używaj ostrożnie.")
-        col_admin_l, col_admin_r = st.columns(2)
-        with col_admin_l:
-            if st.button("1. Wyczyść transakcje (Tabela Transactions)"):
-                with st.spinner("Resetowanie tabeli transakcji..."):
-                    setup_database(conn)
-                st.success("Tabela transakcji została wyczyszczona.")
-        with col_admin_r:
-            if st.button("2. Wyczyść pliki (Tabela Saved_Files)"):
-                with st.spinner("Resetowanie tabeli plików..."):
-                    setup_file_database(conn)
-                st.success("Tabela plików została wyczyszczona.")
-
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("1. Wyczyść transakcje"):
+                setup_database(conn)
+                st.success("Gotowe.")
+        with c2:
+            if st.button("2. Wyczyść pliki"):
+                setup_file_database(conn)
+                st.success("Gotowe.")
 def render_raport_content(conn, wybrana_firma):
     st.subheader("Raport Paliw i Opłat")
     if wybrana_firma == "UNIX-TRANS":
