@@ -1511,7 +1511,7 @@ def render_admin_content(conn, wybrana_firma):
         api_key_hardcoded = "bfe90323-83d4-45c1-839b-df6efdeaafba"
         
         # Data z Twojego logu (kiedy auto na pewno jeździło)
-        test_start = date(2025, 12, 16)
+        test_start = date(2025, 12, 17)
         st.info(f"📅 Data testu: {test_start}")
 
         # --- TEST 1: TRASY (showTripReportExtern) ---
