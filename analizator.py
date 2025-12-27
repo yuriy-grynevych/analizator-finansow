@@ -1535,7 +1535,7 @@ def render_admin_content(conn, wybrana_firma):
             st.error(f"Błąd pobierania grup: {e}")
 
         # TEST 1: Sprawdzamy dzień roboczy
-        test_start = date(2025, 12, 24)
+        test_start = date(2025, 12, 18)
         st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
         # Pobieramy dane
