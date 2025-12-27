@@ -1564,29 +1564,31 @@ def render_admin_content(conn, wybrana_firma):
                     data_obj = r.json()
                     objs = data_obj if isinstance(data_obj, list) else data_obj.get('objects', [])
                     
-                    if objs:
-                        st.error(f"❌ Konto widzi {len(objs)} pojazdów, ale brak tras.")
-                        
-                        # Szukamy aktywnego auta
-                        aktywne = []
+                   if objs:
+                        # --- NOWA LOGIKA DIAGNOSTYKI ---
+                        aktywne_auta = []
                         for o in objs:
-                            # Sprawdź msgtime (ostatni sygnał GPS)
-                            czas = str(o.get('msgtime', ''))
-                            if '2024' in czas or '2025' in czas:
-                                aktywne.append(o)
+                            # Sprawdzamy datę ostatniego sygnału (msgtime)
+                            msg_time_str = str(o.get('msgtime', ''))
+                            if '2024' in msg_time_str or '2025' in msg_time_str:
+                                aktywne_auta.append(o)
                         
-                        if aktywne:
-                            st.success(f"✅ Znaleziono {len(aktywne)} AKTYWNYCH aut (rok 2024/25)!")
-                            st.write("Przykład aktywnego auta:", aktywne[0])
-                            st.info("Skoro auto jest aktywne, a brak tras -> PROBLEM JEST W FILTRACH API LUB PARAMETRACH 'TRIP REPORT'.")
+                        if aktywne_auta:
+                            # SUKCES: Mamy aktywne auta na liście!
+                            st.warning(f"⚠️ Znalazłem {len(aktywne_auta)} aktywnych aut (z 2024/2025 roku) na liście {len(objs)} pojazdów!")
+                            st.write("Przykład aktywnego auta, które system widzi:", aktywne_auta[0])
+                            st.info("Wniosek: Twoje konto WIDZI nowe auta, ale funkcja pobierania tras (showTripReportExtern) może mieć złe filtry lub uprawnienia.")
                         else:
-                            st.error("💀 WSZYSTKIE POJAZDY SĄ STARE (brak sygnału w 2024/25).")
-                            st.write("Pierwsze auto z listy (stare):", objs[0])
+                            # PORAŻKA: Wszystkie auta są stare
+                            st.error("💀 WSZYSTKIE 22 POJAZDY SĄ NIEAKTYWNE (Stare daty logowania z 2022/2023).")
+                            st.write("Przykładowe (stare) auto:", objs[0])
                             st.markdown("""
-                            **Możliwe przyczyny wg dokumentacji:**
-                            1. **Zła nazwa konta (Account):** Masz dostęp do archiwalnego konta firmy, a nie bieżącego (np. `Firma_OLD` vs `Firma`).
-                            2. **Grupa obiektów:** Użytkownik widzi tylko grupę 'Default' która zawiera stary tabor.
+                            **Co to oznacza wg dokumentacji Webfleet:**
+                            Prawdopodobnie w konfiguracji wpisałeś **starą nazwę konta (Account)**. 
+                            Wiele firm ma np. konto `UNIX_TRANS` (stare) i `UNIX_TRANS_2` (nowe).
+                            Zaloguj się do Webfleet i sprawdź dokładnie nazwę konta w prawym górnym rogu lub w umowie.
                             """)
+                        # ------------------------------
                     else:
                         st.error("❌ Lista pojazdów jest pusta.")
                 else:
