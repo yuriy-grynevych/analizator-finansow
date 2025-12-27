@@ -1543,66 +1543,72 @@ def render_admin_content(conn, wybrana_firma):
                         lista_wynikow_miesiecznych = []
                         pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
                         
-                        # PĘTLA PO WSZYSTKICH ARKUSZACH
+                       # PĘTLA PO WSZYSTKICH ARKUSZACH (WERSJA DIAGNOSTYCZNA)
                         for i, nazwa_arkusza in enumerate(sheet_names):
-                            # Aktualizacja paska postępu
-                            pask_postepu.progress((i / len(sheet_names)), text=f"Przetwarzam arkusz: {nazwa_arkusza}...")
+                            pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
                             
-                            # --- POPRAWKA KRYTYCZNA: DŁUŻSZA PAUZA (BŁĄD 8011) ---
-                            # Webfleet ma limit zapytań na minutę. 
-                            # Czekamy 10 sekund między miesiącami, aby "ostudzić" połączenie.
-                            if i > 0: # Nie czekamy przed pierwszym, tylko przed kolejnymi
-                                time.sleep(10) 
+                            if i > 0: 
+                                time.sleep(2) # Krótsza pauza do testów
                             
-                            # 1. Próba ustalenia daty dla tego arkusza
+                            # 1. Ustalanie daty
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             
-                            # Jeśli nie udało się ustalić daty, pomijamy arkusz
                             if not start_auto:
+                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie rozpoznano miesiąca w nazwie.")
                                 continue
                             
-                            # Pomijamy przyszłość (żeby nie pytać o rok 2026 itp.)
                             if start_auto > date.today():
                                 continue
 
-                            # 2. Parsowanie kwot z Excela
+                            # 2. Parsowanie Excela
                             df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                             df_place = parsuj_dataframe_plac(df_sheet)
                             
                             if df_place.empty:
+                                st.warning(f"⚠️ Arkusz '{nazwa_arkusza}': Nie znaleziono tabeli z KWOTAMI w Excelu.")
                                 continue 
                                 
-                            # 3. Pobranie danych z Webfleet
-                            # Funkcja używa teraz useISO8601=true, więc format daty jest bezpieczny
+                            # 3. Pobieranie z Webfleet
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
+                            # --- DIAGNOSTYKA ---
+                            with st.expander(f"🔍 Szczegóły dla: {nazwa_arkusza} ({start_auto})"):
+                                st.write(f"Webfleet znalazł tras: {len(df_wf)}")
+                                st.write(f"Excel znalazł pracowników: {len(df_place)}")
+                                
+                                if not df_wf.empty:
+                                    st.write("Przykładowi kierowcy z Webfleet:", df_wf['kierowca'].unique()[:5])
+                                if not df_place.empty:
+                                    st.write("Przykładowi kierowcy z Excela:", df_place['kierowca'].unique()[:5])
+                            # -------------------
+
                             if df_wf.empty:
-                                # Cicha informacja w konsoli, bez błędu dla użytkownika
-                                print(f"Arkusz {nazwa_arkusza}: Brak tras ({start_auto})")
                                 continue
                                 
-                            # 4. Łączenie danych (Algorytm przypisania kosztów)
+                            # 4. Łączenie
                             statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                             
-                            # Normalizacja nazwisk (duże litery, usunięcie spacji)
+                            # Normalizacja (usuwamy spacje i robimy DUŻE LITERY)
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
                             statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
                             
+                            # Łączymy tabele
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
-                            # Obliczenie udziału kosztów
-                            total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
-                            merged['udzial'] = merged['dni_jazdy'] / total_days
-                            merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                            # Jeśli po połączeniu tabela jest pusta -> Różne nazwiska!
+                            if merged.empty and not df_wf.empty and not df_place.empty:
+                                st.error(f"❌ BŁĄD DOPASOWANIA w {nazwa_arkusza}! Webfleet i Excel mają dane, ale nazwiska się nie pokrywają. Sprawdź sekcję 'Szczegóły' powyżej.")
                             
-                            # Sumowanie per pojazd
-                            wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
-                            
-                            # Dodanie metadanych do zapisu
-                            wynik_pojazdy['data_ksiegowania'] = stop_auto
-                            wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
-                            
-                            lista_wynikow_miesiecznych.append(wynik_pojazdy)
+                            if not merged.empty:
+                                total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
+                                merged['udzial'] = merged['dni_jazdy'] / total_days
+                                merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                                
+                                wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
+                                wynik_pojazdy['data_ksiegowania'] = stop_auto
+                                wynik_pojazdy['miesiac_opis'] = nazwa_arkusza
+                                
+                                lista_wynikow_miesiecznych.append(wynik_pojazdy)
                             
                         pask_postepu.empty()
                         
