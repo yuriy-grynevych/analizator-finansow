@@ -1509,7 +1509,7 @@ def render_admin_content(conn, wybrana_firma):
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Sprawdź uprawnienia i grupy)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         
-        # KROK 0: Sprawdźmy jakie grupy widzi ten użytkownik (Z DOKUMENTACJI)
+        # KROK 0: Sprawdźmy jakie grupy widzi ten użytkownik
         st.info("Krok 0: Sprawdzam dostępne Grupy Pojazdów dla tego użytkownika...")
         url_groups = "https://csv.webfleet.com/extern"
         params_groups = {
@@ -1534,11 +1534,11 @@ def render_admin_content(conn, wybrana_firma):
         except Exception as e:
             st.error(f"Błąd pobierania grup: {e}")
 
-        # TEST 1: Sprawdzamy dzień roboczy (ŚRODA 12.06.2024)
+        # TEST 1: Sprawdzamy dzień roboczy
         test_start = date(2024, 6, 12)
         st.info(f"Krok 1: Szukam tras w dniu roboczym: {test_start}...")
         
-        # Pobieramy dane o trasach
+        # Pobieramy dane
         df_test = pobierz_przypisania_webfleet(acc, user, pw, test_start, test_start)
         
         if not df_test.empty:
@@ -1568,7 +1568,7 @@ def render_admin_content(conn, wybrana_firma):
                     if objs:
                         st.error(f"❌ DZIWNA SYTUACJA: Konto widzi {len(objs)} pojazdów, ale nie pobiera tras.")
                         
-                        # --- NOWA LOGIKA DIAGNOSTYKI (Szukamy czy COKOLWIEK jeździ) ---
+                        # --- NOWA LOGIKA DIAGNOSTYKI ---
                         aktywne_auta = []
                         for o in objs:
                             msg_time_str = str(o.get('msgtime', ''))
@@ -1577,24 +1577,16 @@ def render_admin_content(conn, wybrana_firma):
                                 aktywne_auta.append(o)
                         
                         if aktywne_auta:
-                            # SCENARIUSZ 1: Auta jeżdżą, ale API nie widzi tras (Problem uprawnień)
                             st.warning(f"⚠️ Znalazłem {len(aktywne_auta)} aut aktywnych w 2024/2025 roku (np. {aktywne_auta[0].get('objectname')}).")
-                            st.info("Skoro są aktywne auta, a brak tras -> SPRAWDŹ UPRAWNIENIA w Webfleet (Zaznacz 'showTripReportExtern' dla użytkownika API).")
+                            st.info("Skoro są aktywne auta, a brak tras -> SPRAWDŹ UPRAWNIENIA w Webfleet (Krok 2).")
                             st.json(aktywne_auta[0])
                         else:
-                            # SCENARIUSZ 2: Wszystkie auta są stare (Problem konta/grupy)
-                            st.error("💀 WSZYSTKIE POJAZDY SĄ NIEAKTYWNE (Stare daty logowania, np. 2022).")
-                            st.write("Przykładowe (stare) auto z listy:", objs[0])
-                            st.markdown("""
-                            **DIAGNOZA:**
-                            Twoje konto API jest podpięte do **złej bazy danych**. 
-                            1. Sprawdź nazwę konta (`account`) w konfiguracji.
-                            2. Sprawdź w Webfleet, czy użytkownik API nie ma przypisanej tylko grupy 'Default' (która może być starym śmietnikiem).
-                            """)
-                        # -------------------------------
+                            st.error("💀 WSZYSTKIE POJAZDY SĄ NIEAKTYWNE (Stare daty logowania).")
+                            st.write("Przykładowe (stare) auto:", objs[0])
+                            st.info("Prawdopodobnie logujesz się na konto z archiwalnymi pojazdami lub GPS-y nie działają.")
                     else:
                         st.error("❌ KONTO PUSTE: Logowanie poprawne, ale użytkownik nie widzi ŻADNYCH pojazdów.")
-                        st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Użytkownicy -> Uprawnienia -> Przydział pojazdów -> Zaznacz 'Wszystkie'.")
+                        st.info("Rozwiązanie: Zaloguj się na stronę Webfleet -> Administracja -> Użytkownicy. Wybierz 'direkt-hsN', wejdź w 'Uprawnienia' i upewnij się, że ma dostęp do 'Wszystkie pojazdy'.")
                 else:
                     st.error(f"Błąd połączenia przy pobieraniu listy aut: {r.status_code}")
                     st.code(r.text)
