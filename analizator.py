@@ -217,25 +217,42 @@ def parsuj_dataframe_plac(df):
                     
     return pd.DataFrame(wyniki)
 
-def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok):
-    nazwa_clean = nazwa_arkusza.upper().strip().split('.')[0]
-    # Próba usunięcia roku z nazwy jeśli jest (np. "Styczeń 2024")
-    nazwa_clean = nazwa_clean.replace(str(rok), "").strip()
+def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
+    nazwa_clean = str(nazwa_arkusza).upper().strip()
     
+    # 1. PRÓBA ZNALEZIENIA ROKU W NAZWIE ARKUSZA (np. "01.2025", "Styczeń 2024")
+    znaleziony_rok = rok_domyslny
+    match_rok = re.search(r'202[0-9]', nazwa_clean)
+    if match_rok:
+        znaleziony_rok = int(match_rok.group(0))
+        # Usuwamy rok z nazwy, żeby nie mylił przy szukaniu miesiąca
+        nazwa_clean = nazwa_clean.replace(str(znaleziony_rok), "").strip()
+
+    # 2. SZUKANIE MIESIĄCA (Słownie lub Cyfrowo)
     miesiac = MAPA_MIESIECY_PL.get(nazwa_clean)
+    
+    # Jeśli nie znaleziono po nazwie słownej, szukamy cyfr (np. "01.", "06")
+    if not miesiac:
+        # Szukamy cyfr na początku lub końcu (np. "01", "1", "01.")
+        match_miesiac = re.search(r'\b(0?[1-9]|1[0-2])\b', nazwa_clean)
+        if match_miesiac:
+            miesiac = int(match_miesiac.group(1))
+
+    # Jeśli nadal nic, próbujemy dopasowania częściowego z mapy
     if not miesiac:
         for k, v in MAPA_MIESIECY_PL.items():
             if k in nazwa_clean:
                 miesiac = v
                 break
     
+    # 3. ZWRACANIE WYNIKU
     if miesiac:
-        _, last_day = calendar.monthrange(rok, miesiac)
-        start = date(rok, miesiac, 1)
-        stop = date(rok, miesiac, last_day)
+        _, last_day = calendar.monthrange(znaleziony_rok, miesiac)
+        start = date(znaleziony_rok, miesiac, 1)
+        stop = date(znaleziony_rok, miesiac, last_day)
         return start, stop
+        
     return None, None
-
 def czy_zakazany_pojazd_global(nazwa):
     if not nazwa: return False
     n = str(nazwa).upper().replace(" ", "").replace("-", "")
