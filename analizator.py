@@ -333,7 +333,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
     range_from = f"{data_start}T00:00:00"
     range_to = f"{data_stop}T23:59:59"
     
-    # Twój klucz API
+    # Twój klucz API (ten sam co w działającym skrypcie)
     api_key = "bfe90323-83d4-45c1-839b-df6efdeaafba" 
 
     params = {
@@ -357,6 +357,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
             data = response.json()
             
             if isinstance(data, dict) and 'errorCode' in data:
+                 # Ignorujemy błąd o braku danych (9204), inne pokazujemy
                  if data['errorCode'] != 9204: 
                      st.error(f"Webfleet Error: {data['errorCode']} - {data.get('errorMsg')}")
                  return pd.DataFrame()
@@ -372,6 +373,7 @@ def pobierz_przypisania_webfleet(account, username, password, data_start, data_s
                 kierowca = trip.get('drivername') or trip.get('driverid')
                 data_trip = trip.get('startdate') 
                 
+                # Zabezpieczenie przed brakującymi danymi
                 if pojazd and kierowca and data_trip:
                     lista_przypisan.append({
                         'data': data_trip[:10],
