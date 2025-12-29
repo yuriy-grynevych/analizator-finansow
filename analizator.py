@@ -1640,7 +1640,7 @@ def render_admin_content(conn, wybrana_firma):
                         st.write("--- LOGI ANALIZY ---")
                         for i, nazwa_arkusza in enumerate(sheet_names):
                             pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
-                            if i > 0: time.sleep(1) # Krótka pauza dla stabilności
+                            if i > 0: time.sleep(10) # Krótka pauza dla stabilności
 
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             if not start_auto: continue
