@@ -1513,7 +1513,7 @@ def to_excel_contractors(df_analiza_raw):
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
-    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
+    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (BEZ ZMIAN) ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Trasy vs Dziennik)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         api_key_hardcoded = "bfe90323-83d4-45c1-839b-df6efdeaafba"
@@ -1531,7 +1531,7 @@ def render_admin_content(conn, wybrana_firma):
             st.success(f"✅ TRASY DZIAŁAJĄ! Znaleziono {len(df_trips)} tras.")
             st.dataframe(df_trips.head())
         else:
-            st.error("❌ TRASY: 0 wyników. (To jest Twój obecny błąd)")
+            st.error("❌ TRASY: 0 wyników. (Możliwy błąd konfiguracji lub brak danych)")
 
         # --- TEST 2: OBIEKTY (showObjectReportExtern) ---
         st.markdown("---")
@@ -1562,10 +1562,9 @@ def render_admin_content(conn, wybrana_firma):
         except Exception as e:
             st.error(f"Błąd: {e}")
 
-        # --- TEST 3: DZIENNIK (showLogbookExtern) - OSTATECZNY TEST ---
+        # --- TEST 3: DZIENNIK (showLogbookExtern) ---
         st.markdown("---")
-        st.write("### TEST 3: Dziennik Podróży (Logbook) - OSTATECZNA WERYFIKACJA")
-        st.caption("To jest surowy zapis z tachografu/urządzenia. Jeśli to zadziała, a Trasy nie, to znaczy że musimy zmienić logikę aplikacji.")
+        st.write("### TEST 3: Dziennik Podróży (Logbook)")
         
         url_log = "https://csv.webfleet.com/extern"
         range_from = f"{test_start}T00:00:00"
@@ -1574,7 +1573,7 @@ def render_admin_content(conn, wybrana_firma):
         params_log = {
             'lang': 'de', 'account': acc, 'username': user, 'password': pw,
             'apikey': api_key_hardcoded, 
-            'action': 'showLogbookExtern',  # <--- INNA FUNKCJA API
+            'action': 'showLogbookExtern', 
             'rangefrom_string': range_from,
             'rangeto_string': range_to,
             'outputformat': 'json',
@@ -1586,25 +1585,22 @@ def render_admin_content(conn, wybrana_firma):
             if r_log.status_code == 200:
                 data_log = r_log.json()
                 
-                # Obsługa błędów API w JSON
                 if isinstance(data_log, dict) and 'errorCode' in data_log:
                      st.error(f"Logbook Error: {data_log['errorCode']} - {data_log.get('errorMsg')}")
                 else:
-                    items_log = data_log if isinstance(data_log, list) else data_log.get('trips', []) # Czasem logbook zwraca listę wprost
+                    items_log = data_log if isinstance(data_log, list) else data_log.get('trips', [])
                     
                     if items_log:
-                        st.success(f"🎉 SUKCES! Znaleziono {len(items_log)} wpisów w Dzienniku (Logbook)!")
-                        st.info("Wniosek: Twoje konto ma dane, ale funkcja 'Trasy' ich nie widzi (np. przez tryb prywatny). Możemy przepisać aplikację, by korzystała z Dziennika.")
+                        st.success(f"🎉 SUKCES! Znaleziono {len(items_log)} wpisów w Dzienniku!")
                         st.dataframe(pd.DataFrame(items_log).head())
                     else:
-                        st.error("💀 DZIENNIK TEŻ PUSTY. To oznacza absolutny brak danych historycznych dla tego użytkownika.")
-                        st.warning("Sprawdź w Webfleet: Użytkownik -> Profil -> Dane historyczne (czy ma dostęp do danych sprzed X miesięcy?)")
+                        st.warning("Dziennik pusty (0 wyników).")
             else:
                 st.error(f"Błąd HTTP Logbook: {r_log.status_code}")
         except Exception as e:
              st.error(f"Wyjątek Logbook: {e}")
 
-    # --- 2. KONFIGURACJA WEBFLEET ---
+    # --- 2. KONFIGURACJA WEBFLEET (BEZ ZMIAN) ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
         st.info("Wprowadź dane dostępowe do Webfleet Connect.")
         acc, user, pw = pobierz_ustawienia_api(conn)
@@ -1617,10 +1613,10 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # --- 3. ANALIZA WYNAGRODZEŃ (PEŁNA PĘTLA) ---
+    # --- 3. ANALIZA WYNAGRODZEŃ (MODYFIKACJA: DODANIE KIEROWCÓW) ---
     st.markdown("### 💰 Analiza Wynagrodzeń (Wszystkie miesiące z pliku)")
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. Ustaw ROK (Domyślny). 3. Kliknij 'Oblicz'.")
+        st.info("1. Wgraj plik Excel. 2. Ustaw ROK. 3. Kliknij 'Oblicz'.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
@@ -1644,47 +1640,41 @@ def render_admin_content(conn, wybrana_firma):
                         st.write("--- LOGI ANALIZY ---")
                         for i, nazwa_arkusza in enumerate(sheet_names):
                             pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
-                            if i > 0: time.sleep(15) 
+                            if i > 0: time.sleep(1) # Krótka pauza dla stabilności
 
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             if not start_auto: continue
                             
-                            # Tu używamy tej samej funkcji co w teście (obecnie TripReport)
-                            # Jeśli Test 3 zadziała, a Test 1 nie - będziemy musieli zmienić tę funkcję na logbook
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
                             df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                             df_place = parsuj_dataframe_plac(df_sheet)
                             
                             if df_place.empty or df_wf.empty:
-                                st.warning(f"Pominąłem {nazwa_arkusza} (brak danych)")
+                                st.warning(f"Pominąłem {nazwa_arkusza} (brak danych Webfleet lub w pliku płac)")
                                 continue
 
                             statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
                             statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
+                            
                             merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='inner')
                             
                             if not merged.empty:
-                                # Obliczamy udział
                                 total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
                                 merged['udzial'] = merged['dni_jazdy'] / total_days
                                 merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
                                 
-                                # --- ZMIANA: ZAMIAST GRUPOWAĆ, POKAZUJEMY SZCZEGÓŁY ---
-                                # Stary kod (ukrywał kierowcę):
-                                # wynik_pojazdy = merged.groupby('pojazd')['koszt_przypisany'].sum().reset_index()
-                                
-                                # Nowy kod (pokazuje kierowcę i skąd wzięła się kwota):
+                                # --- NOWA LOGIKA: SZCZEGÓŁY KIEROWCY ---
+                                # Zamiast grupować i gubić nazwiska, bierzemy szczegóły
                                 wynik_szczegolowy = merged[[
                                     'pojazd', 
                                     'kierowca_norm', 
                                     'dni_jazdy', 
-                                    'kwota_total', # Ile kierowca zarobił łącznie w miesiącu
-                                    'koszt_przypisany' # Ile z tego przypadło na to auto
+                                    'kwota_total', # Pełna wypłata kierowcy
+                                    'koszt_przypisany' # Część przypadająca na to auto
                                 ]].copy()
                                 
-                                # Zmieniamy nazwy dla czytelności
                                 wynik_szczegolowy = wynik_szczegolowy.rename(columns={
                                     'kierowca_norm': 'Kierowca',
                                     'kwota_total': 'Pełna Wypłata',
@@ -1700,29 +1690,67 @@ def render_admin_content(conn, wybrana_firma):
                         
                         if lista_wynikow_miesiecznych:
                             df_final_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True)
-                            
-                            # Sortowanie dla czytelności: Najpierw Pojazd, potem Data
+                            # Sortowanie: Pojazd -> Data
                             df_final_all = df_final_all.sort_values(by=['pojazd', 'data_ksiegowania'])
                             
                             st.session_state['temp_wynagrodzenia_all'] = df_final_all
                             st.balloons()
                             st.success(f"Przeliczono pomyślnie {len(lista_wynikow_miesiecznych)} miesięcy!")
                         else:
-                            st.error("Brak wyników.")
+                            st.error("Brak wyników do wyświetlenia.")
                             
                     except Exception as e:
-                        st.error(f"Błąd: {e}")
+                        st.error(f"Błąd analizy: {e}")
 
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
             df_calosc = st.session_state['temp_wynagrodzenia_all']
-            st.dataframe(df_calosc.style.format({'koszt_przypisany': '{:,.2f} PLN'}), use_container_width=True, hide_index=True)
+            
+            # Wyświetlanie tabeli z nowymi kolumnami
+            st.write("### Podgląd wyników (szczegółowy)")
+            st.dataframe(
+                df_calosc.style.format({
+                    'koszt_przypisany': '{:,.2f} PLN',
+                    'Pełna Wypłata': '{:,.2f} PLN'
+                }), 
+                use_container_width=True, 
+                hide_index=True
+            )
+            
             if st.button("💾 ZAPISZ WSZYSTKO DO BAZY", type="primary", use_container_width=True):
-                 # ... (tutaj kod zapisu bez zmian) ...
-                 st.success("Zapisano (symulacja).") # Skróciłem dla czytelności bloku
+                 try:
+                    # Przygotowanie danych do formatu bazy danych
+                    dane_do_bazy = pd.DataFrame()
+                    dane_do_bazy['data_transakcji'] = pd.to_datetime(df_calosc['data_ksiegowania'])
+                    dane_do_bazy['identyfikator'] = df_calosc['pojazd']
+                    dane_do_bazy['kwota_brutto'] = df_calosc['koszt_przypisany']
+                    dane_do_bazy['kwota_netto'] = df_calosc['koszt_przypisany'] # Wynagrodzenie nie ma VAT
+                    dane_do_bazy['waluta'] = 'PLN'
+                    dane_do_bazy['ilosc'] = 1
+                    
+                    # W kolumnie produkt zapisujemy też nazwisko kierowcy!
+                    dane_do_bazy['produkt'] = "Wynagrodzenie - " + df_calosc['Kierowca'].astype(str)
+                    
+                    dane_do_bazy['typ'] = 'WYNAGRODZENIE'
+                    dane_do_bazy['zrodlo'] = 'Excel Płace'
+                    dane_do_bazy['kraj'] = 'PL'
+                    dane_do_bazy['firma'] = wybrana_firma
+                    dane_do_bazy['kontrahent'] = df_calosc['Kierowca'] # Możemy tu też zapisać kierowcę
+
+                    # Zapis do SQL
+                    dane_do_bazy.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
+                    
+                    # Usunięcie starych wynagrodzeń z tych samych miesięcy, żeby nie dublować?
+                    # Na razie tylko append, ale z informacją
+                    st.success(f"Zapisano {len(dane_do_bazy)} wierszy wynagrodzeń do bazy!")
+                    time.sleep(1)
+                    st.rerun()
+                    
+                 except Exception as e:
+                    st.error(f"Błąd zapisu do bazy: {e}")
 
     st.divider()
     
-    # --- 4. SEKCJA WGRYWANIA PLIKÓW PALIWOWYCH ---
+    # --- 4. SEKCJA WGRYWANIA PLIKÓW PALIWOWYCH (BEZ ZMIAN) ---
     col_up1, col_up2 = st.columns([1, 2])
     with col_up1:
         st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy.")
@@ -1744,7 +1772,7 @@ def render_admin_content(conn, wybrana_firma):
 
     st.markdown("---")
     
-    # --- 5. STREFA NIEBEZPIECZNA ---
+    # --- 5. STREFA NIEBEZPIECZNA (BEZ ZMIAN) ---
     with st.expander("⚠️ Strefa Niebezpieczna (Reset Bazy)", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
