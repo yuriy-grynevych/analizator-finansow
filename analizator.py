@@ -1515,9 +1515,7 @@ def render_admin_content(conn, wybrana_firma):
     
     # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (BEZ ZMIAN) ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Trasy vs Dziennik)"):
-        # ... (kod diagnostyki bez zmian - skrócony dla czytelności odpowiedzi) ...
         acc, user, pw = pobierz_ustawienia_api(conn)
-        # ... reszta logiki diagnostyki ...
         st.info("Diagnostyka dostępna w pełnym kodzie.")
 
     # --- 2. KONFIGURACJA WEBFLEET (BEZ ZMIAN) ---
@@ -1533,28 +1531,27 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # --- 3. ANALIZA WYNAGRODZEŃ (Z MOŻLIWOŚCIĄ EDYCJI POJAZDÓW) ---
-    st.markdown("### 💰 Analiza Wynagrodzeń (Z edycją pojazdów)")
+    # --- 3. ANALIZA WYNAGRODZEŃ (Z EDYCJĄ POJAZDÓW) ---
+    st.markdown("### 💰 Analiza Wynagrodzeń (Edycja Pojazdów)")
     
-    # LISTA POJAZDÓW BEZ GPS (DODAJ TU INNE AUTA ELEKTRYCZNE LUB SPECJALNE)
-    DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY"] 
+    # --- TUTAJ DOPISZ SWOJE POJAZDY BEZ GPS ---
+    DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
         st.info("1. Wgraj plik Excel. 2. Kliknij 'Oblicz'. 3. W tabeli poniżej WYBIERZ POJAZD dla kierowców bez GPS.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
-            rok_analizy = st.number_input("Rok rozliczeniowy (Domyślny)", min_value=2023, max_value=2030, value=2024) 
+            rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=2025) 
             plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
 
         if plik_plac:
-            if st.button("🚀 Oblicz i Pokaż do Edycji", type="primary"):
+            if st.button("🚀 Oblicz i Edytuj", type="primary"):
                 st.session_state['temp_wynagrodzenia_all'] = None 
-                st.session_state['wszystkie_znane_pojazdy'] = DODATKOWE_POJAZDY.copy() # Reset listy
                 
                 acc, user, pw = pobierz_ustawienia_api(conn)
                 if not acc:
-                    st.error("Brak konfiguracji Webfleet! Ustaw ją wyżej.")
+                    st.error("Brak konfiguracji Webfleet!")
                 else:
                     try:
                         xls_file = pd.ExcelFile(plik_plac)
@@ -1564,68 +1561,51 @@ def render_admin_content(conn, wybrana_firma):
                         
                         unikalne_pojazdy_z_webfleet = set()
 
-                        st.write("--- LOGI ANALIZY ---")
                         for i, nazwa_arkusza in enumerate(sheet_names):
                             pask_postepu.progress((i / len(sheet_names)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
-                            if i > 0: time.sleep(0.5) 
+                            time.sleep(0.1) 
 
                             start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                             if not start_auto: continue
                             
                             df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                             
-                            # Zbieramy unikalne pojazdy z Webfleet do listy wyboru
+                            # Zbieramy unikalne pojazdy
                             if not df_wf.empty:
                                 unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
 
                             df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                             df_place = parsuj_dataframe_plac(df_sheet)
                             
-                            if df_place.empty:
-                                continue
+                            if df_place.empty: continue
 
                             df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
 
                             if not df_wf.empty:
                                 statystyki_kierowcow = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                                 statystyki_kierowcow['kierowca_norm'] = statystyki_kierowcow['kierowca'].str.upper().str.strip()
-                                
-                                # ZMIANA: how='right' -> bierzemy wszystkich z listy płac, nawet jak nie ma ich w Webfleet
+                                # Łączymy (right join), żeby zachować kierowców z płac, których nie ma w GPS
                                 merged = statystyki_kierowcow.merge(df_place, on='kierowca_norm', how='right')
                             else:
-                                # Jeśli Webfleet nic nie zwrócił (błąd lub brak danych), bierzemy samą listę płac
                                 merged = df_place.copy()
                                 merged['pojazd'] = None
                                 merged['dni_jazdy'] = 0
 
                             if not merged.empty:
-                                # Uzupełniamy braki dla kierowców bez Webfleet
                                 merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
-                                merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0) # Można wpisać np. 20 jako domyślne dni pracy
+                                merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
 
-                                # Obliczenia udziałów (jeśli kierowca jeździł wieloma autami w Webfleet)
                                 total_days = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum')
-                                # Zabezpieczenie przed dzieleniem przez zero (dla ręcznych wpisów)
                                 total_days = total_days.replace(0, 1) 
-                                
                                 merged['udzial'] = merged['dni_jazdy'] / total_days
-                                # Jeśli dni_jazdy było 0 (brak Webfleet), to udział wyjdzie 0. 
-                                # Dla ręcznego przypisania musimy założyć, że to 100% (1.0) jeśli to jedyny wpis.
-                                # Ale edycja nastąpi później, więc na razie koszt przypisany będzie 0 lub wyniknie z matematyki.
-                                
                                 merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
                                 
-                                # Jeśli pojazd to "BRAK", to koszt przypisany ustawiamy wstępnie na pełną wypłatę,
-                                # zakładając że użytkownik przypisze jedno auto.
+                                # Jeśli brak GPS, przypisujemy wstępnie 100% kosztu (do edycji)
                                 maska_brak = merged['pojazd'] == "BRAK (Wybierz)"
                                 merged.loc[maska_brak, 'koszt_przypisany'] = merged.loc[maska_brak, 'kwota_total']
 
                                 wynik_szczegolowy = merged[[
-                                    'pojazd', 
-                                    'kierowca_norm', 
-                                    'dni_jazdy', 
-                                    'kwota_total', 
-                                    'koszt_przypisany' 
+                                    'pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany'
                                 ]].copy()
                                 
                                 wynik_szczegolowy = wynik_szczegolowy.rename(columns={
@@ -1633,10 +1613,8 @@ def render_admin_content(conn, wybrana_firma):
                                     'kwota_total': 'Pełna Wypłata',
                                     'dni_jazdy': 'Dni Webfleet'
                                 })
-
                                 wynik_szczegolowy['data_ksiegowania'] = stop_auto
                                 wynik_szczegolowy['miesiac_opis'] = nazwa_arkusza
-                                
                                 lista_wynikow_miesiecznych.append(wynik_szczegolowy)
                             
                         pask_postepu.empty()
@@ -1647,93 +1625,89 @@ def render_admin_content(conn, wybrana_firma):
                             
                             st.session_state['temp_wynagrodzenia_all'] = df_final_all
                             
-                            # Łączymy pojazdy z Webfleet i te dodatkowe
+                            # Tworzymy pełną listę pojazdów do wyboru
                             wszystkie = sorted(list(unikalne_pojazdy_z_webfleet.union(set(DODATKOWE_POJAZDY))))
-                            if "BRAK (Wybierz)" not in wszystkie:
-                                wszystkie.insert(0, "BRAK (Wybierz)")
+                            # Upewniamy się, że "BRAK (Wybierz)" jest na początku
+                            if "BRAK (Wybierz)" in wszystkie: wszystkie.remove("BRAK (Wybierz)")
+                            wszystkie.insert(0, "BRAK (Wybierz)")
+                            
                             st.session_state['wszystkie_znane_pojazdy'] = wszystkie
-
-                            st.success(f"Wczytano {len(df_final_all)} wierszy. Teraz możesz edytować braki!")
+                            st.success(f"Przeliczono {len(df_final_all)} wierszy. Możesz teraz edytować pojazdy poniżej.")
                         else:
-                            st.error("Brak wyników do wyświetlenia.")
+                            st.error("Brak wyników.")
                             
                     except Exception as e:
                         st.error(f"Błąd analizy: {e}")
 
-        # --- SEKCJA EDYCJI I ZAPISU ---
+        # --- GŁÓWNA SEKCJA EDYCJI (Wyświetla się ZAWSZE, gdy są dane w session_state) ---
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
             st.divider()
-            st.markdown("### ✏️ Edycja i Zatwierdzanie")
-            st.info("Kierowcy, których nie wykryto w Webfleet (np. elektryki), mają status 'BRAK (Wybierz)'. Wybierz im właściwy pojazd z listy.")
+            st.markdown("### ✏️ Edycja Pojazdów i Zapis")
+            st.caption("Kliknij w kolumnę 'Pojazd', aby zmienić przypisanie (np. dla elektryków).")
 
             df_to_edit = st.session_state['temp_wynagrodzenia_all']
-            lista_opcji_pojazdow = st.session_state.get('wszystkie_znane_pojazdy', DODATKOWE_POJAZDY)
+            lista_opcji = st.session_state.get('wszystkie_znane_pojazdy', DODATKOWE_POJAZDY)
 
-            # EDYTOR DANYCH
+            # --- KLUCZOWA ZMIANA: st.data_editor ZAMIAST st.dataframe ---
             edited_df = st.data_editor(
                 df_to_edit,
                 column_config={
                     "pojazd": st.column_config.SelectboxColumn(
-                        "Pojazd (Wybierz)",
-                        help="Wybierz pojazd z listy",
+                        "Pojazd",
+                        help="Wybierz właściwy pojazd",
                         width="medium",
-                        options=lista_opcji_pojazdow,
+                        options=lista_opcji,
                         required=True
                     ),
                     "Pełna Wypłata": st.column_config.NumberColumn(
-                        "Pełna Wypłata",
-                        format="%.2f PLN",
-                        disabled=True # Blokujemy edycję kwoty pobranej z pliku
+                        "Pełna Wypłata", format="%.2f PLN", disabled=True
                     ),
                     "koszt_przypisany": st.column_config.NumberColumn(
-                        "Koszt Przypisany",
-                        format="%.2f PLN",
-                        help="Jeśli kierowca jeździł jednym autem, to ta kwota powinna być równa Pełnej Wypłacie."
+                        "Koszt Przypisany", format="%.2f PLN"
                     ),
-                    "data_ksiegowania": st.column_config.DateColumn("Data Księgowania"),
+                    "data_ksiegowania": st.column_config.DateColumn("Data", format="YYYY-MM-DD", disabled=True),
+                    "miesiac_opis": st.column_config.TextColumn("Miesiąc", disabled=True),
+                    "Kierowca": st.column_config.TextColumn("Kierowca", disabled=True),
+                    "Dni Webfleet": st.column_config.NumberColumn("Dni GPS", disabled=True),
                 },
                 hide_index=True,
                 use_container_width=True,
                 num_rows="dynamic",
-                key="editor_wynagrodzen"
+                key="editor_wynagrodzen_main"
             )
             
-            col_save1, col_save2 = st.columns([1,1])
-            with col_save1:
-                st.write(f"Liczba wierszy: {len(edited_df)}")
+            col_s1, col_s2 = st.columns([1,1])
+            with col_s1:
+                st.info(f"Edytujesz {len(edited_df)} wierszy.")
             
-            with col_save2:
-                if st.button("💾 ZAPISZ ZEDYTUOWANE DO BAZY", type="primary", use_container_width=True):
+            with col_s2:
+                if st.button("💾 ZAPISZ DO BAZY", type="primary", use_container_width=True):
                     try:
-                        # Sprawdzenie czy nie ma "BRAK (Wybierz)"
+                        # Sprawdzenie czy użytkownik zmienił "BRAK" na konkretne auto
                         if edited_df['pojazd'].astype(str).str.contains("BRAK").any():
-                            st.warning("⚠️ Uwaga: Nadal masz wiersze z pojazdem 'BRAK'. Zostaną zapisane, ale nie przypiszą się do konkretnego auta w raportach.")
+                            st.warning("⚠️ Niektóre wiersze nadal mają pojazd 'BRAK'.")
                         
                         dane_do_bazy = pd.DataFrame()
                         dane_do_bazy['data_transakcji'] = pd.to_datetime(edited_df['data_ksiegowania'])
-                        
-                        # Tutaj używamy już zedytowanej kolumny 'pojazd'
                         dane_do_bazy['identyfikator'] = edited_df['pojazd'] 
-                        
                         dane_do_bazy['kwota_brutto'] = pd.to_numeric(edited_df['koszt_przypisany'])
                         dane_do_bazy['kwota_netto'] = pd.to_numeric(edited_df['koszt_przypisany'])
                         dane_do_bazy['waluta'] = 'PLN'
                         dane_do_bazy['ilosc'] = 1
                         dane_do_bazy['produkt'] = "Wynagrodzenie - " + edited_df['Kierowca'].astype(str)
                         dane_do_bazy['typ'] = 'WYNAGRODZENIE'
-                        dane_do_bazy['zrodlo'] = 'Excel Płace + Edycja'
+                        dane_do_bazy['zrodlo'] = 'Excel Płace'
                         dane_do_bazy['kraj'] = 'PL'
                         dane_do_bazy['firma'] = wybrana_firma
                         dane_do_bazy['kontrahent'] = edited_df['Kierowca']
 
                         dane_do_bazy.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
                         
-                        st.success(f"Zapisano {len(dane_do_bazy)} wierszy wynagrodzeń do bazy!")
+                        st.success("✅ Pomyślnie zapisano dane!")
                         time.sleep(1.5)
                         st.rerun()
-                        
                     except Exception as e:
-                        st.error(f"Błąd zapisu do bazy: {e}")
+                        st.error(f"Błąd zapisu: {e}")
 
     st.divider()
     
@@ -1759,7 +1733,7 @@ def render_admin_content(conn, wybrana_firma):
 
     st.markdown("---")
     
-    # --- 5. STREFA NIEBEZPIECZNA (BEZ ZMIAN) ---
+    # --- 5. STREFA NIEBEZPIECZNA ---
     with st.expander("⚠️ Strefa Niebezpieczna (Reset Bazy)", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
