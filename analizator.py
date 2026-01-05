@@ -1513,12 +1513,12 @@ def to_excel_contractors(df_analiza_raw):
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
-    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI (BEZ ZMIAN) ---
+    # --- 1. PRZYCISK GŁĘBOKIEJ DIAGNOSTYKI ---
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Trasy vs Dziennik)"):
         acc, user, pw = pobierz_ustawienia_api(conn)
         st.info("Diagnostyka dostępna w pełnym kodzie.")
 
-    # --- 2. KONFIGURACJA WEBFLEET (BEZ ZMIAN) ---
+    # --- 2. KONFIGURACJA WEBFLEET ---
     with st.expander("📡 Konfiguracja Webfleet API", expanded=False):
         st.info("Wprowadź dane dostępowe do Webfleet Connect.")
         acc, user, pw = pobierz_ustawienia_api(conn)
@@ -1538,7 +1538,7 @@ def render_admin_content(conn, wybrana_firma):
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. POJAWI SIĘ LISTA MIESIĘCY -> Wybierz je. 3. Kliknij 'Oblicz'. 4. Edytuj pojazdy.")
+        st.info("1. Wgraj plik Excel. 2. Wybierz z listy miesiące do przeliczenia. 3. Kliknij przycisk. 4. Edytuj braki.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
@@ -1548,22 +1548,23 @@ def render_admin_content(conn, wybrana_firma):
         # --- LOGIKA WYBORU MIESIĘCY ---
         if plik_plac:
             try:
-                # Najpierw czytamy same nazwy arkuszy
+                # 1. Czytamy strukturę pliku (arkusze)
                 xls_file = pd.ExcelFile(plik_plac)
                 wszystkie_arkusze = xls_file.sheet_names
                 
-                st.success(f"📂 Wczytano plik. Znaleziono arkusze: {', '.join(wszystkie_arkusze)}")
+                st.success(f"📂 Plik wczytany. Znaleziono {len(wszystkie_arkusze)} arkuszy.")
                 
-                # TU JEST TO CZEGO SZUKASZ - WYBÓR MIESIĘCY
+                # 2. WYBÓR MIESIĘCY (MULTIOSELECT)
                 wybrane_arkusze = st.multiselect(
-                    "📅 Wybierz miesiące do przeliczenia:",
+                    "📅 Zaznacz miesiące (arkusze), które chcesz przeliczyć:",
                     options=wszystkie_arkusze,
-                    default=wszystkie_arkusze # Domyślnie zaznacza wszystkie
+                    default=wszystkie_arkusze # Domyślnie zaznaczone wszystkie, możesz odznaczyć 'x'
                 )
 
-                if st.button("🚀 Oblicz WYBRANE Miesiące", type="primary"):
+                # 3. PRZYCISK URUCHAMIAJĄCY
+                if st.button("🚀 Oblicz TYLKO Wybrane Miesiące", type="primary"):
                     if not wybrane_arkusze:
-                        st.warning("Musisz zaznaczyć przynajmniej jeden miesiąc!")
+                        st.warning("Nie zaznaczyłeś żadnego miesiąca!")
                     else:
                         st.session_state['temp_wynagrodzenia_all'] = None 
                         
@@ -1577,14 +1578,14 @@ def render_admin_content(conn, wybrana_firma):
                                 
                                 unikalne_pojazdy_z_webfleet = set()
 
-                                # Pętla tylko po WYBRANYCH arkuszach
+                                # Pętla leci tylko po tym, co wybrałeś w multiselect
                                 for i, nazwa_arkusza in enumerate(wybrane_arkusze):
                                     pask_postepu.progress((i / len(wybrane_arkusze)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
                                     time.sleep(0.1) 
 
                                     start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                                     if not start_auto: 
-                                        st.warning(f"Pijam arkusz '{nazwa_arkusza}' - nie rozpoznano daty.")
+                                        st.warning(f"Pominąłem '{nazwa_arkusza}' - nie rozpoznano daty w nazwie.")
                                         continue
                                     
                                     df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
@@ -1592,6 +1593,7 @@ def render_admin_content(conn, wybrana_firma):
                                     if not df_wf.empty:
                                         unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
 
+                                    # Czytamy konkretny arkusz
                                     df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
                                     df_place = parsuj_dataframe_plac(df_sheet)
                                     
@@ -1660,7 +1662,7 @@ def render_admin_content(conn, wybrana_firma):
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
             st.divider()
             st.markdown("### ✏️ Edycja Pojazdów i Zapis")
-            st.caption("Kliknij w kolumnę 'Pojazd', aby zmienić przypisanie (np. dla elektryków).")
+            st.caption("Możesz zmienić pojazd dla kierowców (np. na WPR0103U).")
 
             df_to_edit = st.session_state['temp_wynagrodzenia_all']
             lista_opcji = st.session_state.get('wszystkie_znane_pojazdy', DODATKOWE_POJAZDY)
@@ -1726,7 +1728,7 @@ def render_admin_content(conn, wybrana_firma):
 
     st.divider()
     
-    # --- 4. SEKCJA WGRYWANIA PLIKÓW PALIWOWYCH (BEZ ZMIAN) ---
+    # --- 4. SEKCJA PALIWOWA (BEZ ZMIAN) ---
     col_up1, col_up2 = st.columns([1, 2])
     with col_up1:
         st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy.")
