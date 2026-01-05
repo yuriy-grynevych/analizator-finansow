@@ -1534,7 +1534,6 @@ def render_admin_content(conn, wybrana_firma):
     # 3. ANALIZA WYNAGRODZEŃ (Z KOLUMNĄ EURO I WYBOREM MIESIĘCY)
     st.markdown("### 💰 Analiza Wynagrodzeń (Podgląd EUR + Edycja)")
     
-    # --- TWOJE POJAZDY BEZ GPS ---
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
@@ -1612,13 +1611,12 @@ def render_admin_content(conn, wybrana_firma):
                                         maska_brak = merged['pojazd'] == "BRAK (Wybierz)"
                                         merged.loc[maska_brak, 'koszt_przypisany'] = merged.loc[maska_brak, 'kwota_total']
                                         
-                                        # NOWA KOLUMNA: Szacunkowe EURO dla podglądu
                                         merged['koszt_eur_est'] = merged['koszt_przypisany'] / kurs_eur
 
                                         wynik = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
                                         wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
                                         
-                                        # --- PRZYPISANIE DATY DLA TEGO KONKRETNEGO MIESIĄCA ---
+                                        # PRZYPISANIE DATY
                                         wynik['data_ksiegowania'] = stop_auto
                                         wynik['miesiac_opis'] = nazwa_arkusza
                                         
@@ -1627,7 +1625,11 @@ def render_admin_content(conn, wybrana_firma):
                                 pask_postepu.empty()
                                 
                                 if lista_wynikow_miesiecznych:
-                                    df_all = pd.concat(lista_wynikow_miesiecznych).sort_values(by=['miesiac_opis', 'Kierowca'])
+                                    # -----------------------------------------------------------
+                                    # TU BYŁ BŁĄD. DODAŁEM ignore_index=True ABY NAPRAWIĆ DATY
+                                    # -----------------------------------------------------------
+                                    df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['miesiac_opis', 'Kierowca'])
+                                    
                                     st.session_state['temp_wynagrodzenia_all'] = df_all
                                     
                                     pojazdy_all = sorted(list(unikalne_pojazdy_z_webfleet.union(set(DODATKOWE_POJAZDY))))
@@ -1657,7 +1659,6 @@ def render_admin_content(conn, wybrana_firma):
                     "pojazd": st.column_config.SelectboxColumn("Pojazd", options=opcje, required=True, width="medium"),
                     "Pełna Wypłata": st.column_config.NumberColumn("Pełna (PLN)", format="%.2f zł", disabled=True),
                     "koszt_przypisany": st.column_config.NumberColumn("Koszt (PLN)", format="%.2f zł"),
-                    # PODGLĄD W EURO
                     "koszt_eur_est": st.column_config.NumberColumn("Koszt (EUR) [Est]", format="%.2f €", disabled=True, help=f"Kurs ok. {current_rate:.2f}"),
                     "data_ksiegowania": st.column_config.DateColumn("Data"),
                     "Kierowca": st.column_config.TextColumn("Kierowca", disabled=True),
@@ -1672,14 +1673,11 @@ def render_admin_content(conn, wybrana_firma):
             with col_s2:
                 if st.button("💾 ZAPISZ DO BAZY", type="primary", use_container_width=True):
                     try:
-                        # --- POPRAWKA: Bezpieczne tworzenie DataFrame do zapisu ---
-                        # Tworzymy kopię, aby zachować spójność wierszy (Data vs Kierowca vs Kwota)
                         db_df = edited.copy()
                         
-                        # Wymuszamy konwersję na datetime, aby SQL poprawnie zinterpretował datę
+                        # KONWERSJA DATY DLA PEWNOŚCI
                         db_df['data_transakcji'] = pd.to_datetime(db_df['data_ksiegowania'])
                         
-                        # Mapujemy pozostałe kolumny bezpośrednio z kopii
                         db_df['identyfikator'] = db_df['pojazd']
                         db_df['kwota_brutto'] = pd.to_numeric(db_df['koszt_przypisany'], errors='coerce').fillna(0)
                         db_df['kwota_netto'] = db_df['kwota_brutto']
@@ -1692,12 +1690,10 @@ def render_admin_content(conn, wybrana_firma):
                         db_df['firma'] = wybrana_firma
                         db_df['kontrahent'] = db_df['Kierowca']
 
-                        # Wybieramy tylko kolumny potrzebne w bazie
                         cols_to_save = ['data_transakcji', 'identyfikator', 'kwota_netto', 'kwota_brutto', 
                                         'waluta', 'ilosc', 'produkt', 'typ', 'zrodlo', 'kraj', 'firma', 'kontrahent']
                         db_df = db_df[cols_to_save]
 
-                        # Zapis do SQL
                         db_df.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
                         st.success("✅ Zapisano pomyślnie!")
                         time.sleep(1.5); st.rerun()
@@ -1706,7 +1702,7 @@ def render_admin_content(conn, wybrana_firma):
 
     st.divider()
     
-    # 4. WGRYWANIE PALIWA (BEZ ZMIAN)
+    # 4. WGRYWANIE PALIWA
     col_up1, col_up2 = st.columns([1, 2])
     with col_up1:
         st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy.")
@@ -1728,7 +1724,6 @@ def render_admin_content(conn, wybrana_firma):
 
     st.markdown("---")
     
-    # --- 5. STREFA NIEBEZPIECZNA (TUTAJ PRZYWRÓCIŁEM PODZIAŁ) ---
     with st.expander("⚠️ Strefa Niebezpieczna (Reset Bazy)", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
