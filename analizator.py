@@ -1617,8 +1617,11 @@ def render_admin_content(conn, wybrana_firma):
 
                                         wynik = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
                                         wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
+                                        
+                                        # --- PRZYPISANIE DATY DLA TEGO KONKRETNEGO MIESIĄCA ---
                                         wynik['data_ksiegowania'] = stop_auto
                                         wynik['miesiac_opis'] = nazwa_arkusza
+                                        
                                         lista_wynikow_miesiecznych.append(wynik)
                                     
                                 pask_postepu.empty()
@@ -1669,21 +1672,32 @@ def render_admin_content(conn, wybrana_firma):
             with col_s2:
                 if st.button("💾 ZAPISZ DO BAZY", type="primary", use_container_width=True):
                     try:
-                        # Zapisujemy w PLN. Raport Rentowności przeliczy na EUR precyzyjnie.
-                        db_df = pd.DataFrame()
-                        db_df['data_transakcji'] = pd.to_datetime(edited['data_ksiegowania'])
-                        db_df['identyfikator'] = edited['pojazd']
-                        db_df['kwota_brutto'] = pd.to_numeric(edited['koszt_przypisany'])
-                        db_df['kwota_netto'] = pd.to_numeric(edited['koszt_przypisany'])
+                        # --- POPRAWKA: Bezpieczne tworzenie DataFrame do zapisu ---
+                        # Tworzymy kopię, aby zachować spójność wierszy (Data vs Kierowca vs Kwota)
+                        db_df = edited.copy()
+                        
+                        # Wymuszamy konwersję na datetime, aby SQL poprawnie zinterpretował datę
+                        db_df['data_transakcji'] = pd.to_datetime(db_df['data_ksiegowania'])
+                        
+                        # Mapujemy pozostałe kolumny bezpośrednio z kopii
+                        db_df['identyfikator'] = db_df['pojazd']
+                        db_df['kwota_brutto'] = pd.to_numeric(db_df['koszt_przypisany'], errors='coerce').fillna(0)
+                        db_df['kwota_netto'] = db_df['kwota_brutto']
                         db_df['waluta'] = 'PLN'
                         db_df['ilosc'] = 1
-                        db_df['produkt'] = "Wynagrodzenie - " + edited['Kierowca'].astype(str)
+                        db_df['produkt'] = "Wynagrodzenie - " + db_df['Kierowca'].astype(str)
                         db_df['typ'] = 'WYNAGRODZENIE'
                         db_df['zrodlo'] = 'Excel Płace'
                         db_df['kraj'] = 'PL'
                         db_df['firma'] = wybrana_firma
-                        db_df['kontrahent'] = edited['Kierowca']
+                        db_df['kontrahent'] = db_df['Kierowca']
 
+                        # Wybieramy tylko kolumny potrzebne w bazie
+                        cols_to_save = ['data_transakcji', 'identyfikator', 'kwota_netto', 'kwota_brutto', 
+                                        'waluta', 'ilosc', 'produkt', 'typ', 'zrodlo', 'kraj', 'firma', 'kontrahent']
+                        db_df = db_df[cols_to_save]
+
+                        # Zapis do SQL
                         db_df.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
                         st.success("✅ Zapisano pomyślnie!")
                         time.sleep(1.5); st.rerun()
