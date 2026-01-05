@@ -788,7 +788,18 @@ def wyczysc_duplikaty(conn):
         );
         """))
         s.commit()
-
+def wyczysc_wynagrodzenia(conn):
+    st.write("Usuwanie danych o wynagrodzeniach...")
+    try:
+        with conn.session as s:
+            # Usuwamy tylko rekordy gdzie typ to 'WYNAGRODZENIE'
+            s.execute(text(f"DELETE FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} WHERE typ = 'WYNAGRODZENIE'"))
+            s.commit()
+        st.success("✅ Pomyślnie usunięto wszystkie wynagrodzenia z bazy.")
+        time.sleep(1)
+        st.rerun()
+    except Exception as e:
+        st.error(f"Błąd podczas usuwania wynagrodzeń: {e}")
 def pobierz_dane_z_bazy(conn, data_start, data_stop, wybrana_firma, typ=None):
     params = {"data_start": data_start, "data_stop": data_stop, "firma": wybrana_firma}
     base_query = f"""
@@ -1531,7 +1542,7 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # 3. ANALIZA WYNAGRODZEŃ (Z KOLUMNĄ EURO I WYBOREM MIESIĘCY)
+    # 3. ANALIZA WYNAGRODZEŃ
     st.markdown("### 💰 Analiza Wynagrodzeń (Podgląd EUR + Edycja)")
     
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
@@ -1564,8 +1575,6 @@ def render_admin_content(conn, wybrana_firma):
                         st.session_state['temp_wynagrodzenia_all'] = None 
                         
                         acc, user, pw = pobierz_ustawienia_api(conn)
-                        
-                        # POBIERAMY KURS EUR DO PODGLĄDU
                         kurs_eur = pobierz_kurs_eur_pln()
                         if not kurs_eur: kurs_eur = 4.30
                         st.session_state['current_eur_rate'] = kurs_eur
@@ -1616,7 +1625,6 @@ def render_admin_content(conn, wybrana_firma):
                                         wynik = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
                                         wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
                                         
-                                        # PRZYPISANIE DATY
                                         wynik['data_ksiegowania'] = stop_auto
                                         wynik['miesiac_opis'] = nazwa_arkusza
                                         
@@ -1625,9 +1633,7 @@ def render_admin_content(conn, wybrana_firma):
                                 pask_postepu.empty()
                                 
                                 if lista_wynikow_miesiecznych:
-                                    # -----------------------------------------------------------
-                                    # TU BYŁ BŁĄD. DODAŁEM ignore_index=True ABY NAPRAWIĆ DATY
-                                    # -----------------------------------------------------------
+                                    # Łączenie z ignore_index=True (NAPRAWA DAT)
                                     df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['miesiac_opis', 'Kierowca'])
                                     
                                     st.session_state['temp_wynagrodzenia_all'] = df_all
@@ -1674,10 +1680,7 @@ def render_admin_content(conn, wybrana_firma):
                 if st.button("💾 ZAPISZ DO BAZY", type="primary", use_container_width=True):
                     try:
                         db_df = edited.copy()
-                        
-                        # KONWERSJA DATY DLA PEWNOŚCI
                         db_df['data_transakcji'] = pd.to_datetime(db_df['data_ksiegowania'])
-                        
                         db_df['identyfikator'] = db_df['pojazd']
                         db_df['kwota_brutto'] = pd.to_numeric(db_df['koszt_przypisany'], errors='coerce').fillna(0)
                         db_df['kwota_netto'] = db_df['kwota_brutto']
@@ -1724,16 +1727,20 @@ def render_admin_content(conn, wybrana_firma):
 
     st.markdown("---")
     
+    # --- 5. STREFA NIEBEZPIECZNA (ZAKTUALIZOWANA) ---
     with st.expander("⚠️ Strefa Niebezpieczna (Reset Bazy)", expanded=False):
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("1. Wyczyść transakcje"):
+            if st.button("1. Wyczyść WSZYSTKO (Transakcje + Płace)"):
                 setup_database(conn)
-                st.success("Gotowe.")
+                st.success("Wyczyszczono całą tabelę transakcji.")
         with c2:
-            if st.button("2. Wyczyść pliki"):
+            if st.button("2. Wyczyść PLIKI"):
                 setup_file_database(conn)
-                st.success("Gotowe.")
+                st.success("Wyczyszczono pliki.")
+        with c3:
+            if st.button("3. Wyczyść TYLKO Wynagrodzenia"):
+                wyczysc_wynagrodzenia(conn)
 def render_raport_content(conn, wybrana_firma):
     st.subheader("Raport Paliw i Opłat")
     if wybrana_firma == "UNIX-TRANS":
