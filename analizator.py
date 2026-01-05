@@ -1532,7 +1532,8 @@ def render_admin_content(conn, wybrana_firma):
     st.divider()
 
     # --- 3. ANALIZA WYNAGRODZEŃ (Z WYBOREM MIESIĘCY I EDYCJĄ) ---
-    st.markdown("### 💰 Analiza Wynagrodzeń")
+    # ZMIENIONY TYTUŁ, ŻEBYŚ WIDZIAŁ CZY KOD WSZEDŁ
+    st.markdown("### 💰 Analiza Wynagrodzeń (NOWA WERSJA V2)")
     
     # --- TUTAJ DOPISZ SWOJE POJAZDY BEZ GPS ---
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
@@ -1552,13 +1553,13 @@ def render_admin_content(conn, wybrana_firma):
                 xls_file = pd.ExcelFile(plik_plac)
                 wszystkie_arkusze = xls_file.sheet_names
                 
-                st.success(f"📂 Plik wczytany. Znaleziono {len(wszystkie_arkusze)} arkuszy.")
+                st.success(f"📂 Wczytano plik. Znaleziono {len(wszystkie_arkusze)} arkuszy.")
                 
-                # 2. WYBÓR MIESIĘCY (MULTIOSELECT)
+                # 2. WYBÓR MIESIĘCY (MULTIOSELECT) - TO SIĘ MUSI POJAWIĆ POD PLIKIEM
                 wybrane_arkusze = st.multiselect(
                     "📅 Zaznacz miesiące (arkusze), które chcesz przeliczyć:",
                     options=wszystkie_arkusze,
-                    default=wszystkie_arkusze # Domyślnie zaznaczone wszystkie, możesz odznaczyć 'x'
+                    default=wszystkie_arkusze # Domyślnie zaznaczone wszystkie
                 )
 
                 # 3. PRZYCISK URUCHAMIAJĄCY
@@ -1728,7 +1729,7 @@ def render_admin_content(conn, wybrana_firma):
 
     st.divider()
     
-    # --- 4. SEKCJA PALIWOWA (BEZ ZMIAN) ---
+    # --- 4. SEKCJA WGRYWANIA PLIKÓW PALIWOWYCH (BEZ ZMIAN) ---
     col_up1, col_up2 = st.columns([1, 2])
     with col_up1:
         st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy.")
