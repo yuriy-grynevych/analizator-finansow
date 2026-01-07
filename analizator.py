@@ -1678,49 +1678,49 @@ def render_admin_content(conn, wybrana_firma):
             col_s1, col_s2 = st.columns([1,1])
             with col_s2:
                 if st.button("💾 ZAPISZ DO BAZY", type="primary", use_container_width=True):
-                try:
-                    db_df = edited.copy()
-                    db_df['data_transakcji'] = pd.to_datetime(db_df['data_ksiegowania'])
-                    db_df['identyfikator'] = db_df['pojazd']
-                    db_df['kwota_brutto'] = pd.to_numeric(db_df['koszt_przypisany'], errors='coerce').fillna(0)
-                    db_df['kwota_netto'] = db_df['kwota_brutto']
-                    db_df['waluta'] = 'PLN'
-                    db_df['ilosc'] = 1
-                    db_df['produkt'] = "Wynagrodzenie - " + db_df['Kierowca'].astype(str)
-                    db_df['typ'] = 'WYNAGRODZENIE'
-                    db_df['zrodlo'] = 'Excel Płace'
-                    db_df['kraj'] = 'PL'
-                    db_df['kontrahent'] = db_df['Kierowca']
-
-                    # --- POPRAWKA: Dynamiczne przypisywanie firmy ---
-                    def ustal_firme_dla_wynagrodzenia(row):
-                        p = str(row['pojazd']).upper().replace(" ", "").replace("-", "")
-                        
-                        # 1. Sprawdź czy jest w konfiguracji UNIX
-                        if p in UNIX_FLOTA_CONFIG:
-                            return 'UNIX-TRANS'
-                        
-                        # 2. Sprawdź wyjątki nazewnicze
-                        if 'TRUCK' in p and 'OSOBOWY' in p:
-                            return 'UNIX-TRANS'
-                        if 'KACPER' in p:
-                            return 'UNIX-TRANS'
-
-                        # 3. Jeśli nie znaleziono w Unix, przypisz do HOLIER
-                        return 'HOLIER'
-
-                    db_df['firma'] = db_df.apply(ustal_firme_dla_wynagrodzenia, axis=1)
-                    # ------------------------------------------------
-
-                    cols_to_save = ['data_transakcji', 'identyfikator', 'kwota_netto', 'kwota_brutto', 
-                                    'waluta', 'ilosc', 'produkt', 'typ', 'zrodlo', 'kraj', 'firma', 'kontrahent']
-                    db_df = db_df[cols_to_save]
-
-                    db_df.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
-                    st.success("✅ Zapisano pomyślnie z podziałem na firmy!")
-                    time.sleep(1.5); st.rerun()
-                except Exception as e:
-                    st.error(f"Błąd zapisu: {e}")
+                    try:
+                        db_df = edited.copy()
+                        db_df['data_transakcji'] = pd.to_datetime(db_df['data_ksiegowania'])
+                        db_df['identyfikator'] = db_df['pojazd']
+                        db_df['kwota_brutto'] = pd.to_numeric(db_df['koszt_przypisany'], errors='coerce').fillna(0)
+                        db_df['kwota_netto'] = db_df['kwota_brutto']
+                        db_df['waluta'] = 'PLN'
+                        db_df['ilosc'] = 1
+                        db_df['produkt'] = "Wynagrodzenie - " + db_df['Kierowca'].astype(str)
+                        db_df['typ'] = 'WYNAGRODZENIE'
+                        db_df['zrodlo'] = 'Excel Płace'
+                        db_df['kraj'] = 'PL'
+                        db_df['kontrahent'] = db_df['Kierowca']
+    
+                        # --- POPRAWKA: Dynamiczne przypisywanie firmy ---
+                        def ustal_firme_dla_wynagrodzenia(row):
+                            p = str(row['pojazd']).upper().replace(" ", "").replace("-", "")
+                            
+                            # 1. Sprawdź czy jest w konfiguracji UNIX
+                            if p in UNIX_FLOTA_CONFIG:
+                                return 'UNIX-TRANS'
+                            
+                            # 2. Sprawdź wyjątki nazewnicze
+                            if 'TRUCK' in p and 'OSOBOWY' in p:
+                                return 'UNIX-TRANS'
+                            if 'KACPER' in p:
+                                return 'UNIX-TRANS'
+    
+                            # 3. Jeśli nie znaleziono w Unix, przypisz do HOLIER
+                            return 'HOLIER'
+    
+                        db_df['firma'] = db_df.apply(ustal_firme_dla_wynagrodzenia, axis=1)
+                        # ------------------------------------------------
+    
+                        cols_to_save = ['data_transakcji', 'identyfikator', 'kwota_netto', 'kwota_brutto', 
+                                        'waluta', 'ilosc', 'produkt', 'typ', 'zrodlo', 'kraj', 'firma', 'kontrahent']
+                        db_df = db_df[cols_to_save]
+    
+                        db_df.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
+                        st.success("✅ Zapisano pomyślnie z podziałem na firmy!")
+                        time.sleep(1.5); st.rerun()
+                    except Exception as e:
+                        st.error(f"Błąd zapisu: {e}")
     st.divider()
     
     # 4. WGRYWANIE PALIWA
