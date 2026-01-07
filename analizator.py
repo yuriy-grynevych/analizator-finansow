@@ -2061,7 +2061,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                 final = pd.concat([df_przychody, df_koszty_paliwo, df_koszty_wynagr, df_koszty_subiekt, df_klienci], axis=1).fillna(0)
                 
                 # Usuwamy śmieci z indeksu
-                for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA"]:
+                for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER"]:
                     final = final[~final.index.astype(str).str.contains(bad, case=False, na=False)]
                 
                 # Obliczamy ZYSK
