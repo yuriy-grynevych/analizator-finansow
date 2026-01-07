@@ -2199,9 +2199,11 @@ def render_rentownosc_content(conn, wybrana_firma):
                     details.append(baza_view)
 
             if details:
-                full_details = pd.concat(details).sort_values(by='Data', ascending=False)
                 
-                # Funkcja kolorująca
+                # Dodałem .reset_index(drop=True) na końcu
+                full_details = pd.concat(details).sort_values(by='Data', ascending=False).reset_index(drop=True)
+                
+                # Funkcja kolorująca (opcjonalnie, jeśli używasz mapowania lambda bezpośrednio to ok)
                 def highlight_rows(val):
                     color = '#e6fffa' if val > 0 else '#fff5f5' # Zielony / Czerwony (tło)
                     return f'background-color: {color}'
