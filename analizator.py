@@ -1438,33 +1438,51 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
 def to_excel_extended(df_summary, df_subiekt_raw, df_fuel_raw):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # --- ARKUSZ PODSUMOWANIE ---
         summary_to_write = df_summary.reset_index().rename(columns={'index': 'Pojazd'})
         summary_to_write.insert(0, 'Lp.', range(1, 1 + len(summary_to_write)))
-        if 'Główny Kontrahent' in summary_to_write.columns:
-            cols = list(summary_to_write.columns)
-            cols.remove('Główny Kontrahent')
-            cols.insert(2, 'Główny Kontrahent')
-            summary_to_write = summary_to_write[cols]
+        
+        # Uporządkowanie kolumn w Excelu (jeśli istnieją)
+        cols_order = [
+            'Lp.', 'Pojazd', 'Kontrahent', 
+            'PRZYCHOD_EUR', 'PRZYCHOD_NETTO_EUR', 'VAT_PRZYCHOD_EUR',
+            'KOSZT_PALIWO_EUR', 'KOSZT_PALIWO_NETTO_EUR', 'VAT_PALIWO_EUR',
+            'KOSZT_INNE_EUR', 'KOSZT_INNE_NETTO_EUR', 'VAT_INNE_EUR',
+            'KOSZT_KIEROWCA_EUR', 
+            'VAT_BILANS_EUR', 'ZYSK_EUR'
+        ]
+        # Wybieramy tylko te, które faktycznie są w DataFrame
+        cols_existing = [c for c in cols_order if c in summary_to_write.columns]
+        # Dodajemy resztę, jeśli jakieś są (np. specyficzne dla debugowania)
+        cols_rest = [c for c in summary_to_write.columns if c not in cols_existing]
+        
+        summary_to_write = summary_to_write[cols_existing + cols_rest]
         summary_to_write.to_excel(writer, sheet_name='Podsumowanie', index=False)
         
+        # --- ARKUSZE SZCZEGÓŁOWE (BEZ ZMIAN LOGICZNYCH, TYLKO FORMAT) ---
         pojazdy_subiekt = set()
         if df_subiekt_raw is not None and not df_subiekt_raw.empty:
             pojazdy_subiekt = set(df_subiekt_raw['pojazd_clean'].unique())
         pojazdy_paliwo = set()
         if df_fuel_raw is not None and not df_fuel_raw.empty:
             pojazdy_paliwo = set(df_fuel_raw['identyfikator_clean'].unique())
+            
         wszystkie_pojazdy = sorted(list(pojazdy_subiekt.union(pojazdy_paliwo)))
         wszystkie_pojazdy = [p for p in wszystkie_pojazdy if not czy_zakazany_pojazd_global(p)]
         
         for pojazd in wszystkie_pojazdy:
             safe_name = re.sub(r'[\\/*?:\[\]]', '', str(pojazd))[:30]
             if not safe_name: safe_name = "Unknown"
+            
             dfs_to_concat = []
+            
+            # Dane z Subiekta
             if df_subiekt_raw is not None and not df_subiekt_raw.empty:
                 sub_data = df_subiekt_raw[df_subiekt_raw['pojazd_clean'] == pojazd].copy()
                 if not sub_data.empty:
                     kwota_org_col = sub_data.get('kwota_org', sub_data['kwota_brutto_eur'])
                     waluta_org_col = sub_data.get('waluta_org', 'EUR')
+                    
                     sub_formatted = pd.DataFrame({
                         'Data': sub_data['data'],
                         'Rodzaj': sub_data['typ'],
@@ -1474,8 +1492,11 @@ def to_excel_extended(df_summary, df_subiekt_raw, df_fuel_raw):
                         'Kwota EUR (Netto)': sub_data['kwota_netto_eur'],
                         'Kwota EUR (Brutto)': sub_data['kwota_brutto_eur']
                     })
+                    # Odwracamy znaki kosztów dla czytelności (koszt jako ujemny w cashflow)
                     sub_formatted.loc[sub_formatted['Rodzaj'] == 'Koszt (Subiekt)', ['Kwota Oryginalna', 'Kwota EUR (Netto)', 'Kwota EUR (Brutto)']] *= -1
                     dfs_to_concat.append(sub_formatted)
+            
+            # Dane Paliwowe
             if df_fuel_raw is not None and not df_fuel_raw.empty:
                 fuel_data = df_fuel_raw[df_fuel_raw['identyfikator_clean'] == pojazd].copy()
                 if not fuel_data.empty:
@@ -1489,9 +1510,11 @@ def to_excel_extended(df_summary, df_subiekt_raw, df_fuel_raw):
                         'Kwota EUR (Brutto)': -fuel_data['kwota_brutto_eur'].abs()
                     })
                     dfs_to_concat.append(fuel_formatted)
+            
             if dfs_to_concat:
                 final_df = pd.concat(dfs_to_concat).sort_values(by='Data')
                 final_df.to_excel(writer, sheet_name=safe_name, index=False)
+                
     return output.getvalue()
 
 @st.cache_data
@@ -1972,7 +1995,7 @@ def render_raport_content(conn, wybrana_firma):
         st.error(f"Błąd raportu: {e}")
 
 def render_rentownosc_content(conn, wybrana_firma):
-    st.subheader("Analiza Rentowności (Pełna + Wynagrodzenia)")
+    st.subheader("Analiza Rentowności (Pełna + Bilans VAT)")
     
     # 1. Pobieranie zakresu dat z bazy
     try:
@@ -2020,33 +2043,30 @@ def render_rentownosc_content(conn, wybrana_firma):
         if not plik_analizy:
             st.error("Brak pliku przychodów!")
         else:
-            with st.spinner("Przetwarzanie danych (Paliwo, Wypłaty, Faktury)..."):
+            with st.spinner("Obliczam VAT i Rentowność..."):
                 # A. Pobieramy dane z bazy (Paliwo + Wypłaty)
                 df_baza_raw = pobierz_dane_z_bazy(conn, data_start, data_stop, wybrana_firma)
                 df_baza_calc, _ = przygotuj_dane_paliwowe(df_baza_raw, wybrana_firma)
                 
                 st.session_state['dane_bazy_raw'] = df_baza_calc
 
-                # B. Rozdzielamy koszty na Paliwo i Wynagrodzenia
-                if df_baza_calc.empty:
-                    df_koszty_paliwo = pd.DataFrame()
-                    df_koszty_paliwo_netto = pd.DataFrame() # <--- NOWE
-                    df_koszty_wynagr = pd.DataFrame()
-                else:
+                # B. Inicjalizacja DataFrame'ów
+                df_koszty_paliwo_brutto = pd.DataFrame()
+                df_koszty_paliwo_netto = pd.DataFrame()
+                df_koszty_wynagr = pd.DataFrame()
+
+                if not df_baza_calc.empty:
                     # Filtrujemy śmieci i zakazane pojazdy
                     maska_zakaz = df_baza_calc['identyfikator_clean'].apply(czy_zakazany_pojazd_global)
                     df_clean = df_baza_calc[~maska_zakaz]
                     
-                    # 1. PALIWO I OPŁATY
+                    # 1. PALIWO I OPŁATY (Brutto i Netto)
                     df_paliwo = df_clean[df_clean['typ'] != 'WYNAGRODZENIE']
                     
-                    # Agregacja Brutto (Istniejąca)
-                    df_koszty_paliwo = df_paliwo.groupby('identyfikator_clean')['kwota_brutto_eur'].sum().to_frame('KOSZT_PALIWO_EUR')
-                    
-                    # Agregacja Netto (NOWE)
+                    df_koszty_paliwo_brutto = df_paliwo.groupby('identyfikator_clean')['kwota_brutto_eur'].sum().to_frame('KOSZT_PALIWO_EUR')
                     df_koszty_paliwo_netto = df_paliwo.groupby('identyfikator_clean')['kwota_netto_eur'].sum().to_frame('KOSZT_PALIWO_NETTO_EUR')
                     
-                    # 2. WYNAGRODZENIA
+                    # 2. WYNAGRODZENIA (Tylko Brutto - VAT nie dotyczy)
                     df_wyn = df_clean[df_clean['typ'] == 'WYNAGRODZENIE']
                     df_koszty_wynagr = df_wyn.groupby('identyfikator_clean')['kwota_brutto_eur'].sum().to_frame('KOSZT_KIEROWCA_EUR')
 
@@ -2054,11 +2074,15 @@ def render_rentownosc_content(conn, wybrana_firma):
                 _, df_analiza_raw = przetworz_plik_analizy(plik_analizy, data_start, data_stop, wybrana_firma)
                 st.session_state['dane_analizy_raw'] = df_analiza_raw
 
-                # Agregacja przychodów
-                df_przychody = pd.DataFrame()
-                df_koszty_subiekt = pd.DataFrame()
+                # Agregacja przychodów i kosztów innych (Brutto i Netto)
+                df_przychody_brutto = pd.DataFrame()
+                df_przychody_netto = pd.DataFrame()
+                df_koszty_subiekt_brutto = pd.DataFrame()
+                df_koszty_subiekt_netto = pd.DataFrame()
+                df_klienci = pd.DataFrame()
                 
                 if df_analiza_raw is not None and not df_analiza_raw.empty:
+                    # Filtrowanie refaktur wewnętrznych
                     if wybrana_firma == "HOLIER":
                          m = df_analiza_raw['kontrahent'].astype(str).str.contains("UNIX", case=False, na=False) & (df_analiza_raw['typ'] == 'Przychód (Subiekt)')
                          df_analiza_raw = df_analiza_raw[~m]
@@ -2066,30 +2090,53 @@ def render_rentownosc_content(conn, wybrana_firma):
                          m = df_analiza_raw['kontrahent'].astype(str).str.contains("HOLIER", case=False, na=False) & (df_analiza_raw['typ'] == 'Przychód (Subiekt)')
                          df_analiza_raw = df_analiza_raw[~m]
 
-                    df_przychody = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('PRZYCHOD_EUR')
-                    df_koszty_subiekt = df_analiza_raw[df_analiza_raw['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('KOSZT_INNE_EUR')
+                    # Przychody (Subiekt)
+                    df_przychody_brutto = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('PRZYCHOD_EUR')
+                    df_przychody_netto = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('PRZYCHOD_NETTO_EUR')
+                    
+                    # Koszty Inne (Subiekt)
+                    df_koszty_subiekt_brutto = df_analiza_raw[df_analiza_raw['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_brutto_eur'].sum().to_frame('KOSZT_INNE_EUR')
+                    df_koszty_subiekt_netto = df_analiza_raw[df_analiza_raw['typ'] == 'Koszt (Subiekt)'].groupby('pojazd_clean')['kwota_netto_eur'].sum().to_frame('KOSZT_INNE_NETTO_EUR')
 
+                    # Główny Klient
                     def get_main_client(x):
                         klienci = [k for k in x if k and k != "Brak Kontrahenta"]
                         if not klienci: return "Brak"
                         return max(set(klienci), key=klienci.count) 
                     
                     df_klienci = df_analiza_raw[df_analiza_raw['typ'] == 'Przychód (Subiekt)'].groupby('pojazd_clean')['kontrahent'].apply(get_main_client).to_frame('Kontrahent')
-                else:
-                    df_klienci = pd.DataFrame()
 
                 # D. Łączymy wszystko w jedną tabelę (Outer Join)
-                # Dodajemy df_koszty_paliwo_netto do concat
-                final = pd.concat([df_przychody, df_koszty_paliwo, df_koszty_paliwo_netto, df_koszty_wynagr, df_koszty_subiekt, df_klienci], axis=1).fillna(0)
+                final = pd.concat([
+                    df_przychody_brutto, df_przychody_netto,
+                    df_koszty_paliwo_brutto, df_koszty_paliwo_netto,
+                    df_koszty_wynagr,
+                    df_koszty_subiekt_brutto, df_koszty_subiekt_netto,
+                    df_klienci
+                ], axis=1).fillna(0)
                 
                 # Usuwamy śmieci
                 for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER"]:
                     final = final[~final.index.astype(str).str.contains(bad, case=False, na=False)]
                 
-                # --- NOWA KOLUMNA: VAT (Info) ---
+                # --- OBLICZENIA VAT ---
+                
+                # 1. VAT ze Sprzedaży (Do oddania) -> Traktujemy jako obciążenie w bilansie VAT
+                final['VAT_PRZYCHOD_EUR'] = final['PRZYCHOD_EUR'] - final['PRZYCHOD_NETTO_EUR']
+                
+                # 2. VAT z Paliwa (Do zwrotu) -> Traktujemy jako plus
                 final['VAT_PALIWO_EUR'] = final['KOSZT_PALIWO_EUR'] - final['KOSZT_PALIWO_NETTO_EUR']
+                
+                # 3. VAT z Kosztów Innych/Subiekta (Do zwrotu) -> Traktujemy jako plus
+                final['VAT_INNE_EUR'] = final['KOSZT_INNE_EUR'] - final['KOSZT_INNE_NETTO_EUR']
+                
+                # 4. BILANS VAT (Ile realnie VAT-u nam zostaje lub musimy dopłacić w kontekście przepływów)
+                # Jeśli wynik dodatni -> Urząd wisi nam pieniądze. Jeśli ujemny -> My wisimy.
+                final['VAT_BILANS_EUR'] = (final['VAT_PALIWO_EUR'] + final['VAT_INNE_EUR']) - final['VAT_PRZYCHOD_EUR']
 
-                # Obliczamy ZYSK (Bez zmian - nadal bazuje na Brutto)
+                # --- OBLICZENIE ZYSKU ---
+                # Zysk liczony klasycznie (Tu zostawiamy Brutto jak w oryginale, czy chcesz Netto?)
+                # Zostawiam Brutto, ale dodaję kolumnę dla jasności.
                 final['ZYSK_EUR'] = final['PRZYCHOD_EUR'] - (final['KOSZT_PALIWO_EUR'] + final['KOSZT_KIEROWCA_EUR'] + final['KOSZT_INNE_EUR'])
                 
                 st.session_state['df_rentownosc'] = final.sort_values(by='ZYSK_EUR', ascending=False)
@@ -2111,22 +2158,33 @@ def render_rentownosc_content(conn, wybrana_firma):
             with t2:
                 st.bar_chart(df_final['PRZYCHOD_EUR'].head(20), color="#76b900")
 
-        # 2. Metryki Główne
+        # 2. Metryki Główne (Finansowe)
         st.markdown("### Podsumowanie Finansowe")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("ZYSK (Brutto)", f"{df_final['ZYSK_EUR'].sum():,.2f} EUR", border=True)
-        m2.metric("Przychody", f"{df_final['PRZYCHOD_EUR'].sum():,.2f} EUR", border=True)
-        m3.metric("Paliwo (Brutto)", f"{df_final['KOSZT_PALIWO_EUR'].sum():,.2f} EUR", border=True)
-        m4.metric("VAT Paliwo (Info)", f"{df_final['VAT_PALIWO_EUR'].sum():,.2f} EUR", border=True, delta="Do odzyskania?")
+        m2.metric("Przychody (Brutto)", f"{df_final['PRZYCHOD_EUR'].sum():,.2f} EUR", border=True)
+        m3.metric("Koszty (Paliwo+Kier+Inne)", f"{(df_final['KOSZT_PALIWO_EUR'].sum() + df_final['KOSZT_KIEROWCA_EUR'].sum() + df_final['KOSZT_INNE_EUR'].sum()):,.2f} EUR", border=True)
+        
+        # Kolorowanie bilansu VAT: Zielony (Plus) = Zwrot, Czerwony (Minus) = Zapłata
+        bilans_vat = df_final['VAT_BILANS_EUR'].sum()
+        m4.metric("BILANS VAT (Zwrot/Zapłata)", f"{bilans_vat:,.2f} EUR", 
+                  delta="Na plus (zwrot)" if bilans_vat > 0 else "Na minus (do zapłaty)", 
+                  border=True)
 
         # 3. Tabela Główna
-        st.markdown("### Tabela Rentowności")
+        st.markdown("### Tabela Rentowności z VAT")
         
-        # Dodano nowe kolumny do listy wyświetlania
-        cols_order = ['Kontrahent', 'PRZYCHOD_EUR', 'KOSZT_PALIWO_EUR', 'KOSZT_PALIWO_NETTO_EUR', 'VAT_PALIWO_EUR', 'KOSZT_KIEROWCA_EUR', 'KOSZT_INNE_EUR', 'ZYSK_EUR']
+        # Konfiguracja kolumn do wyświetlenia
+        cols_order = [
+            'Kontrahent', 
+            'PRZYCHOD_EUR', 'VAT_PRZYCHOD_EUR',
+            'KOSZT_PALIWO_EUR', 'VAT_PALIWO_EUR', 
+            'KOSZT_INNE_EUR', 'VAT_INNE_EUR',
+            'KOSZT_KIEROWCA_EUR', 
+            'VAT_BILANS_EUR', 'ZYSK_EUR'
+        ]
         
         cols_present = [c for c in cols_order if c in df_final.columns]
-        
         show_df = df_final[cols_present].reset_index().rename(columns={'index': 'Pojazd'})
         show_df.insert(0, 'Lp.', range(1, 1+len(show_df)))
 
@@ -2134,13 +2192,20 @@ def render_rentownosc_content(conn, wybrana_firma):
             show_df,
             column_config={
                 "Kontrahent": st.column_config.TextColumn("Główny Klient"),
-                "PRZYCHOD_EUR": st.column_config.NumberColumn("Przychód", format="%.2f €"),
+                
+                "PRZYCHOD_EUR": st.column_config.NumberColumn("Przychód (Brutto)", format="%.2f €"),
+                "VAT_PRZYCHOD_EUR": st.column_config.NumberColumn("VAT Sprz. (-)", format="%.2f €"),
+                
                 "KOSZT_PALIWO_EUR": st.column_config.NumberColumn("Paliwo (Brutto)", format="%.2f €"),
-                "KOSZT_PALIWO_NETTO_EUR": st.column_config.NumberColumn("Paliwo (Netto)", format="%.2f €"), # <--- NOWA
-                "VAT_PALIWO_EUR": st.column_config.NumberColumn("VAT (Paliwo)", format="%.2f €"),         # <--- NOWA
+                "VAT_PALIWO_EUR": st.column_config.NumberColumn("VAT Paliwo (+)", format="%.2f €"),
+                
+                "KOSZT_INNE_EUR": st.column_config.NumberColumn("Inne (Brutto)", format="%.2f €"),
+                "VAT_INNE_EUR": st.column_config.NumberColumn("VAT Inne (+)", format="%.2f €"),
+
                 "KOSZT_KIEROWCA_EUR": st.column_config.NumberColumn("Kierowca", format="%.2f €"),
-                "KOSZT_INNE_EUR": st.column_config.NumberColumn("Inne", format="%.2f €"),
-                "ZYSK_EUR": st.column_config.NumberColumn("ZYSK", format="%.2f €"),
+                
+                "VAT_BILANS_EUR": st.column_config.NumberColumn("BILANS VAT", format="%.2f €"),
+                "ZYSK_EUR": st.column_config.NumberColumn("ZYSK (Cash)", format="%.2f €"),
             },
             use_container_width=True,
             hide_index=True,
@@ -2150,9 +2215,9 @@ def render_rentownosc_content(conn, wybrana_firma):
         # 4. Przycisk Excel
         excel_bytes = to_excel_extended(df_final, df_raw_analiza, st.session_state.get('dane_bazy_raw'))
         st.download_button(
-            label="📥 Pobierz PEŁNY Raport Excel (Ze szczegółami)",
+            label="📥 Pobierz PEŁNY Raport Excel (Ze szczegółami VAT)",
             data=excel_bytes,
-            file_name=f"rentownosc_{wybrana_firma}_{date.today()}.xlsx",
+            file_name=f"rentownosc_VAT_{wybrana_firma}_{date.today()}.xlsx",
             mime="application/vnd.ms-excel",
             type="primary"
         )
@@ -2170,41 +2235,49 @@ def render_rentownosc_content(conn, wybrana_firma):
             
             d1, d2, d3, d4, d5 = st.columns(5)
             d1.metric("ZYSK", f"{row['ZYSK_EUR']:,.2f} €", delta_color="normal" if row['ZYSK_EUR']>0 else "inverse")
-            d2.metric("Przychód", f"{row['PRZYCHOD_EUR']:,.2f} €")
-            d3.metric("Paliwo (Brutto)", f"{row['KOSZT_PALIWO_EUR']:,.2f} €")
-            d4.metric("VAT (Info)", f"{row['VAT_PALIWO_EUR']:,.2f} €") # <--- Wyświetlamy VAT też tutaj
+            d2.metric("Bilans VAT", f"{row['VAT_BILANS_EUR']:,.2f} €", help="VAT Paliwo + VAT Inne - VAT Sprzedaż")
+            d3.metric("VAT ze Sprzedaży", f"{row['VAT_PRZYCHOD_EUR']:,.2f} €")
+            d4.metric("VAT z Zakupów", f"{(row['VAT_PALIWO_EUR'] + row['VAT_INNE_EUR']):,.2f} €")
             d5.metric("Kierowca", f"{row['KOSZT_KIEROWCA_EUR']:,.2f} €")
 
             details = []
             
+            # Detale z Subiekta (Pokazujemy Brutto i Netto)
             if df_raw_analiza is not None:
                 sub_rows = df_raw_analiza[df_raw_analiza['pojazd_clean'] == wybrany].copy()
                 if not sub_rows.empty:
+                    # Odwracamy koszty dla wizualizacji
                     mask_koszt = sub_rows['typ'] == 'Koszt (Subiekt)'
                     sub_rows.loc[mask_koszt, 'kwota_brutto_eur'] *= -1
-                    sub_rows = sub_rows[['data', 'opis', 'typ', 'kwota_brutto_eur']]
-                    sub_rows.columns = ['Data', 'Opis', 'Typ', 'Kwota (EUR)']
+                    sub_rows.loc[mask_koszt, 'kwota_netto_eur'] *= -1
+                    
+                    sub_rows = sub_rows[['data', 'opis', 'typ', 'kwota_brutto_eur', 'kwota_netto_eur']]
+                    sub_rows.columns = ['Data', 'Opis', 'Typ', 'Brutto (EUR)', 'Netto (EUR)']
                     details.append(sub_rows)
 
+            # Detale z Bazy (Paliwo/Wynagr)
             df_baza_raw = st.session_state.get('dane_bazy_raw')
             if df_baza_raw is not None:
                 baza_rows = df_baza_raw[df_baza_raw['identyfikator_clean'] == wybrany].copy()
                 if not baza_rows.empty:
                     baza_rows['kwota_brutto_eur'] = -baza_rows['kwota_brutto_eur'].abs()
+                    baza_rows['kwota_netto_eur'] = -baza_rows['kwota_netto_eur'].abs()
                     
                     baza_view = pd.DataFrame()
                     baza_view['Data'] = baza_rows['data_transakcji_dt'].dt.date
                     baza_view['Opis'] = baza_rows['produkt']
                     baza_view['Typ'] = baza_rows['typ']
-                    baza_view['Kwota (EUR)'] = baza_rows['kwota_brutto_eur']
+                    baza_view['Brutto (EUR)'] = baza_rows['kwota_brutto_eur']
+                    baza_view['Netto (EUR)'] = baza_rows['kwota_netto_eur']
                     details.append(baza_view)
 
             if details:
                 full_details = pd.concat(details).sort_values(by='Data', ascending=False).reset_index(drop=True)
+                full_details['VAT (Calc)'] = full_details['Brutto (EUR)'] - full_details['Netto (EUR)']
                 
                 st.dataframe(
-                    full_details.style.format({'Kwota (EUR)': '{:,.2f} €'})
-                                      .map(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Kwota (EUR)']),
+                    full_details.style.format({'Brutto (EUR)': '{:,.2f} €', 'Netto (EUR)': '{:,.2f} €', 'VAT (Calc)': '{:,.2f} €'})
+                                      .map(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Brutto (EUR)']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={"Data": st.column_config.DateColumn("Data")}
