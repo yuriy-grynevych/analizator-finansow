@@ -106,6 +106,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Rachunek zakupu',
     'Tankowanie',                  
     'Paliwo',
+    'Ładowanie',
     'Opłata drogowa',              
     'Opłaty drogowe',
     'Opłata drogowa DK',
@@ -116,6 +117,7 @@ ETYKIETY_KOSZTOW_INNYCH = [
     'Tachograf', 'USŁ. HOTELOWA', 'Usługi telekomunikacyjne', 'Wykup auta', 
     'Wysyłka kurierska', 'Zak. do auta', 'Zakup auta', 'Części', 'Myjnia',
     'Ubezpieczenie'
+    
 ]
 
 ETYKIETY_IGNOROWANE = [
