@@ -2144,7 +2144,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                         zapisz_plik_w_bazie(conn, nazwa_pliku, up.getvalue())
                     plik_analizy = up
 
-    def render_rentownosc_content(conn, wybrana_firma):
+def render_rentownosc_content(conn, wybrana_firma):
     st.subheader("Analiza Rentowności (Pełna + Bilans VAT)")
     
     # 1. Pobieranie zakresu dat z bazy
