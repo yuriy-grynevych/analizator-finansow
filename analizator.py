@@ -209,6 +209,25 @@ def parsuj_dataframe_plac(df):
                     pass
                     
     return pd.DataFrame(wyniki)
+def normalizuj_nazwe_kierowcy(nazwa):
+    """
+    Zamienia 'Kowalski Jan' oraz 'Jan Kowalski' na ten sam klucz: 'JAN KOWALSKI'.
+    Usuwa przecinki, wielokrotne spacje i sortuje słowa alfabetycznie.
+    """
+    if not isinstance(nazwa, str) or not nazwa:
+        return ""
+    
+    # Usuwamy przecinki (gdyby było "Kowalski, Jan") i zamieniamy na wielkie litery
+    clean = nazwa.upper().replace(",", " ").strip()
+    
+    # Rozbijamy na listę słów ["KOWALSKI", "JAN"]
+    parts = clean.split()
+    
+    # Sortujemy alfabetycznie ["JAN", "KOWALSKI"]
+    parts.sort()
+    
+    # Łączymy z powrotem
+    return " ".join(parts)
 def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
     nazwa_clean = str(nazwa_arkusza).upper().strip()
     znaleziony_rok = rok_domyslny
@@ -1567,34 +1586,46 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # 3. ANALIZA WYNAGRODZEŃ
+    # 3. ANALIZA WYNAGRODZEŃ (UPDATED)
     st.markdown("### 💰 Analiza Wynagrodzeń (Podgląd EUR + Edycja)")
     
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. Wybierz miesiące. 3. Oblicz. 4. Edytuj (zobaczysz podgląd w EUR).")
+        st.info("1. Wgraj pliki Excel (możesz wgrać kilka naraz). 2. Wybierz arkusze. 3. System dopasuje nazwiska niezależnie od kolejności (Jan Kowalski = Kowalski Jan).")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
             rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=2025) 
-            plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
+            # ZMIANA: accept_multiple_files=True
+            pliki_plac = st.file_uploader("Wgraj pliki Excel (Wynagrodzenia)", type=['xlsx', 'xls'], accept_multiple_files=True)
 
-        if plik_plac:
-            try:
-                xls_file = pd.ExcelFile(plik_plac)
-                wszystkie_arkusze = xls_file.sheet_names
+        if pliki_plac:
+            # Tworzymy mapę arkuszy ze wszystkich plików
+            mapa_arkuszy = {} # Klucz: "NazwaPliku - Arkusz", Wartość: (plik_bytes, nazwa_arkusza)
+            lista_opcji_display = []
+
+            for plik in pliki_plac:
+                try:
+                    xls_temp = pd.ExcelFile(plik)
+                    for sheet in xls_temp.sheet_names:
+                        unikalna_nazwa = f"[{plik.name}] {sheet}"
+                        mapa_arkuszy[unikalna_nazwa] = (plik, sheet)
+                        lista_opcji_display.append(unikalna_nazwa)
+                except Exception as e:
+                    st.error(f"Błąd odczytu pliku {plik.name}: {e}")
+
+            if lista_opcji_display:
+                st.success(f"📂 Wczytano {len(pliki_plac)} plików. Znaleziono {len(lista_opcji_display)} arkuszy.")
                 
-                st.success(f"📂 Wczytano plik. Arkusze: {', '.join(wszystkie_arkusze)}")
-                
-                wybrane_arkusze = st.multiselect(
-                    "📅 Wybierz miesiące do przeliczenia:",
-                    options=wszystkie_arkusze,
-                    default=wszystkie_arkusze
+                wybrane_opcje = st.multiselect(
+                    "📅 Wybierz miesiące (arkusze) do przeliczenia:",
+                    options=lista_opcji_display,
+                    default=lista_opcji_display
                 )
 
                 if st.button("🚀 Oblicz (z podglądem EUR)", type="primary"):
-                    if not wybrane_arkusze:
+                    if not wybrane_opcje:
                         st.warning("Nie zaznaczyłeś żadnego miesiąca!")
                     else:
                         st.session_state['temp_wynagrodzenia_all'] = None 
@@ -1612,24 +1643,43 @@ def render_admin_content(conn, wybrana_firma):
                                 pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
                                 unikalne_pojazdy_z_webfleet = set()
 
-                                for i, nazwa_arkusza in enumerate(wybrane_arkusze):
-                                    pask_postepu.progress((i / len(wybrane_arkusze)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
+                                for i, opcja_nazwa in enumerate(wybrane_opcje):
+                                    plik_src, nazwa_arkusza = mapa_arkuszy[opcja_nazwa]
+                                    
+                                    pask_postepu.progress((i / len(wybrane_opcje)), text=f"Analizuję: {opcja_nazwa}...")
+                                    
                                     start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
                                     if not start_auto: continue
                                     
+                                    # 1. Pobierz dane Webfleet
                                     df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
-                                    if not df_wf.empty: unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
-
-                                    df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
+                                    if not df_wf.empty: 
+                                        unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
+                                        # ZMIANA: Normalizacja nazwisk w Webfleet (sortowanie słów)
+                                        df_wf['kierowca_norm'] = df_wf['kierowca'].apply(normalizuj_nazwe_kierowcy)
+                                    
+                                    # 2. Pobierz dane z Excela
+                                    # Musimy otworzyć plik ponownie lub skorzystać z bufora
+                                    xls_run = pd.ExcelFile(plik_src)
+                                    df_sheet = pd.read_excel(xls_run, sheet_name=nazwa_arkusza, header=None)
                                     df_place = parsuj_dataframe_plac(df_sheet)
+                                    
                                     if df_place.empty: continue
 
-                                    df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
+                                    # ZMIANA: Normalizacja nazwisk w Excelu (sortowanie słów - naprawia problem GRUDNIA)
+                                    df_place['kierowca_norm'] = df_place['kierowca'].apply(normalizuj_nazwe_kierowcy)
 
+                                    # 3. Łączenie danych (Merge po znormalizowanej nazwie)
                                     if not df_wf.empty:
-                                        stats = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                        stats['kierowca_norm'] = stats['kierowca'].str.upper().str.strip()
+                                        # Grupujemy Webfleet po znormalizowanym nazwisku i pojeździe
+                                        stats = df_wf.groupby(['kierowca_norm', 'pojazd']).size().reset_index(name='dni_jazdy')
+                                        
+                                        # Merge
                                         merged = stats.merge(df_place, on='kierowca_norm', how='right')
+                                        
+                                        # Jeśli po merge'u mamy puste 'kierowca' (bo przyszło z Excela a nie było w Webfleet), uzupełniamy z Excela
+                                        # Uwaga: df_place ma kolumnę 'kierowca', stats nie ma (ma kierowca_norm). 
+                                        # Po merge 'kierowca' z df_place będzie zachowane.
                                     else:
                                         merged = df_place.copy()
                                         merged['pojazd'] = None; merged['dni_jazdy'] = 0
@@ -1638,6 +1688,7 @@ def render_admin_content(conn, wybrana_firma):
                                         merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
                                         merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
                                         
+                                        # Rozdzielanie kosztów jeśli kierowca jeździł wieloma autami
                                         total = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum').replace(0, 1)
                                         merged['udzial'] = merged['dni_jazdy'] / total
                                         merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
@@ -1647,18 +1698,21 @@ def render_admin_content(conn, wybrana_firma):
                                         
                                         merged['koszt_eur_est'] = merged['koszt_przypisany'] / kurs_eur
 
-                                        wynik = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
+                                        # Wybieramy kolumny do wyniku
+                                        # Używamy oryginalnego 'kierowca' z Excela dla czytelności (jeśli istnieje)
+                                        cols_to_select = ['pojazd', 'kierowca', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']
+                                        wynik = merged[cols_to_select].copy()
+                                        
                                         wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
                                         
                                         wynik['data_ksiegowania'] = stop_auto
-                                        wynik['miesiac_opis'] = nazwa_arkusza
+                                        wynik['miesiac_opis'] = opcja_nazwa
                                         
                                         lista_wynikow_miesiecznych.append(wynik)
                                     
                                 pask_postepu.empty()
                                 
                                 if lista_wynikow_miesiecznych:
-                                    # Łączenie z ignore_index=True (NAPRAWA DAT)
                                     df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['miesiac_opis', 'Kierowca'])
                                     
                                     st.session_state['temp_wynagrodzenia_all'] = df_all
@@ -1669,11 +1723,12 @@ def render_admin_content(conn, wybrana_firma):
                                     st.session_state['wszystkie_znane_pojazdy'] = pojazdy_all
                                     st.success(f"Policzono {len(df_all)} wierszy. Przyjęty kurs podglądu: {kurs_eur:.2f} PLN/EUR")
                                 else:
-                                    st.error("Brak wyników.")
+                                    st.error("Brak wyników (nie udało się sparować danych lub puste pliki).")
                             except Exception as e:
-                                st.error(f"Błąd: {e}")
-            except Exception as e:
-                st.error(f"Błąd pliku: {e}")
+                                st.error(f"Błąd logiczny: {e}")
+                                st.exception(e) # Pokaż szczegóły błędu
+            else:
+                st.warning("Nie znaleziono arkuszy w wybranych plikach.")
 
         # --- EDYCJA Z PODGLĄDEM EUR ---
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
@@ -1717,26 +1772,14 @@ def render_admin_content(conn, wybrana_firma):
                         db_df['kraj'] = 'PL'
                         db_df['kontrahent'] = db_df['Kierowca']
     
-                        # --- POPRAWKA: Dynamiczne przypisywanie firmy ---
                         def ustal_firme_dla_wynagrodzenia(row):
                             p = str(row['pojazd']).upper().replace(" ", "").replace("-", "")
-                            
-                            # 1. Sprawdź czy jest w konfiguracji UNIX
-                            if p in UNIX_FLOTA_CONFIG:
-                                return 'UNIX-TRANS'
-                            
-                            # 2. Sprawdź wyjątki nazewnicze
-                            if 'TRUCK' in p and 'OSOBOWY' in p:
-                                return 'UNIX-TRANS'
-                            if 'KACPER' in p:
-                                return 'UNIX-TRANS'
-    
-                            # 3. Jeśli nie znaleziono w Unix, przypisz do HOLIER
+                            if p in UNIX_FLOTA_CONFIG: return 'UNIX-TRANS'
+                            if 'TRUCK' in p and 'OSOBOWY' in p: return 'UNIX-TRANS'
+                            if 'KACPER' in p: return 'UNIX-TRANS'
                             return 'HOLIER'
     
                         db_df['firma'] = db_df.apply(ustal_firme_dla_wynagrodzenia, axis=1)
-                        # ------------------------------------------------
-    
                         cols_to_save = ['data_transakcji', 'identyfikator', 'kwota_netto', 'kwota_brutto', 
                                         'waluta', 'ilosc', 'produkt', 'typ', 'zrodlo', 'kraj', 'firma', 'kontrahent']
                         db_df = db_df[cols_to_save]
@@ -1748,7 +1791,7 @@ def render_admin_content(conn, wybrana_firma):
                         st.error(f"Błąd zapisu: {e}")
     st.divider()
     
-    # 4. WGRYWANIE PALIWA
+    # 4. WGRYWANIE PALIWA (Bez zmian logicznych)
     col_up1, col_up2 = st.columns([1, 2])
     with col_up1:
         st.info("Wybierz pliki z dysku (Excel/CSV), a następnie przypisz je do odpowiedniej firmy.")
@@ -1770,7 +1813,7 @@ def render_admin_content(conn, wybrana_firma):
 
     st.markdown("---")
     
-    # --- 5. STREFA NIEBEZPIECZNA (ZAKTUALIZOWANA) ---
+    # --- 5. STREFA NIEBEZPIECZNA ---
     with st.expander("⚠️ Strefa Niebezpieczna (Reset Bazy)", expanded=False):
         c1, c2, c3 = st.columns(3)
         with c1:
