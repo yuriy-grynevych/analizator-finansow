@@ -164,72 +164,71 @@ def parsuj_dataframe_plac(df):
     aktualny_kierowca_raw = None 
     aktualny_kierowca_norm = None
     
-    # Konwersja całej tabeli na stringi, zamiana 'nan' na pusty ciąg
+    # Konwersja całej tabeli na stringi
     df = df.astype(str)
     
-    # Słowa, które ignorujemy, bo to nie są nazwiska
     SLOWA_IGNOROWANE = [
         "ILOSC", "ILOŚĆ", "DNI", "STAWKA", "KWOTA", "RAZEM", "SUMA", 
         "LISTA", "PŁAC", "PLAC", "DOPŁATA", "DOPLATA", "PLN", "EURO", 
-        "NOCKI", "ADR", "MANDATY", "TOTAL", "DATA", "PODPIS", "KIEROWCA"
+        "NOCKI", "ADR", "MANDATY", "TOTAL", "DATA", "PODPIS", "KIEROWCA",
+        "INFO", "KURS", "NAZWISKO", "IMIĘ"
     ]
     
-    # Słowa oznaczające, że w tym wierszu jest kasa
     KLUCZE_KWOTY = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM", "DO WYPLATY"]
 
     for idx, row in df.iterrows():
-        # Pobieramy zawartość pierwszych kolumn, gdzie zazwyczaj jest nazwisko lub opis
+        # Pobieramy kolumnę A (0) i B (1)
         col0 = str(row.iloc[0]).strip().upper()
         col1 = str(row.iloc[1]).strip().upper() if len(row) > 1 else ""
         
-        tekst_wiersza = (col0 + " " + col1).upper()
+        tekst_wiersza = (col0 + " " + col1 + " " + " ".join([str(x).upper() for x in row.values])).upper()
         
         # --- ETAP 1: SZUKANIE NAZWISKA ---
-        # Nazwisko jest zazwyczaj w kolumnie A (col0). 
-        # Warunki: nie jest puste, nie jest liczbą, ma min 3 znaki, nie zawiera słów zakazanych.
+        kandydat = None
         
-        kandydat = col0
-        if (len(kandydat) > 3 
-            and kandydat != "NAN"
-            and not any(char.isdigit() for char in kandydat) # Nazwisko nie ma cyfr
-            and not any(zakaz in kandydat for zakaz in SLOWA_IGNOROWANE)):
+        # Sprawdzamy kolumnę A (standardowe pliki)
+        if (len(col0) > 3 and col0 != "NAN" 
+            and not any(char.isdigit() for char in col0) 
+            and not any(z in col0 for z in SLOWA_IGNOROWANE)):
+            kandydat = col0
             
+        # POPRAWKA DLA GRUDNIA: Jeśli kolumna A to cyfra (Lp.), sprawdzamy kolumnę B
+        elif (col0.replace(".","").isdigit() or col0 == "NAN" or len(col0) < 3):
+             if (len(col1) > 3 and col1 != "NAN" 
+                and not any(char.isdigit() for char in col1) 
+                and not any(z in col1 for z in SLOWA_IGNOROWANE)):
+                kandydat = col1
+
+        if kandydat:
             aktualny_kierowca_raw = kandydat
             aktualny_kierowca_norm = normalizuj_nazwe_kierowcy(kandydat)
-            # Jeśli znaleźliśmy nazwisko, idziemy do następnego wiersza szukać kwoty
-            continue
+            continue # Znaleziono nazwisko, idziemy szukać kwoty w kolejnych wierszach
 
         # --- ETAP 2: SZUKANIE KWOTY ---
-        # Jeśli mamy zapamiętanego kierowcę, szukamy kwoty w bieżącym wierszu
         if aktualny_kierowca_norm and any(k in tekst_wiersza for k in KLUCZE_KWOTY):
-            znaleziono_kwote = False
+            # Szukamy pierwszej sensownej liczby w tym wierszu
             for val in row:
-                # Czyszczenie wartości liczbowej
                 val_str = str(val).upper().replace('ZL', '').replace('PLN', '').replace(' ', '').replace(',', '.')
                 
-                # Pomiń puste, napisy typu "KWOTA" itp.
+                # Ignorujemy napisy, puste i małe liczby (np. stawki 430, 100)
+                # Kwota wypłaty zazwyczaj jest > 500
                 if not val_str or val_str == "NAN" or any(c.isalpha() for c in val_str):
                     continue
                 
                 try:
                     kwota = float(val_str)
-                    if kwota > 0: # Zakładamy, że wypłata jest dodatnia
+                    if kwota > 100: # Zabezpieczenie przed pobraniem stawki "100" euro jako wypłaty
                         wyniki.append({
                             'kierowca': aktualny_kierowca_raw,
                             'kierowca_norm': aktualny_kierowca_norm,
                             'kwota_total': kwota
                         })
-                        znaleziono_kwote = True
-                        break # Znaleźliśmy kwotę w tym wierszu, koniec szukania w kolumnach
+                        # Resetujemy po znalezieniu kwoty, żeby nie przypisać kolejnych liczb do tego samego
+                        aktualny_kierowca_raw = None
+                        aktualny_kierowca_norm = None
+                        break 
                 except:
                     continue
-            
-            # Opcjonalnie: Po znalezieniu kwoty możemy zresetować kierowcę, 
-            # jeśli w pliku nazwisko zawsze pojawia się przed każdą kwotą.
-            # Jeśli nazwisko jest "nagłówkiem" dla wielu kwot, usuń poniższą linię.
-            if znaleziono_kwote:
-                aktualny_kierowca_raw = None
-                aktualny_kierowca_norm = None
 
     return pd.DataFrame(wyniki)
 def normalizuj_nazwe_kierowcy(nazwa):
@@ -255,39 +254,60 @@ def normalizuj_nazwe_kierowcy(nazwa):
     
     # 4. Łączenie
     return " ".join(parts)
-def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
-    nazwa_clean = str(nazwa_arkusza).upper().strip()
+def wyznacz_zakres_dat_z_tresci(df, nazwa_arkusza, rok_domyslny):
+    """
+    Priorytet: Szukamy nazwy miesiąca W ŚRODKU pliku (pierwsze 10 wierszy/kolumn).
+    Dopiero jeśli tam nie ma, patrzymy na nazwę pliku.
+    """
+    znaleziony_miesiac = None
     znaleziony_rok = rok_domyslny
-    
-    # 1. Agresywne szukanie roku (2023, 2024, 2025)
-    match_rok = re.search(r'(202[0-9])', nazwa_clean)
-    if match_rok:
-        znaleziony_rok = int(match_rok.group(1))
-        # Usuwamy rok z nazwy, żeby nie mylił przy szukaniu miesiąca (np. 01.2025 -> 01.)
-        nazwa_clean = nazwa_clean.replace(match_rok.group(1), "") 
 
-    # 2. Szukanie miesiąca
-    miesiac = MAPA_MIESIECY_PL.get(nazwa_clean.strip())
-    
-    # Jeśli nie ma nazwy słownej, szukamy cyfr (np. "01.", "12")
-    if not miesiac:
-        # Szukamy cyfr 1-12, które mogą być miesiącem
-        match_miesiac = re.search(r'\b(0?[1-9]|1[0-2])\b', nazwa_clean)
-        if match_miesiac:
-            miesiac = int(match_miesiac.group(1))
-
-    if not miesiac:
-        for k, v in MAPA_MIESIECY_PL.items():
-            if k in nazwa_clean:
-                miesiac = v
-                break
-    
-    if miesiac:
-        _, last_day = calendar.monthrange(znaleziony_rok, miesiac)
-        start = date(znaleziony_rok, miesiac, 1)
-        stop = date(znaleziony_rok, miesiac, last_day)
-        return start, stop
+    # 1. SZUKANIE W TREŚCI (Priorytet)
+    # Spłaszczamy pierwsze 10 wierszy do pojedynczych słów i szukamy miesiąca
+    try:
+        sample = df.head(15).astype(str).to_string().upper()
+        # Rozbijamy na słowa, usuwamy znaki interpunkcyjne
+        slowa = re.split(r'[\s\t,;:\n]+', sample)
         
+        for slowo in slowa:
+            clean_slowo = slowo.strip().replace(".", "")
+            if clean_slowo in MAPA_MIESIECY_PL:
+                znaleziony_miesiac = MAPA_MIESIECY_PL[clean_slowo]
+                break
+    except:
+        pass
+
+    # 2. Jeśli nie znaleziono w treści, szukamy w nazwie arkusza/pliku (Fallback)
+    if not znaleziony_miesiac:
+        nazwa_full = str(nazwa_arkusza).strip().upper()
+        # Oczyszczanie nazwy pliku z pułapek typu "(1)"
+        if "]" in nazwa_full:
+            nazwa_clean = nazwa_full.split("]")[-1].strip()
+        else:
+            nazwa_clean = nazwa_full
+
+        # Szukanie roku w nazwie
+        match_rok = re.search(r'(202[0-9])', nazwa_clean)
+        if match_rok:
+            znaleziony_rok = int(match_rok.group(1))
+            nazwa_clean = nazwa_clean.replace(match_rok.group(1), "")
+
+        # Szukanie miesiąca w nazwie
+        m = MAPA_MIESIECY_PL.get(nazwa_clean.strip())
+        if m:
+            znaleziony_miesiac = m
+        else:
+            match_digit = re.search(r'\b(0?[1-9]|1[0-2])\b', nazwa_clean)
+            if match_digit:
+                znaleziony_miesiac = int(match_digit.group(1))
+
+    # 3. Zwracanie wyniku
+    if znaleziony_miesiac:
+        _, last_day = calendar.monthrange(znaleziony_rok, znaleziony_miesiac)
+        start = date(znaleziony_rok, znaleziony_miesiac, 1)
+        stop = date(znaleziony_rok, znaleziony_miesiac, last_day)
+        return start, stop
+    
     return None, None
 def czy_zakazany_pojazd_global(nazwa):
     if not nazwa: return False
@@ -1668,8 +1688,21 @@ def render_admin_content(conn, wybrana_firma):
                                 pask.progress((i / len(wybrane_opcje)), text=f"Przetwarzam: {opcja}")
                                 
                                 # 1. Daty
-                                start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
-                                if not start_auto: continue
+                                # 1. Wczytaj Excela najpierw
+                                xls_run = pd.ExcelFile(plik_src)
+                                # Czytamy bez nagłówka, żeby złapać wszystko jak leci
+                                df_sheet = pd.read_excel(xls_run, sheet_name=nazwa_arkusza, header=None)
+                                
+                                # 2. Wyznacz datę na podstawie TREŚCI (szuka słowa "Grudzień" w df_sheet)
+                                start_auto, stop_auto = wyznacz_zakres_dat_z_tresci(df_sheet, nazwa_arkusza, rok_analizy)
+                                
+                                if not start_auto:
+                                    st.warning(f"Nie udało się ustalić daty dla {opcja}. Pomijam.")
+                                    continue
+                                
+                                # 3. Parsuj poprawioną funkcją (znajdzie nazwiska w kolumnie B)
+                                df_place = parsuj_dataframe_plac(df_sheet)
+                                
                                 
                                 # 2. Webfleet (Pobranie i NORMALIZACJA)
                                 df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
