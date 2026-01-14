@@ -1725,21 +1725,51 @@ def render_admin_content(conn, wybrana_firma):
 
                                 df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
 
+                               # --- POCZĄTEK POPRAWKI (Dopasowanie Imie Nazwisko <-> Nazwisko Imie) ---
+                                
+                                # Funkcja pomocnicza: sortuje słowa w nazwisku (np. "KOWALSKI JAN" -> "JAN KOWALSKI")
+                                def stworz_klucz_laczenia(nazwa):
+                                    if not isinstance(nazwa, str): return ""
+                                    # Usuwamy znaki specjalne, podwójne spacje i zamieniamy na wielkie litery
+                                    czysta = re.sub(r'[^\w\s]', '', str(nazwa).upper()).strip()
+                                    czesci = czysta.split()
+                                    czesci.sort() # Tu dzieje się magia: sortowanie alfabetyczne słów
+                                    return " ".join(czesci)
+
+                                # Dodajemy klucz do danych z Excela (Płace)
+                                df_place['join_key'] = df_place['kierowca'].apply(stworz_klucz_laczenia)
+
                                 # 3. Łączenie
                                 if not df_wf.empty:
-                                    stats = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                    stats['kierowca_norm'] = stats['kierowca'].str.upper().str.strip()
-                                    merged = stats.merge(df_place, on='kierowca_norm', how='right')
+                                    # Dodajemy klucz do danych z Webfleet
+                                    df_wf['join_key'] = df_wf['kierowca'].apply(stworz_klucz_laczenia)
+                                    
+                                    # Grupujemy Webfleet po kluczu łączenia (żeby zsumować dni)
+                                    stats = df_wf.groupby(['join_key', 'pojazd']).size().reset_index(name='dni_jazdy')
+                                    
+                                    # Pobieramy oryginalne nazwisko z Webfleet dla celów wyświetlania (pierwsze napotkane dla danego klucza)
+                                    mapa_nazwisk = df_wf.drop_duplicates('join_key').set_index('join_key')['kierowca']
+                                    stats['kierowca_display'] = stats['join_key'].map(mapa_nazwisk)
+
+                                    # Łączymy po posortowanym kluczu (join_key)
+                                    merged = stats.merge(df_place, on='join_key', how='right')
+                                    
+                                    # Uzupełniamy nazwisko kierowcy jeśli przyszło z Excela a nie ma w Webfleet
+                                    merged['Kierowca'] = merged['kierowca_display'].fillna(merged['kierowca'])
                                 else:
                                     merged = df_place.copy()
                                     merged['pojazd'] = None; merged['dni_jazdy'] = 0
+                                    merged['Kierowca'] = merged['kierowca']
+
+                                # --- KONIEC POPRAWKI ---
 
                                 if not merged.empty:
                                     merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
                                     merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
                                     
                                     # Rozbicie kosztu na pojazdy
-                                    total = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum').replace(0, 1)
+                                    # Używamy join_key do grupowania, bo 'kierowca_norm' mógł być różny
+                                    total = merged.groupby('join_key')['dni_jazdy'].transform('sum').replace(0, 1)
                                     merged['koszt_przypisany'] = merged['kwota_total'] * (merged['dni_jazdy'] / total)
                                     
                                     # Fix dla braku GPS
@@ -1748,22 +1778,13 @@ def render_admin_content(conn, wybrana_firma):
                                     
                                     merged['koszt_eur_est'] = merged['koszt_przypisany'] / st.session_state['current_eur_rate']
 
-                                    res = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
+                                    # Wybieramy i nazywamy kolumny do wyświetlenia
+                                    res = merged[['pojazd', 'Kierowca', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
                                     res.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
                                     res['data_ksiegowania'] = dane['stop']
                                     res['miesiac_opis'] = dane['start'].strftime('%Y-%m')
                                     
                                     lista_wynikow.append(res)
-                            
-                            pask.empty()
-                            
-                            if lista_wynikow:
-                                df_final = pd.concat(lista_wynikow, ignore_index=True)
-                                st.session_state['temp_wynagrodzenia_all'] = df_final
-                                st.success(f"Przeliczono {len(df_final)} wierszy.")
-                            else:
-                                st.error("Brak wyników do wyświetlenia.")
-
         # --- EDYCJA ---
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
             st.divider()
