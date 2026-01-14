@@ -2116,7 +2116,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                 ], axis=1).fillna(0)
                 
                 # Usuwamy śmieci
-                for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER"]:
+                for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER","DW2JH75","DW1JJ04"]:
                     final = final[~final.index.astype(str).str.contains(bad, case=False, na=False)]
                 
                 # --- OBLICZENIA VAT ---
