@@ -1567,35 +1567,62 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # 3. ANALIZA WYNAGRODZEŃ
-    st.markdown("### 💰 Analiza Wynagrodzeń (Podgląd EUR + Edycja)")
+    # 3. ANALIZA WYNAGRODZEŃ (MULTI-FILE + NAZWY MIESIĘCY)
+    st.markdown("### 💰 Analiza Wynagrodzeń (Wiele plików + Podgląd EUR)")
     
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. Wybierz miesiące. 3. Oblicz. 4. Edytuj (zobaczysz podgląd w EUR).")
+        st.info("1. Wgraj jeden lub więcej plików Excel. 2. Wybierz arkusze (system rozpozna nazwy miesięcy). 3. Oblicz.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
-            rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=2025) 
-            plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
+            rok_analizy = st.number_input("Rok rozliczeniowy (Dla arkuszy bez roku w nazwie)", min_value=2023, max_value=2030, value=2025) 
+            # ZMIANA: accept_multiple_files=True
+            pliki_plac = st.file_uploader("Wgraj pliki Excel (Wynagrodzenia)", type=['xlsx', 'xls'], accept_multiple_files=True)
 
-        if plik_plac:
-            try:
-                xls_file = pd.ExcelFile(plik_plac)
-                wszystkie_arkusze = xls_file.sheet_names
+        if pliki_plac:
+            # Słownik do przechowywania mapowania: "Nazwa Wyświetlana" -> {plik, arkusz, daty}
+            mapa_arkuszy_do_wyboru = {}
+            lista_opcji = []
+
+            # Pre-scanning plików
+            for plik in pliki_plac:
+                try:
+                    xls_file = pd.ExcelFile(plik)
+                    for arkusz in xls_file.sheet_names:
+                        # Próba odgadnięcia daty na podstawie nazwy arkusza (np. "Grudzień", "01.2025")
+                        start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(arkusz, rok_analizy)
+                        
+                        # Etykieta do listy wyboru
+                        if start_auto:
+                            etykieta = f"[{plik.name}] {arkusz} ➡️ ({start_auto.strftime('%B %Y')})"
+                        else:
+                            etykieta = f"[{plik.name}] {arkusz} (Nie rozpoznano daty)"
+                        
+                        mapa_arkuszy_do_wyboru[etykieta] = {
+                            'plik_obj': xls_file, # Przechowujemy obiekt ExcelFile
+                            'nazwa_arkusza': arkusz,
+                            'start': start_auto,
+                            'stop': stop_auto
+                        }
+                        lista_opcji.append(etykieta)
+                except Exception as e:
+                    st.error(f"Błąd przy odczycie pliku {plik.name}: {e}")
+
+            if lista_opcji:
+                st.success(f"📂 Wczytano łącznie {len(pliki_plac)} plików.")
                 
-                st.success(f"📂 Wczytano plik. Arkusze: {', '.join(wszystkie_arkusze)}")
-                
-                wybrane_arkusze = st.multiselect(
-                    "📅 Wybierz miesiące do przeliczenia:",
-                    options=wszystkie_arkusze,
-                    default=wszystkie_arkusze
+                # ZMIANA: Wybór po etykietach (plik + arkusz + wykryty miesiąc)
+                wybrane_opcje = st.multiselect(
+                    "📅 Wybierz arkusze do przeliczenia:",
+                    options=lista_opcji,
+                    default=lista_opcji # Domyślnie zaznacz wszystko
                 )
 
                 if st.button("🚀 Oblicz (z podglądem EUR)", type="primary"):
-                    if not wybrane_arkusze:
-                        st.warning("Nie zaznaczyłeś żadnego miesiąca!")
+                    if not wybrane_opcje:
+                        st.warning("Nie zaznaczyłeś żadnego arkusza!")
                     else:
                         st.session_state['temp_wynagrodzenia_all'] = None 
                         
@@ -1612,20 +1639,34 @@ def render_admin_content(conn, wybrana_firma):
                                 pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
                                 unikalne_pojazdy_z_webfleet = set()
 
-                                for i, nazwa_arkusza in enumerate(wybrane_arkusze):
-                                    pask_postepu.progress((i / len(wybrane_arkusze)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
-                                    start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
-                                    if not start_auto: continue
+                                # Pętla po wybranych opcjach (które mogą pochodzić z różnych plików)
+                                for i, opcja in enumerate(wybrane_opcje):
+                                    dane_opcji = mapa_arkuszy_do_wyboru[opcja]
                                     
+                                    obj_excel = dane_opcji['plik_obj']
+                                    nazwa_arkusza = dane_opcji['nazwa_arkusza']
+                                    start_auto = dane_opcji['start']
+                                    stop_auto = dane_opcji['stop']
+
+                                    pask_postepu.progress((i / len(wybrane_opcje)), text=f"Analizuję: {opcja}...")
+                                    
+                                    if not start_auto:
+                                        st.warning(f"Pominięto {opcja} - brak poprawnej daty.")
+                                        continue
+                                    
+                                    # Pobranie Webfleet dla tego konkretnego okresu
                                     df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
                                     if not df_wf.empty: unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
 
-                                    df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
+                                    # Odczyt arkusza z odpowiedniego obiektu Excel
+                                    df_sheet = pd.read_excel(obj_excel, sheet_name=nazwa_arkusza, header=None)
                                     df_place = parsuj_dataframe_plac(df_sheet)
+                                    
                                     if df_place.empty: continue
 
                                     df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
 
+                                    # Logika łączenia (taka sama jak wcześniej)
                                     if not df_wf.empty:
                                         stats = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
                                         stats['kierowca_norm'] = stats['kierowca'].str.upper().str.strip()
@@ -1651,15 +1692,15 @@ def render_admin_content(conn, wybrana_firma):
                                         wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
                                         
                                         wynik['data_ksiegowania'] = stop_auto
-                                        wynik['miesiac_opis'] = nazwa_arkusza
+                                        # Dodajemy nazwę miesiąca/arkusza do opisu
+                                        wynik['miesiac_opis'] = f"{nazwa_arkusza} ({start_auto.strftime('%m.%Y')})"
                                         
                                         lista_wynikow_miesiecznych.append(wynik)
                                     
                                 pask_postepu.empty()
                                 
                                 if lista_wynikow_miesiecznych:
-                                    # Łączenie z ignore_index=True (NAPRAWA DAT)
-                                    df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['miesiac_opis', 'Kierowca'])
+                                    df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['data_ksiegowania', 'Kierowca'])
                                     
                                     st.session_state['temp_wynagrodzenia_all'] = df_all
                                     
@@ -1667,13 +1708,11 @@ def render_admin_content(conn, wybrana_firma):
                                     if "BRAK (Wybierz)" in pojazdy_all: pojazdy_all.remove("BRAK (Wybierz)")
                                     pojazdy_all.insert(0, "BRAK (Wybierz)")
                                     st.session_state['wszystkie_znane_pojazdy'] = pojazdy_all
-                                    st.success(f"Policzono {len(df_all)} wierszy. Przyjęty kurs podglądu: {kurs_eur:.2f} PLN/EUR")
+                                    st.success(f"Policzono {len(df_all)} wierszy z {len(lista_wynikow_miesiecznych)} arkuszy.")
                                 else:
-                                    st.error("Brak wyników.")
+                                    st.error("Brak wyników (nie udało się dopasować żadnych danych).")
                             except Exception as e:
-                                st.error(f"Błąd: {e}")
-            except Exception as e:
-                st.error(f"Błąd pliku: {e}")
+                                st.error(f"Błąd ogólny: {e}")
 
         # --- EDYCJA Z PODGLĄDEM EUR ---
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
@@ -1693,7 +1732,7 @@ def render_admin_content(conn, wybrana_firma):
                     "koszt_eur_est": st.column_config.NumberColumn("Koszt (EUR) [Est]", format="%.2f €", disabled=True, help=f"Kurs ok. {current_rate:.2f}"),
                     "data_ksiegowania": st.column_config.DateColumn("Data"),
                     "Kierowca": st.column_config.TextColumn("Kierowca", disabled=True),
-                    "miesiac_opis": st.column_config.TextColumn("Miesiąc", disabled=True),
+                    "miesiac_opis": st.column_config.TextColumn("Miesiąc", disabled=True, width="medium"),
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -1716,7 +1755,7 @@ def render_admin_content(conn, wybrana_firma):
                         db_df['zrodlo'] = 'Excel Płace'
                         db_df['kraj'] = 'PL'
                         db_df['kontrahent'] = db_df['Kierowca']
-    
+
                         # --- POPRAWKA: Dynamiczne przypisywanie firmy ---
                         def ustal_firme_dla_wynagrodzenia(row):
                             p = str(row['pojazd']).upper().replace(" ", "").replace("-", "")
@@ -1730,17 +1769,17 @@ def render_admin_content(conn, wybrana_firma):
                                 return 'UNIX-TRANS'
                             if 'KACPER' in p:
                                 return 'UNIX-TRANS'
-    
+
                             # 3. Jeśli nie znaleziono w Unix, przypisz do HOLIER
                             return 'HOLIER'
-    
+
                         db_df['firma'] = db_df.apply(ustal_firme_dla_wynagrodzenia, axis=1)
                         # ------------------------------------------------
-    
+
                         cols_to_save = ['data_transakcji', 'identyfikator', 'kwota_netto', 'kwota_brutto', 
                                         'waluta', 'ilosc', 'produkt', 'typ', 'zrodlo', 'kraj', 'firma', 'kontrahent']
                         db_df = db_df[cols_to_save]
-    
+
                         db_df.to_sql(NAZWA_TABELI, conn.engine, if_exists='append', index=False, schema=NAZWA_SCHEMATU)
                         st.success("✅ Zapisano pomyślnie z podziałem na firmy!")
                         time.sleep(1.5); st.rerun()
