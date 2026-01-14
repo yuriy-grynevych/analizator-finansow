@@ -161,103 +161,99 @@ MAPA_MIESIECY_PL = {
 
 def parsuj_dataframe_plac(df):
     wyniki = []
-    aktualny_kierowca_raw = None # Oryginalna nazwa z Excela (do wyświetlania)
-    aktualny_kierowca_norm = None # Znormalizowana nazwa (do łączenia z bazą)
+    aktualny_kierowca_raw = None 
+    aktualny_kierowca_norm = None
     
-    # Konwersja na stringi i czyszczenie NaN
+    # Konwersja całej tabeli na stringi, zamiana 'nan' na pusty ciąg
     df = df.astype(str)
     
-    # Słowa kluczowe oznaczające wiersz z nazwiskiem (na podstawie Twoich zrzutów)
-    # Dodajemy 'STAWKA', bo na zrzucie 1 nazwisko jest przy "stawka", a "ilość dni" jest niżej
-    KLUCZE_SZUKANIA_NAZWISKA = ["ILOSC DNI", "ILOŚĆ DNI", "DNI JAZDY", "STAWKA"]
+    # Słowa, które ignorujemy, bo to nie są nazwiska
+    SLOWA_IGNOROWANE = [
+        "ILOSC", "ILOŚĆ", "DNI", "STAWKA", "KWOTA", "RAZEM", "SUMA", 
+        "LISTA", "PŁAC", "PLAC", "DOPŁATA", "DOPLATA", "PLN", "EURO", 
+        "NOCKI", "ADR", "MANDATY", "TOTAL", "DATA", "PODPIS", "KIEROWCA"
+    ]
     
-    # Słowa kluczowe oznaczające kwotę
-    KLUCZE_KWOTY = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
+    # Słowa oznaczające, że w tym wierszu jest kasa
+    KLUCZE_KWOTY = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM", "DO WYPLATY"]
 
     for idx, row in df.iterrows():
-        # Pobieramy pierwsze 4 kolumny dla pewności (czasem są przesunięcia)
-        cols = [str(row.iloc[i]).strip().upper() for i in range(min(4, len(row)))]
-        tekst_wiersza = " ".join(cols)
+        # Pobieramy zawartość pierwszych kolumn, gdzie zazwyczaj jest nazwisko lub opis
+        col0 = str(row.iloc[0]).strip().upper()
+        col1 = str(row.iloc[1]).strip().upper() if len(row) > 1 else ""
         
-        # --- 1. Szukamy nazwiska ---
-        # Sprawdzamy czy wiersz zawiera słowo kluczowe ORAZ czy nie jest to wiersz podsumowania
-        if any(k in tekst_wiersza for k in KLUCZE_SZUKANIA_NAZWISKA) and not "PODSUMOWANIE" in tekst_wiersza:
-            # Szukamy kandydata na nazwisko w kolumnach. 
-            # Kandydat to tekst, który NIE jest liczbą, NIE zawiera słów kluczowych i ma min. 3 znaki.
-            kandydaci = []
-            for c in cols:
-                if (c and c != "NAN" 
-                    and not any(k in c for k in KLUCZE_SZUKANIA_NAZWISKA) 
-                    and not any(x.isdigit() for x in c) # Odrzucamy komórki z cyframi (np. stawki)
-                    and len(c) > 3):
-                    kandydaci.append(c)
+        tekst_wiersza = (col0 + " " + col1).upper()
+        
+        # --- ETAP 1: SZUKANIE NAZWISKA ---
+        # Nazwisko jest zazwyczaj w kolumnie A (col0). 
+        # Warunki: nie jest puste, nie jest liczbą, ma min 3 znaki, nie zawiera słów zakazanych.
+        
+        kandydat = col0
+        if (len(kandydat) > 3 
+            and kandydat != "NAN"
+            and not any(char.isdigit() for char in kandydat) # Nazwisko nie ma cyfr
+            and not any(zakaz in kandydat for zakaz in SLOWA_IGNOROWANE)):
             
-            if kandydaci:
-                aktualny_kierowca_raw = kandydaci[0] # Bierzemy pierwszy pasujący tekst
-                aktualny_kierowca_norm = normalizuj_nazwe_kierowcy(aktualny_kierowca_raw)
+            aktualny_kierowca_raw = kandydat
+            aktualny_kierowca_norm = normalizuj_nazwe_kierowcy(kandydat)
+            # Jeśli znaleźliśmy nazwisko, idziemy do następnego wiersza szukać kwoty
             continue
-            
-        # --- 2. Szukamy KWOTY ---
-        if any(s in tekst_wiersza for s in KLUCZE_KWOTY):
-            if aktualny_kierowca_norm:
+
+        # --- ETAP 2: SZUKANIE KWOTY ---
+        # Jeśli mamy zapamiętanego kierowcę, szukamy kwoty w bieżącym wierszu
+        if aktualny_kierowca_norm and any(k in tekst_wiersza for k in KLUCZE_KWOTY):
+            znaleziono_kwote = False
+            for val in row:
+                # Czyszczenie wartości liczbowej
+                val_str = str(val).upper().replace('ZL', '').replace('PLN', '').replace(' ', '').replace(',', '.')
+                
+                # Pomiń puste, napisy typu "KWOTA" itp.
+                if not val_str or val_str == "NAN" or any(c.isalpha() for c in val_str):
+                    continue
+                
                 try:
-                    wartosc = 0.0
-                    found = False
-                    # Przeszukujemy cały wiersz w poszukiwaniu liczby
-                    for val in row:
-                        val_str = str(val).replace(',', '.').replace(' ', '').replace('zł', '').replace('pln', '')
-                        # Ignorujemy puste, napisy i same słowa kluczowe
-                        if not val_str or val_str.upper() == 'NAN' or any(s in str(val).upper() for s in KLUCZE_KWOTY):
-                            continue
-                        try:
-                            # Próba konwersji na float
-                            temp_val = float(val_str)
-                            # Kwota musi być sensowna (np. > 100, żeby nie łapać stawek godzinowych czy dniówek)
-                            if temp_val > 100: 
-                                wartosc = temp_val
-                                found = True
-                                break 
-                        except:
-                            continue
-                    
-                    if found:
+                    kwota = float(val_str)
+                    if kwota > 0: # Zakładamy, że wypłata jest dodatnia
                         wyniki.append({
-                            'kierowca': aktualny_kierowca_raw,      # Ładna nazwa do wyświetlania
-                            'kierowca_norm': aktualny_kierowca_norm, # Klucz do łączenia
-                            'kwota_total': wartosc
+                            'kierowca': aktualny_kierowca_raw,
+                            'kierowca_norm': aktualny_kierowca_norm,
+                            'kwota_total': kwota
                         })
-                        # Resetujemy, żeby nie przypisać tej samej kwoty do nikogo w razie błędu w kolejnych wierszach
-                        # (choć w Excelu czasem puste wiersze oddzielają, więc można usunąć reset jeśli gubi dane)
-                        aktualny_kierowca_raw = None 
-                        aktualny_kierowca_norm = None
+                        znaleziono_kwote = True
+                        break # Znaleźliśmy kwotę w tym wierszu, koniec szukania w kolumnach
                 except:
-                    pass
-                    
+                    continue
+            
+            # Opcjonalnie: Po znalezieniu kwoty możemy zresetować kierowcę, 
+            # jeśli w pliku nazwisko zawsze pojawia się przed każdą kwotą.
+            # Jeśli nazwisko jest "nagłówkiem" dla wielu kwot, usuń poniższą linię.
+            if znaleziono_kwote:
+                aktualny_kierowca_raw = None
+                aktualny_kierowca_norm = None
+
     return pd.DataFrame(wyniki)
 def normalizuj_nazwe_kierowcy(nazwa):
     """
-    Zamienia 'Kowalski Jan' oraz 'Jan Kowalski' na ten sam uniwersalny klucz.
-    Usuwa znaki specjalne, zamienia na wielkie litery i sortuje słowa alfabetycznie.
+    Zamienia 'Kowalski Jan' oraz 'Jan Kowalski' na ten sam klucz: 'JAN KOWALSKI'.
+    Ignoruje wielkość liter i zbędne spacje.
     """
-    if not isinstance(nazwa, str) or not nazwa or str(nazwa).lower() == 'nan':
+    if not isinstance(nazwa, str) or not nazwa:
         return None
     
-    # 1. Oczyszczanie: wielkie litery, usuwanie przecinków (np. "Kowalski, Jan")
+    # 1. Czyszczenie śmieci
     clean = str(nazwa).upper().replace(",", " ").replace(".", " ").strip()
     
-    # 2. Rozbijanie na listę słów: ["KOWALSKI", "JAN"]
+    # Jeśli to puste lub "NAN", odrzuć
+    if clean == "NAN" or clean == "":
+        return None
+        
+    # 2. Rozbijanie na słowa
     parts = clean.split()
     
-    # 3. Filtrowanie śmieci (np. pojedyncze litery, jeśli to nie inicjały, ale tu zostawiamy wszystko)
-    parts = [p for p in parts if len(p) > 1 or p.isalpha()]
-    
-    if not parts:
-        return None
-
-    # 4. Sortowanie alfabetyczne: ["JAN", "KOWALSKI"]
+    # 3. Sortowanie alfabetyczne (Dzięki temu JAN KOWALSKI == KOWALSKI JAN)
     parts.sort()
     
-    # 5. Łączenie z powrotem
+    # 4. Łączenie
     return " ".join(parts)
 def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
     nazwa_clean = str(nazwa_arkusza).upper().strip()
@@ -1681,28 +1677,39 @@ def render_admin_content(conn, wybrana_firma):
                                     # Tu dzieje się magia: normalizujemy nazwisko z GPS
                                     df_wf['kierowca_norm'] = df_wf['kierowca'].apply(normalizuj_nazwe_kierowcy)
                                 
-                                # 3. Excel (Parsowanie)
-                                # Uwaga: parsuj_dataframe_plac w kroku 2 już zwraca kolumnę 'kierowca_norm'
+                               # 1. Wczytaj Excela
                                 xls_run = pd.ExcelFile(plik_src)
                                 df_sheet = pd.read_excel(xls_run, sheet_name=nazwa_arkusza, header=None)
+                                
+                                # 2. Parsuj nowym algorytmem
                                 df_place = parsuj_dataframe_plac(df_sheet)
                                 
-                                if df_place.empty: continue
-
-                                # 4. Łączenie (Merge po znormalizowanym kluczu)
+                                if df_place.empty:
+                                    # Debugowanie: jeśli nic nie znalazł, wyświetl komunikat w konsoli/logu
+                                    st.warning(f"Arkusz {nazwa_arkusza}: Nie znaleziono danych. Sprawdź czy format się zgadza.")
+                                    continue
+                            
+                                # 3. Pobierz dane Webfleet
+                                df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
+                                
                                 if not df_wf.empty:
-                                    # Grupujemy Webfleet
+                                    # Znormalizuj nazwiska z Webfleet tą samą funkcją co z Excela
+                                    df_wf['kierowca_norm'] = df_wf['kierowca'].apply(normalizuj_nazwe_kierowcy)
+                                    
+                                    # Grupuj dane GPS
                                     stats = df_wf.groupby(['kierowca_norm', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                    # Merge RIGHT, żeby zachować wszystkich z listy płac, nawet jak nie jeździli w GPS
+                                    
+                                    # ŁĄCZENIE (MERGE)
+                                    # Używamy klucza 'kierowca_norm', który jest posortowany alfabetycznie w obu źródłach
                                     merged = stats.merge(df_place, on='kierowca_norm', how='right')
                                     
-                                    # Uzupełnianie braków w wyświetlaniu (bierzemy ładną nazwę z Excela jeśli GPS pusty)
+                                    # Uzupełnij nazwę wyświetlaną (jeśli brak GPS, weź z Excela)
                                     merged['Kierowca_Display'] = merged['kierowca'].fillna(merged['kierowca_norm'])
                                 else:
+                                    # Brak danych GPS - pokaż tylko Excel
                                     merged = df_place.copy()
                                     merged['pojazd'] = None; merged['dni_jazdy'] = 0
                                     merged['Kierowca_Display'] = merged['kierowca']
-
                                 if not merged.empty:
                                     merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
                                     merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
