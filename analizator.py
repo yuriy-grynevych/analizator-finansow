@@ -2145,12 +2145,48 @@ def render_rentownosc_content(conn, wybrana_firma):
                     plik_analizy = up
 
     def render_rentownosc_content(conn, wybrana_firma):
-    st.subheader("Analiza Rentowności (Pełna Netto + Bilans VAT)")
+    st.subheader("Analiza Rentowności (Pełna + Bilans VAT)")
     
-    # [Reszta kodu bez zmian do momentu obliczeń...]
-    # ... (kod pobierania dat i plików) ...
+    # 1. Pobieranie zakresu dat z bazy
+    try:
+        min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
+        min_max_date = conn.query(min_max_date_query)
+        domyslny_start = date.today()
+        domyslny_stop = date.today()
+        if not min_max_date.empty and min_max_date.iloc[0, 0] is not None:
+            domyslny_start = min_max_date.iloc[0, 0]
+            domyslny_stop = min_max_date.iloc[0, 1]
+    except:
+        domyslny_start, domyslny_stop = date.today(), date.today()
 
-    # 3. Przycisk Generowania (ZMIANA LOGIKI NA NETTO)
+    # 2. Ustawienia (Data + Plik)
+    c1, c2 = st.columns([1, 2])
+    
+    with c1:
+        with st.container(border=True):
+            st.markdown("##### 1. Zakres Dat")
+            data_start = st.date_input("Start", value=domyslny_start, key="rent_start_full")
+            data_stop = st.date_input("Stop", value=domyslny_stop, key="rent_stop_full")
+    
+    with c2:
+        with st.container(border=True):
+            st.markdown("##### 2. Źródło Przychodów")
+            plik_analizy = None
+            nazwa_pliku = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
+            
+            zapisany = wczytaj_plik_z_bazy(conn, nazwa_pliku)
+            if zapisany:
+                st.success(f"Używam zapisanego pliku: {nazwa_pliku}")
+                plik_analizy = io.BytesIO(zapisany)
+                if st.button("Usuń plik z bazy", key="del_file_rent"):
+                    usun_plik_z_bazy(conn, nazwa_pliku)
+                    st.rerun()
+            else:
+                up = st.file_uploader(f"Wgraj {nazwa_pliku}", type=['xlsx', 'csv', 'xls'])
+                if up:
+                    if st.button("Zapisz plik na stałe", key="save_file_rent"):
+                        zapisz_plik_w_bazie(conn, nazwa_pliku, up.getvalue())
+                    plik_analizy = up
     if st.button("Generuj Pełny Raport", type="primary", use_container_width=True):
         if not plik_analizy:
             st.error("Brak pliku przychodów!")
