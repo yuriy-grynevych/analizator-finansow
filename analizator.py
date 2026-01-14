@@ -161,39 +161,60 @@ MAPA_MIESIECY_PL = {
 
 def parsuj_dataframe_plac(df):
     wyniki = []
-    aktualny_kierowca = None
+    aktualny_kierowca_raw = None # Oryginalna nazwa z Excela (do wyświetlania)
+    aktualny_kierowca_norm = None # Znormalizowana nazwa (do łączenia z bazą)
+    
+    # Konwersja na stringi i czyszczenie NaN
     df = df.astype(str)
     
+    # Słowa kluczowe oznaczające wiersz z nazwiskiem (na podstawie Twoich zrzutów)
+    # Dodajemy 'STAWKA', bo na zrzucie 1 nazwisko jest przy "stawka", a "ilość dni" jest niżej
+    KLUCZE_SZUKANIA_NAZWISKA = ["ILOSC DNI", "ILOŚĆ DNI", "DNI JAZDY", "STAWKA"]
+    
+    # Słowa kluczowe oznaczające kwotę
+    KLUCZE_KWOTY = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
+
     for idx, row in df.iterrows():
-        # Pobieramy pierwsze 3 kolumny
-        col0 = str(row.iloc[0]).strip().upper() if len(row) > 0 else ""
-        col1 = str(row.iloc[1]).strip().upper() if len(row) > 1 else ""
-        col2 = str(row.iloc[2]).strip().upper() if len(row) > 2 else ""
+        # Pobieramy pierwsze 4 kolumny dla pewności (czasem są przesunięcia)
+        cols = [str(row.iloc[i]).strip().upper() for i in range(min(4, len(row)))]
+        tekst_wiersza = " ".join(cols)
         
-        tekst_wiersza = (col0 + " " + col1 + " " + col2).upper()
-        
-        # 1. Szukamy nazwiska (zakładamy że jest przy "ILOŚĆ DNI" lub "DNI")
-        if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza or "DNI JAZDY" in tekst_wiersza:
-            # Nazwisko jest zazwyczaj w pierwszej niepustej komórce tego wiersza
-            kandydaci = [c for c in [col0, col1, col2] if c and c != "NAN" and "ILOSC" not in c and "DNI" not in c]
+        # --- 1. Szukamy nazwiska ---
+        # Sprawdzamy czy wiersz zawiera słowo kluczowe ORAZ czy nie jest to wiersz podsumowania
+        if any(k in tekst_wiersza for k in KLUCZE_SZUKANIA_NAZWISKA) and not "PODSUMOWANIE" in tekst_wiersza:
+            # Szukamy kandydata na nazwisko w kolumnach. 
+            # Kandydat to tekst, który NIE jest liczbą, NIE zawiera słów kluczowych i ma min. 3 znaki.
+            kandydaci = []
+            for c in cols:
+                if (c and c != "NAN" 
+                    and not any(k in c for k in KLUCZE_SZUKANIA_NAZWISKA) 
+                    and not any(x.isdigit() for x in c) # Odrzucamy komórki z cyframi (np. stawki)
+                    and len(c) > 3):
+                    kandydaci.append(c)
+            
             if kandydaci:
-                aktualny_kierowca = kandydaci[0]
+                aktualny_kierowca_raw = kandydaci[0] # Bierzemy pierwszy pasujący tekst
+                aktualny_kierowca_norm = normalizuj_nazwe_kierowcy(aktualny_kierowca_raw)
             continue
             
-        # 2. Szukamy KWOTY (Słowa kluczowe: KWOTA, DO WYPŁATY, RAZEM)
-        SŁOWA_KLUCZOWE = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
-        if any(s in tekst_wiersza for s in SŁOWA_KLUCZOWE):
-            if aktualny_kierowca:
+        # --- 2. Szukamy KWOTY ---
+        if any(s in tekst_wiersza for s in KLUCZE_KWOTY):
+            if aktualny_kierowca_norm:
                 try:
                     wartosc = 0.0
                     found = False
+                    # Przeszukujemy cały wiersz w poszukiwaniu liczby
                     for val in row:
                         val_str = str(val).replace(',', '.').replace(' ', '').replace('zł', '').replace('pln', '')
-                        if not val_str or val_str.upper() == 'NAN' or any(s in val_str.upper() for s in SŁOWA_KLUCZOWE):
+                        # Ignorujemy puste, napisy i same słowa kluczowe
+                        if not val_str or val_str.upper() == 'NAN' or any(s in str(val).upper() for s in KLUCZE_KWOTY):
                             continue
                         try:
-                            wartosc = float(val_str)
-                            if wartosc > 0: # Ignorujemy zera
+                            # Próba konwersji na float
+                            temp_val = float(val_str)
+                            # Kwota musi być sensowna (np. > 100, żeby nie łapać stawek godzinowych czy dniówek)
+                            if temp_val > 100: 
+                                wartosc = temp_val
                                 found = True
                                 break 
                         except:
@@ -201,32 +222,42 @@ def parsuj_dataframe_plac(df):
                     
                     if found:
                         wyniki.append({
-                            'kierowca': aktualny_kierowca,
+                            'kierowca': aktualny_kierowca_raw,      # Ładna nazwa do wyświetlania
+                            'kierowca_norm': aktualny_kierowca_norm, # Klucz do łączenia
                             'kwota_total': wartosc
                         })
-                        aktualny_kierowca = None # Reset
+                        # Resetujemy, żeby nie przypisać tej samej kwoty do nikogo w razie błędu w kolejnych wierszach
+                        # (choć w Excelu czasem puste wiersze oddzielają, więc można usunąć reset jeśli gubi dane)
+                        aktualny_kierowca_raw = None 
+                        aktualny_kierowca_norm = None
                 except:
                     pass
                     
     return pd.DataFrame(wyniki)
 def normalizuj_nazwe_kierowcy(nazwa):
     """
-    Zamienia 'Kowalski Jan' oraz 'Jan Kowalski' na ten sam klucz: 'JAN KOWALSKI'.
-    Usuwa przecinki, wielokrotne spacje i sortuje słowa alfabetycznie.
+    Zamienia 'Kowalski Jan' oraz 'Jan Kowalski' na ten sam uniwersalny klucz.
+    Usuwa znaki specjalne, zamienia na wielkie litery i sortuje słowa alfabetycznie.
     """
-    if not isinstance(nazwa, str) or not nazwa:
-        return ""
+    if not isinstance(nazwa, str) or not nazwa or str(nazwa).lower() == 'nan':
+        return None
     
-    # Usuwamy przecinki (gdyby było "Kowalski, Jan") i zamieniamy na wielkie litery
-    clean = nazwa.upper().replace(",", " ").strip()
+    # 1. Oczyszczanie: wielkie litery, usuwanie przecinków (np. "Kowalski, Jan")
+    clean = str(nazwa).upper().replace(",", " ").replace(".", " ").strip()
     
-    # Rozbijamy na listę słów ["KOWALSKI", "JAN"]
+    # 2. Rozbijanie na listę słów: ["KOWALSKI", "JAN"]
     parts = clean.split()
     
-    # Sortujemy alfabetycznie ["JAN", "KOWALSKI"]
+    # 3. Filtrowanie śmieci (np. pojedyncze litery, jeśli to nie inicjały, ale tu zostawiamy wszystko)
+    parts = [p for p in parts if len(p) > 1 or p.isalpha()]
+    
+    if not parts:
+        return None
+
+    # 4. Sortowanie alfabetyczne: ["JAN", "KOWALSKI"]
     parts.sort()
     
-    # Łączymy z powrotem
+    # 5. Łączenie z powrotem
     return " ".join(parts)
 def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
     nazwa_clean = str(nazwa_arkusza).upper().strip()
@@ -1586,29 +1617,30 @@ def render_admin_content(conn, wybrana_firma):
                 
     st.divider()
 
-    # 3. ANALIZA WYNAGRODZEŃ (UPDATED)
-    st.markdown("### 💰 Analiza Wynagrodzeń (Podgląd EUR + Edycja)")
+    # 3. ANALIZA WYNAGRODZEŃ
+    st.markdown("### 💰 Analiza Wynagrodzeń (Wiele plików + Auto-Dopasowanie)")
     
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
-        st.info("1. Wgraj pliki Excel (możesz wgrać kilka naraz). 2. Wybierz arkusze. 3. System dopasuje nazwiska niezależnie od kolejności (Jan Kowalski = Kowalski Jan).")
+        st.info("System teraz ignoruje kolejność imienia i nazwiska (Jan Kowalski = Kowalski Jan). Możesz wgrać pliki za styczeń, grudzień itp. jednocześnie.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
             rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=2025) 
-            # ZMIANA: accept_multiple_files=True
+            # ZMIANA: Włączono multiple files
             pliki_plac = st.file_uploader("Wgraj pliki Excel (Wynagrodzenia)", type=['xlsx', 'xls'], accept_multiple_files=True)
 
         if pliki_plac:
-            # Tworzymy mapę arkuszy ze wszystkich plików
-            mapa_arkuszy = {} # Klucz: "NazwaPliku - Arkusz", Wartość: (plik_bytes, nazwa_arkusza)
+            # Tworzymy listę dostępnych arkuszy ze wszystkich plików
+            mapa_arkuszy = {} 
             lista_opcji_display = []
 
             for plik in pliki_plac:
                 try:
                     xls_temp = pd.ExcelFile(plik)
                     for sheet in xls_temp.sheet_names:
+                        # Tworzymy unikalną nazwę: [Plik.xlsx] NazwaArkusza
                         unikalna_nazwa = f"[{plik.name}] {sheet}"
                         mapa_arkuszy[unikalna_nazwa] = (plik, sheet)
                         lista_opcji_display.append(unikalna_nazwa)
@@ -1616,119 +1648,102 @@ def render_admin_content(conn, wybrana_firma):
                     st.error(f"Błąd odczytu pliku {plik.name}: {e}")
 
             if lista_opcji_display:
-                st.success(f"📂 Wczytano {len(pliki_plac)} plików. Znaleziono {len(lista_opcji_display)} arkuszy.")
-                
                 wybrane_opcje = st.multiselect(
-                    "📅 Wybierz miesiące (arkusze) do przeliczenia:",
+                    "📅 Wybierz arkusze do przeliczenia:",
                     options=lista_opcji_display,
                     default=lista_opcji_display
                 )
 
                 if st.button("🚀 Oblicz (z podglądem EUR)", type="primary"):
                     if not wybrane_opcje:
-                        st.warning("Nie zaznaczyłeś żadnego miesiąca!")
+                        st.warning("Wybierz przynajmniej jeden arkusz.")
                     else:
                         st.session_state['temp_wynagrodzenia_all'] = None 
-                        
                         acc, user, pw = pobierz_ustawienia_api(conn)
                         kurs_eur = pobierz_kurs_eur_pln()
                         if not kurs_eur: kurs_eur = 4.30
-                        st.session_state['current_eur_rate'] = kurs_eur
-
-                        if not acc:
-                            st.error("Brak konfiguracji Webfleet!")
-                        else:
-                            try:
-                                lista_wynikow_miesiecznych = []
-                                pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
-                                unikalne_pojazdy_z_webfleet = set()
-
-                                for i, opcja_nazwa in enumerate(wybrane_opcje):
-                                    plik_src, nazwa_arkusza = mapa_arkuszy[opcja_nazwa]
-                                    
-                                    pask_postepu.progress((i / len(wybrane_opcje)), text=f"Analizuję: {opcja_nazwa}...")
-                                    
-                                    start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
-                                    if not start_auto: continue
-                                    
-                                    # 1. Pobierz dane Webfleet
-                                    df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
-                                    if not df_wf.empty: 
-                                        unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
-                                        # ZMIANA: Normalizacja nazwisk w Webfleet (sortowanie słów)
-                                        df_wf['kierowca_norm'] = df_wf['kierowca'].apply(normalizuj_nazwe_kierowcy)
-                                    
-                                    # 2. Pobierz dane z Excela
-                                    # Musimy otworzyć plik ponownie lub skorzystać z bufora
-                                    xls_run = pd.ExcelFile(plik_src)
-                                    df_sheet = pd.read_excel(xls_run, sheet_name=nazwa_arkusza, header=None)
-                                    df_place = parsuj_dataframe_plac(df_sheet)
-                                    
-                                    if df_place.empty: continue
-
-                                    # ZMIANA: Normalizacja nazwisk w Excelu (sortowanie słów - naprawia problem GRUDNIA)
-                                    df_place['kierowca_norm'] = df_place['kierowca'].apply(normalizuj_nazwe_kierowcy)
-
-                                    # 3. Łączenie danych (Merge po znormalizowanej nazwie)
-                                    if not df_wf.empty:
-                                        # Grupujemy Webfleet po znormalizowanym nazwisku i pojeździe
-                                        stats = df_wf.groupby(['kierowca_norm', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                        
-                                        # Merge
-                                        merged = stats.merge(df_place, on='kierowca_norm', how='right')
-                                        
-                                        # Jeśli po merge'u mamy puste 'kierowca' (bo przyszło z Excela a nie było w Webfleet), uzupełniamy z Excela
-                                        # Uwaga: df_place ma kolumnę 'kierowca', stats nie ma (ma kierowca_norm). 
-                                        # Po merge 'kierowca' z df_place będzie zachowane.
-                                    else:
-                                        merged = df_place.copy()
-                                        merged['pojazd'] = None; merged['dni_jazdy'] = 0
-
-                                    if not merged.empty:
-                                        merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
-                                        merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
-                                        
-                                        # Rozdzielanie kosztów jeśli kierowca jeździł wieloma autami
-                                        total = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum').replace(0, 1)
-                                        merged['udzial'] = merged['dni_jazdy'] / total
-                                        merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
-                                        
-                                        maska_brak = merged['pojazd'] == "BRAK (Wybierz)"
-                                        merged.loc[maska_brak, 'koszt_przypisany'] = merged.loc[maska_brak, 'kwota_total']
-                                        
-                                        merged['koszt_eur_est'] = merged['koszt_przypisany'] / kurs_eur
-
-                                        # Wybieramy kolumny do wyniku
-                                        # Używamy oryginalnego 'kierowca' z Excela dla czytelności (jeśli istnieje)
-                                        cols_to_select = ['pojazd', 'kierowca', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']
-                                        wynik = merged[cols_to_select].copy()
-                                        
-                                        wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
-                                        
-                                        wynik['data_ksiegowania'] = stop_auto
-                                        wynik['miesiac_opis'] = opcja_nazwa
-                                        
-                                        lista_wynikow_miesiecznych.append(wynik)
-                                    
-                                pask_postepu.empty()
+                        
+                        try:
+                            lista_wynikow = []
+                            pask = st.progress(0, text="Start...")
+                            
+                            for i, opcja in enumerate(wybrane_opcje):
+                                plik_src, nazwa_arkusza = mapa_arkuszy[opcja]
+                                pask.progress((i / len(wybrane_opcje)), text=f"Przetwarzam: {opcja}")
                                 
-                                if lista_wynikow_miesiecznych:
-                                    df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['miesiac_opis', 'Kierowca'])
+                                # 1. Daty
+                                start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
+                                if not start_auto: continue
+                                
+                                # 2. Webfleet (Pobranie i NORMALIZACJA)
+                                df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
+                                if not df_wf.empty:
+                                    # Tu dzieje się magia: normalizujemy nazwisko z GPS
+                                    df_wf['kierowca_norm'] = df_wf['kierowca'].apply(normalizuj_nazwe_kierowcy)
+                                
+                                # 3. Excel (Parsowanie)
+                                # Uwaga: parsuj_dataframe_plac w kroku 2 już zwraca kolumnę 'kierowca_norm'
+                                xls_run = pd.ExcelFile(plik_src)
+                                df_sheet = pd.read_excel(xls_run, sheet_name=nazwa_arkusza, header=None)
+                                df_place = parsuj_dataframe_plac(df_sheet)
+                                
+                                if df_place.empty: continue
+
+                                # 4. Łączenie (Merge po znormalizowanym kluczu)
+                                if not df_wf.empty:
+                                    # Grupujemy Webfleet
+                                    stats = df_wf.groupby(['kierowca_norm', 'pojazd']).size().reset_index(name='dni_jazdy')
+                                    # Merge RIGHT, żeby zachować wszystkich z listy płac, nawet jak nie jeździli w GPS
+                                    merged = stats.merge(df_place, on='kierowca_norm', how='right')
                                     
-                                    st.session_state['temp_wynagrodzenia_all'] = df_all
-                                    
-                                    pojazdy_all = sorted(list(unikalne_pojazdy_z_webfleet.union(set(DODATKOWE_POJAZDY))))
-                                    if "BRAK (Wybierz)" in pojazdy_all: pojazdy_all.remove("BRAK (Wybierz)")
-                                    pojazdy_all.insert(0, "BRAK (Wybierz)")
-                                    st.session_state['wszystkie_znane_pojazdy'] = pojazdy_all
-                                    st.success(f"Policzono {len(df_all)} wierszy. Przyjęty kurs podglądu: {kurs_eur:.2f} PLN/EUR")
+                                    # Uzupełnianie braków w wyświetlaniu (bierzemy ładną nazwę z Excela jeśli GPS pusty)
+                                    merged['Kierowca_Display'] = merged['kierowca'].fillna(merged['kierowca_norm'])
                                 else:
-                                    st.error("Brak wyników (nie udało się sparować danych lub puste pliki).")
-                            except Exception as e:
-                                st.error(f"Błąd logiczny: {e}")
-                                st.exception(e) # Pokaż szczegóły błędu
-            else:
-                st.warning("Nie znaleziono arkuszy w wybranych plikach.")
+                                    merged = df_place.copy()
+                                    merged['pojazd'] = None; merged['dni_jazdy'] = 0
+                                    merged['Kierowca_Display'] = merged['kierowca']
+
+                                if not merged.empty:
+                                    merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
+                                    merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
+                                    
+                                    # Obliczanie udziałów (dla kierowców jeżdżących kilkoma autami)
+                                    total_dni = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum').replace(0, 1)
+                                    merged['koszt_przypisany'] = merged['kwota_total'] * (merged['dni_jazdy'] / total_dni)
+                                    
+                                    # Jeśli brak GPS, przypisz 100% kwoty do "BRAK (Wybierz)"
+                                    maska_brak = merged['pojazd'] == "BRAK (Wybierz)"
+                                    merged.loc[maska_brak, 'koszt_przypisany'] = merged.loc[maska_brak, 'kwota_total']
+                                    
+                                    merged['koszt_eur_est'] = merged['koszt_przypisany'] / kurs_eur
+                                    
+                                    # Przygotowanie wyniku
+                                    wynik = merged[['pojazd', 'Kierowca_Display', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
+                                    wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
+                                    wynik['data_ksiegowania'] = stop_auto
+                                    wynik['miesiac_opis'] = opcja
+                                    
+                                    lista_wynikow.append(wynik)
+                            
+                            pask.empty()
+                            
+                            if lista_wynikow:
+                                df_all = pd.concat(lista_wynikow, ignore_index=True)
+                                st.session_state['temp_wynagrodzenia_all'] = df_all
+                                
+                                # Aktualizacja listy pojazdów
+                                unikalne_auta = set(df_all['pojazd'].unique())
+                                pojazdy_all = sorted(list(unikalne_auta.union(set(DODATKOWE_POJAZDY))))
+                                if "BRAK (Wybierz)" in pojazdy_all: pojazdy_all.remove("BRAK (Wybierz)")
+                                pojazdy_all.insert(0, "BRAK (Wybierz)")
+                                st.session_state['wszystkie_znane_pojazdy'] = pojazdy_all
+                                
+                                st.success(f"Przeliczono {len(df_all)} pozycji.")
+                            else:
+                                st.error("Nie znaleziono danych w wybranych arkuszach.")
+                                
+                        except Exception as e:
+                            st.error(f"Wystąpił błąd: {e}")
 
         # --- EDYCJA Z PODGLĄDEM EUR ---
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
