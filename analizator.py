@@ -1594,7 +1594,7 @@ def to_excel_contractors(df_analiza_raw):
                 'Kwota EUR (Brutto)': sub_data['kwota_brutto_eur']
             }).sort_values(by='Data')
             formatted.to_excel(writer, sheet_name=safe_name, index=False)
-    return output.getvalue()    
+    return output.getvalue()
 def render_koszty_ogolne_content(conn, wybrana_firma):
     st.subheader("Koszty Ogólne (Bez przypisanego pojazdu)")
     st.info("Tutaj znajdują się wydatki z pliku analizy, które nie posiadają przypisanego numeru rejestracyjnego.")
@@ -1644,6 +1644,7 @@ def render_koszty_ogolne_content(conn, wybrana_firma):
                 )
         else:
             st.error("Nie udało się przetworzyć pliku analizy.")
+            
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
@@ -2144,49 +2145,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                         zapisz_plik_w_bazie(conn, nazwa_pliku, up.getvalue())
                     plik_analizy = up
 
-def render_rentownosc_content(conn, wybrana_firma):
-    st.subheader("Analiza Rentowności (Pełna + Bilans VAT)")
-    
-    # 1. Pobieranie zakresu dat z bazy
-    try:
-        min_max_date_query = f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}"
-        min_max_date = conn.query(min_max_date_query)
-        domyslny_start = date.today()
-        domyslny_stop = date.today()
-        if not min_max_date.empty and min_max_date.iloc[0, 0] is not None:
-            domyslny_start = min_max_date.iloc[0, 0]
-            domyslny_stop = min_max_date.iloc[0, 1]
-    except:
-        domyslny_start, domyslny_stop = date.today(), date.today()
-
-    # 2. Ustawienia (Data + Plik)
-    c1, c2 = st.columns([1, 2])
-    
-    with c1:
-        with st.container(border=True):
-            st.markdown("##### 1. Zakres Dat")
-            data_start = st.date_input("Start", value=domyslny_start, key="rent_start_full")
-            data_stop = st.date_input("Stop", value=domyslny_stop, key="rent_stop_full")
-    
-    with c2:
-        with st.container(border=True):
-            st.markdown("##### 2. Źródło Przychodów")
-            plik_analizy = None
-            nazwa_pliku = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
-            
-            zapisany = wczytaj_plik_z_bazy(conn, nazwa_pliku)
-            if zapisany:
-                st.success(f"Używam zapisanego pliku: {nazwa_pliku}")
-                plik_analizy = io.BytesIO(zapisany)
-                if st.button("Usuń plik z bazy", key="del_file_rent"):
-                    usun_plik_z_bazy(conn, nazwa_pliku)
-                    st.rerun()
-            else:
-                up = st.file_uploader(f"Wgraj {nazwa_pliku}", type=['xlsx', 'csv', 'xls'])
-                if up:
-                    if st.button("Zapisz plik na stałe", key="save_file_rent"):
-                        zapisz_plik_w_bazie(conn, nazwa_pliku, up.getvalue())
-                    plik_analizy = up
+    # 3. Przycisk Generowania (ZMIANA LOGIKI NA NETTO)
     if st.button("Generuj Pełny Raport", type="primary", use_container_width=True):
         if not plik_analizy:
             st.error("Brak pliku przychodów!")
@@ -2242,6 +2201,7 @@ def render_rentownosc_content(conn, wybrana_firma):
                 
                 st.session_state['df_rentownosc'] = final.sort_values(by='ZYSK_EUR', ascending=False)
                 st.session_state['raport_gotowy'] = True
+                
                 # Usuwamy śmieci
                 for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER"]:
                     final = final[~final.index.astype(str).str.contains(bad, case=False, na=False)]
@@ -2819,11 +2779,7 @@ def main_app():
             st.session_state.active_view = 'Porównanie'
             st.session_state.show_admin = False
             st.rerun()
-        ogolne_type = "primary" if st.session_state.active_view == 'KosztyOgólne' else "secondary"
-    if st.button("Koszty Ogólne", type=ogolne_type, use_container_width=True):
-        st.session_state.active_view = 'KosztyOgólne'
-        st.session_state.show_admin = False
-        st.rerun()
+
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         st.divider()
         
@@ -2834,7 +2790,12 @@ def main_app():
         if st.button("🧹 Wyczyść Cache"):
             st.cache_data.clear()
             st.rerun() 
-            
+       # Dodaj przycisk do menu
+        ogolne_type = "primary" if st.session_state.active_view == 'KosztyOgólne' else "secondary"
+        if st.button("Koszty Ogólne", type=ogolne_type, use_container_width=True):
+            st.session_state.active_view = 'KosztyOgólne'
+            st.session_state.show_admin = False
+            st.rerun()     
     try: conn = st.connection(NAZWA_POLACZENIA_DB, type="sql")
     except Exception as e: st.error("Błąd połączenia z DB."); st.stop()
 
