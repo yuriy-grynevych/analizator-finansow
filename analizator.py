@@ -171,7 +171,6 @@ def parsuj_dataframe_plac(df):
         "DZHAVADOV MARUVVAT", 
         "DZHADOV MURUUVAT", 
         "DULIN CEDRYK",
-        "ANDRUSHENKO SERHII",
         "MARIN VALERII",
         "HOLER SIARHEI",
         "SMITHIUKH SERHII"
@@ -182,6 +181,7 @@ def parsuj_dataframe_plac(df):
     MAPOWANIE_NAZWISK = {
         "IGOR RUTKOVSKYI": "IGOR RUTKOWSKYI",
         "RUTKOVSKYI IGOR": "IGOR RUTKOWSKYI",
+        "ANDRUSHCHENKO SERHII": "ANDRUSHENKO SERHII",
         # Tutaj możesz dopisać kolejne, np.:
         # "YURY TSIKHANOVICH": "YURI TSIKHANOVICH"
     }
