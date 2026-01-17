@@ -165,8 +165,15 @@ def parsuj_dataframe_plac(df):
     ostatnia_kwota = 0.0
     df = df.astype(str)
     
+    def odwroc_nazwisko(tekst):
+        # Funkcja zamienia "KOWALSKI JAN" na "JAN KOWALSKI"
+        czesci = tekst.strip().split()
+        if len(czesci) >= 2:
+            # Bierze ostatni element i przesuwa na początek (obsługuje też nazwiska dwuczłonowe)
+            return f"{czesci[-1]} {' '.join(czesci[:-1])}"
+        return tekst
+
     for idx, row in df.iterrows():
-        # Pobieramy pierwsze 3 kolumny do identyfikacji wiersza
         col0 = str(row.iloc[0]).strip() if len(row) > 0 else ""
         col1 = str(row.iloc[1]).strip() if len(row) > 1 else ""
         col2 = str(row.iloc[2]).strip() if len(row) > 2 else ""
@@ -175,27 +182,25 @@ def parsuj_dataframe_plac(df):
         col1_u = col1.upper()
         col2_u = col2.upper()
         
-        # Tekst do szukania słów kluczowych
         tekst_wiersza = (col0_u + " " + col1_u + " " + col2_u)
         
         nowy_kierowca = None
         
-        # 1. DETEKCJA NAZWISKA - Nowy format (np. 12.2025)
-        # Szukamy liczby w col0 (L.p.) i tekstu w col1 (Nazwisko)
+        # 1. DETEKCJA NAZWISKA - Format blokowy (np. 12.2025)
         clean_col0 = col0.replace(".", "").strip()
         if clean_col0.isdigit() and col1 and col1_u != "NAN" and len(col1) > 2:
-            # Wykluczamy nagłówki i typowe słowa techniczne
             if not any(k in col1_u for k in ["NAZWISKO", "STAWKA", "ILOŚĆ", "KWOTA", "DOPŁATA", "INFO"]):
-                nowy_kierowca = col1
+                # TUTAJ NASTĘPUJE ODWRÓCENIE: format z tabeli (NAZWISKO IMIĘ) -> format Webfleet (IMIĘ NAZWISKO)
+                nowy_kierowca = odwroc_nazwisko(col1_u)
         
         # 2. DETEKCJA NAZWISKA - Stary format (nazwisko obok "ILOSC DNI")
         if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza or "DNI JAZDY" in tekst_wiersza:
             if not nowy_kierowca:
                 kandydaci = [c for c in [col0, col1, col2] if c and c.upper() != "NAN" and "ILOSC" not in c.upper() and "DNI" not in c.upper()]
                 if kandydaci:
-                    nowy_kierowca = kandydaci[0]
+                    # W starym formacie zazwyczaj jest już "IMIĘ NAZWISKO", ale dla pewności normalizujemy do Upper Case
+                    nowy_kierowca = kandydaci[0].upper().strip()
 
-        # Jeśli wykryto nowego kierowcę, zapisujemy dane poprzedniego i przełączamy kontekst
         if nowy_kierowca:
             if aktualny_kierowca and ostatnia_kwota > 0:
                 wyniki.append({'kierowca': aktualny_kierowca, 'kwota_total': ostatnia_kwota})
@@ -204,11 +209,10 @@ def parsuj_dataframe_plac(df):
             ostatnia_kwota = 0.0
             continue
 
-        # 3. SZUKANIE KWOTY (KWOTA, DO WYPŁATY, RAZEM)
+        # 3. SZUKANIE KWOTY
         SŁOWA_KLUCZOWE = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
         if any(s in tekst_wiersza for s in SŁOWA_KLUCZOWE):
             if aktualny_kierowca:
-                # Szukamy pierwszej wartości liczbowej w tym wierszu
                 for val in row:
                     val_str = str(val).replace(',', '.').replace(' ', '').replace('zł', '').replace('pln', '')
                     if not val_str or val_str.upper() == 'NAN' or any(s in val_str.upper() for s in SŁOWA_KLUCZOWE):
@@ -216,18 +220,16 @@ def parsuj_dataframe_plac(df):
                     try:
                         v = float(val_str)
                         if v > 0:
-                            # W nowym formacie 'KWOTA' (PLN) występuje po 'kwota' (EUR).
-                            # Nadpisujemy 'ostatnia_kwota', aby finalnie zapisać tę ostatnią/największą.
                             ostatnia_kwota = v
                             break 
                     except:
                         continue
                         
-    # Zapisujemy ostatniego kierowcę po zakończeniu pętli
     if aktualny_kierowca and ostatnia_kwota > 0:
         wyniki.append({'kierowca': aktualny_kierowca, 'kwota_total': ostatnia_kwota})
                     
     return pd.DataFrame(wyniki)
+    
 def wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_domyslny):
     nazwa_clean = str(nazwa_arkusza).upper().strip()
     znaleziony_rok = rok_domyslny
