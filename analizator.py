@@ -2716,10 +2716,10 @@ def render_ogolne_content(conn, wybrana_firma):
         # Klasyfikacja: Wyświetlamy tylko to, co NIE jest pojazdem
         df_raw['czy_pojazd'] = df_raw['pojazd_clean'].apply(klasyfikuj_wpis)
         # TEST DIAGNOSTYCZNY (dodaj pod: df_raw['czy_pojazd'] = ...)
-with st.expander("🧪 Podgląd klasyfikacji (DEBUG)"):
-    st.write("Wszystkie unikalne identyfikatory i ich klasyfikacja:")
-    debug_df = df_raw[['pojazd_clean', 'czy_pojazd', 'typ']].drop_duplicates()
-    st.dataframe(debug_df)
+        with st.expander("🧪 Podgląd klasyfikacji (DEBUG)"):
+            st.write("Wszystkie unikalne identyfikatory i ich klasyfikacja:")
+            debug_df = df_raw[['pojazd_clean', 'czy_pojazd', 'typ']].drop_duplicates()
+            st.dataframe(debug_df)
         
         # Filtrujemy tylko koszty administracyjne (nie-pojazdy i typ zawiera 'Koszt')
         df_admin = df_raw[(df_raw['czy_pojazd'] == False) & (df_raw['typ'].str.contains('Koszt', case=False, na=False))].copy()
