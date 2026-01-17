@@ -1654,113 +1654,122 @@ def render_admin_content(conn, wybrana_firma):
     st.divider()
 
     # 3. ANALIZA WYNAGRODZEŃ
-    st.markdown("### 💰 Analiza Wynagrodzeń (Podgląd EUR + Edycja)")
+    st.markdown("### 💰 Analiza Wynagrodzeń (Wiele plików + Podgląd EUR)")
     
     DODATKOWE_POJAZDY = ["WPR0103U", "WPR9335N", "WGM8463A", "TRUCK_OSOBOWY", "BRAK (Wybierz)"] 
 
     with st.container(border=True):
-        st.info("1. Wgraj plik Excel. 2. Wybierz miesiące. 3. Oblicz. 4. Edytuj (zobaczysz podgląd w EUR).")
+        st.info("Możesz wgrać kilka plików naraz (np. dla obu firm). Wybierz miesiące, a system połączy dane.")
         
         col_w1, col_w2 = st.columns([1, 2])
         with col_w1:
             rok_analizy = st.number_input("Rok rozliczeniowy", min_value=2023, max_value=2030, value=2025) 
-            plik_plac = st.file_uploader("Wgraj plik Excel (Wynagrodzenia)", type=['xlsx', 'xls'])
+            # ZMIANA: accept_multiple_files=True
+            pliki_plac = st.file_uploader("Wgraj pliki Excel (Wynagrodzenia)", type=['xlsx', 'xls'], accept_multiple_files=True)
 
-        if plik_plac:
-            try:
-                xls_file = pd.ExcelFile(plik_plac)
-                wszystkie_arkusze = xls_file.sheet_names
-                
-                st.success(f"📂 Wczytano plik. Arkusze: {', '.join(wszystkie_arkusze)}")
-                
-                wybrane_arkusze = st.multiselect(
-                    "📅 Wybierz miesiące do przeliczenia:",
-                    options=wszystkie_arkusze,
-                    default=wszystkie_arkusze
-                )
+        if pliki_plac:
+            wszystkie_dostepne_arkusze = []
+            mapa_plikow = {} # Pomocnicza mapa: nazwa_arkusza -> obiekt_pliku
 
-                if st.button("🚀 Oblicz (z podglądem EUR)", type="primary"):
-                    if not wybrane_arkusze:
-                        st.warning("Nie zaznaczyłeś żadnego miesiąca!")
+            for p in pliki_plac:
+                try:
+                    xls_file = pd.ExcelFile(p)
+                    for sheet in xls_file.sheet_names:
+                        arkusz_id = f"{sheet} ({p.name})"
+                        wszystkie_dostepne_arkusze.append(arkusz_id)
+                        mapa_plikow[arkusz_id] = (p, sheet)
+                except Exception as e:
+                    st.error(f"Błąd odczytu pliku {p.name}: {e}")
+
+            wybrane_arkusze_id = st.multiselect(
+                "📅 Wybierz arkusze/miesiące do przeliczenia:",
+                options=wszystkie_dostepne_arkusze,
+                default=wszystkie_dostepne_arkusze
+            )
+
+            if st.button("🚀 Oblicz dane z wielu plików", type="primary"):
+                if not wybrane_arkusze_id:
+                    st.warning("Nie zaznaczyłeś żadnego arkusza!")
+                else:
+                    st.session_state['temp_wynagrodzenia_all'] = None 
+                    
+                    acc, user, pw = pobierz_ustawienia_api(conn)
+                    kurs_eur = pobierz_kurs_eur_pln()
+                    if not kurs_eur: kurs_eur = 4.30
+                    st.session_state['current_eur_rate'] = kurs_eur
+
+                    if not acc:
+                        st.error("Brak konfiguracji Webfleet!")
                     else:
-                        st.session_state['temp_wynagrodzenia_all'] = None 
-                        
-                        acc, user, pw = pobierz_ustawienia_api(conn)
-                        kurs_eur = pobierz_kurs_eur_pln()
-                        if not kurs_eur: kurs_eur = 4.30
-                        st.session_state['current_eur_rate'] = kurs_eur
+                        try:
+                            lista_wynikow_wszystkie = []
+                            pask_postepu = st.progress(0, text="Łączenie plików...")
+                            unikalne_pojazdy_z_webfleet = set()
 
-                        if not acc:
-                            st.error("Brak konfiguracji Webfleet!")
-                        else:
-                            try:
-                                lista_wynikow_miesiecznych = []
-                                pask_postepu = st.progress(0, text="Rozpoczynam analizę...")
-                                unikalne_pojazdy_z_webfleet = set()
-
-                                for i, nazwa_arkusza in enumerate(wybrane_arkusze):
-                                    pask_postepu.progress((i / len(wybrane_arkusze)), text=f"Analizuję arkusz: {nazwa_arkusza}...")
-                                    start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza, rok_analizy)
-                                    if not start_auto: continue
-                                    
-                                    df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
-                                    if not df_wf.empty: unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
-
-                                    df_sheet = pd.read_excel(xls_file, sheet_name=nazwa_arkusza, header=None)
-                                    df_place = parsuj_dataframe_plac(df_sheet)
-                                    if df_place.empty: continue
-
-                                    df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
-
-                                    if not df_wf.empty:
-                                        stats = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
-                                        stats['kierowca_norm'] = stats['kierowca'].str.upper().str.strip()
-                                        merged = stats.merge(df_place, on='kierowca_norm', how='right')
-                                    else:
-                                        merged = df_place.copy()
-                                        merged['pojazd'] = None; merged['dni_jazdy'] = 0
-
-                                    if not merged.empty:
-                                        merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
-                                        merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
-                                        
-                                        total = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum').replace(0, 1)
-                                        merged['udzial'] = merged['dni_jazdy'] / total
-                                        merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
-                                        
-                                        maska_brak = merged['pojazd'] == "BRAK (Wybierz)"
-                                        merged.loc[maska_brak, 'koszt_przypisany'] = merged.loc[maska_brak, 'kwota_total']
-                                        
-                                        merged['koszt_eur_est'] = merged['koszt_przypisany'] / kurs_eur
-
-                                        wynik = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
-                                        wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
-                                        
-                                        wynik['data_ksiegowania'] = stop_auto
-                                        wynik['miesiac_opis'] = nazwa_arkusza
-                                        
-                                        lista_wynikow_miesiecznych.append(wynik)
-                                    
-                                pask_postepu.empty()
+                            for i, ark_id in enumerate(wybrane_arkusze_id):
+                                plik_obj, nazwa_arkusza_oryg = mapa_plikow[ark_id]
+                                pask_postepu.progress((i / len(wybrane_arkusze_id)), text=f"Przetwarzam: {ark_id}...")
                                 
-                                if lista_wynikow_miesiecznych:
-                                    # Łączenie z ignore_index=True (NAPRAWA DAT)
-                                    df_all = pd.concat(lista_wynikow_miesiecznych, ignore_index=True).sort_values(by=['miesiac_opis', 'Kierowca'])
-                                    
-                                    st.session_state['temp_wynagrodzenia_all'] = df_all
-                                    
-                                    pojazdy_all = sorted(list(unikalne_pojazdy_z_webfleet.union(set(DODATKOWE_POJAZDY))))
-                                    if "BRAK (Wybierz)" in pojazdy_all: pojazdy_all.remove("BRAK (Wybierz)")
-                                    pojazdy_all.insert(0, "BRAK (Wybierz)")
-                                    st.session_state['wszystkie_znane_pojazdy'] = pojazdy_all
-                                    st.success(f"Policzono {len(df_all)} wierszy. Przyjęty kurs podglądu: {kurs_eur:.2f} PLN/EUR")
-                                else:
-                                    st.error("Brak wyników.")
-                            except Exception as e:
-                                st.error(f"Błąd: {e}")
-            except Exception as e:
-                st.error(f"Błąd pliku: {e}")
+                                # 1. Wyznaczenie zakresu dat
+                                start_auto, stop_auto = wyznacz_zakres_dat_z_arkusza(nazwa_arkusza_oryg, rok_analizy)
+                                if not start_auto: continue
+                                
+                                # 2. Pobranie danych z Webfleet
+                                df_wf = pobierz_przypisania_webfleet(acc, user, pw, start_auto, stop_auto)
+                                if not df_wf.empty: unikalne_pojazdy_z_webfleet.update(df_wf['pojazd'].unique())
 
+                                # 3. Parsowanie arkusza
+                                df_sheet = pd.read_excel(plik_obj, sheet_name=nazwa_arkusza_oryg, header=None)
+                                df_place = parsuj_dataframe_plac(df_sheet) # Tutaj działa Twoja logika z odwracaniem/mapowaniem
+                                
+                                if df_place.empty: continue
+
+                                df_place['kierowca_norm'] = df_place['kierowca'].str.upper().str.strip()
+
+                                # 4. Łączenie z GPS (Webfleet)
+                                if not df_wf.empty:
+                                    stats = df_wf.groupby(['kierowca', 'pojazd']).size().reset_index(name='dni_jazdy')
+                                    stats['kierowca_norm'] = stats['kierowca'].str.upper().str.strip()
+                                    merged = stats.merge(df_place, on='kierowca_norm', how='right')
+                                else:
+                                    merged = df_place.copy()
+                                    merged['pojazd'] = "BRAK (Wybierz)"; merged['dni_jazdy'] = 0
+
+                                if not merged.empty:
+                                    merged['pojazd'] = merged['pojazd'].fillna("BRAK (Wybierz)")
+                                    merged['dni_jazdy'] = merged['dni_jazdy'].fillna(0)
+                                    
+                                    total_dni = merged.groupby('kierowca_norm')['dni_jazdy'].transform('sum').replace(0, 1)
+                                    merged['udzial'] = merged['dni_jazdy'] / total_dni
+                                    merged['koszt_przypisany'] = merged['kwota_total'] * merged['udzial']
+                                    
+                                    maska_brak = merged['pojazd'] == "BRAK (Wybierz)"
+                                    merged.loc[maska_brak, 'koszt_przypisany'] = merged.loc[maska_brak, 'kwota_total']
+                                    
+                                    merged['koszt_eur_est'] = merged['koszt_przypisany'] / kurs_eur
+
+                                    wynik = merged[['pojazd', 'kierowca_norm', 'dni_jazdy', 'kwota_total', 'koszt_przypisany', 'koszt_eur_est']].copy()
+                                    wynik.columns = ['pojazd', 'Kierowca', 'Dni GPS', 'Pełna Wypłata', 'koszt_przypisany', 'koszt_eur_est']
+                                    wynik['data_ksiegowania'] = stop_auto
+                                    wynik['miesiac_opis'] = f"{nazwa_arkusza_oryg} ({plik_obj.name})"
+                                    
+                                    lista_wynikow_wszystkie.append(wynik)
+                            
+                            pask_postepu.empty()
+                            
+                            if lista_wynikow_wszystkie:
+                                df_all = pd.concat(lista_wynikow_wszystkie, ignore_index=True)
+                                st.session_state['temp_wynagrodzenia_all'] = df_all
+                                
+                                pojazdy_all = sorted(list(unikalne_pojazdy_z_webfleet.union(set(DODATKOWE_POJAZDY))))
+                                if "BRAK (Wybierz)" in pojazdy_all: pojazdy_all.remove("BRAK (Wybierz)")
+                                pojazdy_all.insert(0, "BRAK (Wybierz)")
+                                st.session_state['wszystkie_znane_pojazdy'] = pojazdy_all
+                                st.success(f"Połączono dane. Łącznie {len(df_all)} pozycji do sprawdzenia.")
+                            else:
+                                st.error("Nie udało się wyciągnąć danych z żadnego pliku.")
+                        except Exception as e:
+                            st.error(f"Błąd podczas przetwarzania: {e}")
         # --- EDYCJA Z PODGLĄDEM EUR ---
         if st.session_state.get('temp_wynagrodzenia_all') is not None:
             st.divider()
