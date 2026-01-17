@@ -2648,72 +2648,88 @@ def render_porownanie_content(conn, wybrana_firma):
                 }
             )
 def render_ogolne_content(conn, wybrana_firma):
-    st.subheader("Wydatki Pozapojazdowe i Ogólne")
-    st.info("Sekcja obejmuje koszty administracyjne, biurowe oraz inne wydatki nieprzypisane do konkretnych pojazdów.")
+    st.subheader("Wydatki Pozapojazdowe i Administracyjne")
+    st.info("Poniżej znajdują się koszty z pliku analizy, które nie zostały przypisane do konkretnych pojazdów operacyjnych (tzw. koszty ogólne, biurowe, zaliczki).")
 
+    # 1. Zakres dat (pobierany z bazy dla wygody)
     try:
-        # Zakres dat
-        min_max_date = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
-        domyslny_start = min_max_date.iloc[0, 0] if not min_max_date.empty else date.today()
-        domyslny_stop = min_max_date.iloc[0, 1] if not min_max_date.empty else date.today()
+        min_max = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
+        domyslny_start = min_max.iloc[0, 0] if not min_max.empty else date.today()
+        domyslny_stop = min_max.iloc[0, 1] if not min_max.empty else date.today()
+    except:
+        domyslny_start, domyslny_stop = date.today(), date.today()
 
-        with st.container(border=True):
-            col1, col2 = st.columns(2)
-            d_start = col1.date_input("Data Start", value=domyslny_start, key="ogolne_start")
-            d_stop = col2.date_input("Data Stop", value=domyslny_stop, key="ogolne_stop")
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        data_start = c1.date_input("Data Start", value=domyslny_start, key="ogolne_start")
+        data_stop = c2.date_input("Data Stop", value=domyslny_stop, key="ogolne_stop")
 
-        # Pobranie danych
-        df_raw = pobierz_dane_z_bazy(conn, d_start, d_stop, wybrana_firma)
-        if df_raw.empty:
-            st.warning("Brak danych w wybranym okresie.")
+    # 2. Pobranie pliku z bazy (tak samo jak w rentowności)
+    nazwa_pliku = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
+    zapisany_plik = wczytaj_plik_z_bazy(conn, nazwa_pliku)
+
+    if not zapisany_plik:
+        st.warning(f"Brak pliku {nazwa_pliku} w bazie. Wgraj go najpierw w zakładce Rentowność lub Admin.")
+        return
+
+    # 3. Przetworzenie danych
+    with st.spinner("Filtrowanie kosztów administracyjnych..."):
+        # Pobieramy surowe dane z pliku
+        _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
+
+        if df_raw is None or df_raw.empty:
+            st.warning("Brak danych w wybranym zakresie dat.")
             return
 
-        # Przygotowanie danych (kursy walut)
-        df_calc, _ = przygotuj_dane_paliwowe(df_raw, wybrana_firma)
+        # --- LOGIKA ODWRÓCONEGO FILTRA (To co usuwamy w Rentowności) ---
+        bad_keywords = ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER", "DW2JH75", "DW1JJ04", "BRAK IDENTYFIKATORA"]
         
-        # FILTR: Wybieramy tylko to, co NIE jest pojazdem
-        # Czyli identyfikatory typu "Brak Identyfikatora", "BIURO", lub te, które nie przeszły walidacji pojazdu
-        maska_ogolne = (df_calc['identyfikator_clean'].isin(['Brak Identyfikatora', 'BIURO', 'Brak Pojazdu'])) | \
-                       (~df_calc['identyfikator_clean'].str.contains(r'[0-9]', na=False)) # Uproszczony filtr na brak cyfr w rejestracji
+        # Maska 1: Słowa kluczowe (bad_keywords)
+        mask_bad = df_raw['pojazd_clean'].astype(str).str.upper().apply(lambda x: any(k in x for k in bad_keywords))
+        
+        # Maska 2: Zakazane pojazdy z globalnej listy
+        mask_zakazane = df_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global)
+        
+        # Maska 3: Tylko koszty (nie przychody)
+        mask_koszt = df_raw['typ'].str.contains('Koszt', case=False, na=False)
 
-        df_ogolne = df_calc[maska_ogolne].copy()
+        # Łączymy: To co jest "złe" LUB "zakazane", ale jest kosztem
+        df_ogolne = df_raw[(mask_bad | mask_zakazane) & mask_koszt].copy()
 
         if df_ogolne.empty:
-            st.info("Nie znaleziono wydatków ogólnych w tym okresie.")
-        else:
-            # Metryki
-            total_brutto = df_ogolne['kwota_brutto_eur'].sum()
-            total_netto = df_ogolne['kwota_netto_eur'].sum()
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Suma Brutto", f"{total_brutto:,.2f} EUR", border=True)
-            m2.metric("Suma Netto", f"{total_netto:,.2f} EUR", border=True)
-            m3.metric("Liczba wpisów", len(df_ogolne), border=True)
+            st.success("Wszystkie koszty z pliku są przypisane do konkretnych pojazdów operacyjnych.")
+            return
 
-            # Wykres kategorii
-            st.markdown("### Wydatki wg Kategorii")
-            kat_chart = df_ogolne.groupby('produkt')['kwota_brutto_eur'].sum().sort_values(ascending=False)
-            st.bar_chart(kat_chart, color="#6272a4")
+        # 4. Wyświetlanie wyników
+        m1, m2, m3 = st.columns(3)
+        suma_brutto = df_ogolne['kwota_brutto_eur'].sum()
+        suma_netto = df_ogolne['kwota_netto_eur'].sum()
+        
+        m1.metric("Suma Kosztów Ogólnych (Brutto)", f"{suma_brutto:,.2f} EUR", border=True)
+        m2.metric("Suma Kosztów Ogólnych (Netto)", f"{suma_netto:,.2f} EUR", border=True)
+        m3.metric("Liczba dokumentów", len(df_ogolne), border=True)
 
-            # Tabela szczegółowa
-            st.markdown("### Lista transakcji ogólnych")
-            show_cols = ['data_transakcji', 'identyfikator', 'produkt', 'kontrahent', 'kwota_brutto_eur', 'waluta', 'zrodlo']
-            df_display = df_ogolne[show_cols].sort_values(by='data_transakcji', ascending=False)
-            
-            st.dataframe(
-                df_display,
-                column_config={
-                    "data_transakcji": st.column_config.DateColumn("Data"),
-                    "kwota_brutto_eur": st.column_config.NumberColumn("Kwota (EUR)", format="%.2f €"),
-                    "identyfikator": "Oryg. Opis",
-                    "produkt": "Kategoria/Produkt"
-                },
-                use_container_width=True,
-                hide_index=True
-            )
+        st.markdown("### Szczegółowa lista wydatków pozapojazdowych")
+        
+        # Formatowanie tabeli
+        df_display = df_ogolne[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
+        df_display.columns = ['Data', 'Oryg. Identyfikator', 'Opis kosztu', 'Kontrahent', 'Netto (EUR)', 'Brutto (EUR)']
+        df_display = df_display.sort_values(by='Data', ascending=False)
+        
+        st.dataframe(
+            df_display.style.format({'Netto (EUR)': '{:,.2f} €', 'Brutto (EUR)': '{:,.2f} €'}),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Data": st.column_config.DateColumn("Data"),
+                "Oryg. Identyfikator": st.column_config.TextColumn("Kategoria/Id")
+            }
+        )
 
-    except Exception as e:
-        st.error(f"Błąd podczas ładowania wydatków ogólnych: {e}")
+        # Wykres kategorii
+        st.markdown("### Struktura kosztów wg opisu")
+        chart_data = df_ogolne.groupby('opis')['kwota_brutto_eur'].sum().sort_values(ascending=False).head(10)
+        st.bar_chart(chart_data, color="#ff4b4b")
         
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
