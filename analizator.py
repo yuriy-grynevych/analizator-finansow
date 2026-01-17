@@ -2119,29 +2119,27 @@ def render_rentownosc_content(conn, wybrana_firma):
                 for bad in ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER","DW2JH75","DW1JJ04"]:
                     final = final[~final.index.astype(str).str.contains(bad, case=False, na=False)]
                 
-                # --- OBLICZENIA VAT ---
+               # --- OBLICZENIA VAT ---
                 
-                # 1. VAT ze Sprzedaży (Do oddania) -> Traktujemy jako obciążenie w bilansie VAT
-                final['VAT_PRZYCHOD_EUR'] = final['PRZYCHOD_EUR'] - final['PRZYCHOD_NETTO_EUR']
-                
-                # 2. VAT z Paliwa (Do zwrotu) -> Traktujemy jako plus
-                final['VAT_PALIWO_EUR'] = final['KOSZT_PALIWO_EUR'] - final['KOSZT_PALIWO_NETTO_EUR']
-                
-                # 3. VAT z Kosztów Innych/Subiekta (Do zwrotu) -> Traktujemy jako plus
-                final['VAT_INNE_EUR'] = final['KOSZT_INNE_EUR'] - final['KOSZT_INNE_NETTO_EUR']
-                
-                # 4. BILANS VAT (Ile realnie VAT-u nam zostaje lub musimy dopłacić w kontekście przepływów)
-                # Jeśli wynik dodatni -> Urząd wisi nam pieniądze. Jeśli ujemny -> My wisimy.
-                final['VAT_BILANS_EUR'] = (final['VAT_PALIWO_EUR'] + final['VAT_INNE_EUR']) - final['VAT_PRZYCHOD_EUR']
-
-                # --- OBLICZENIE ZYSKU ---
-                # Zysk liczony klasycznie (Tu zostawiamy Brutto jak w oryginale, czy chcesz Netto?)
-                # Zostawiam Brutto, ale dodaję kolumnę dla jasności.
-                final['ZYSK_EUR'] = final['PRZYCHOD_EUR'] - (final['KOSZT_PALIWO_EUR'] + final['KOSZT_KIEROWCA_EUR'] + final['KOSZT_INNE_EUR'])
-                
-                st.session_state['df_rentownosc'] = final.sort_values(by='ZYSK_EUR', ascending=False)
-                st.session_state['raport_gotowy'] = True
-                st.session_state['wybrany_pojazd_rent'] = "--- Wybierz pojazd ---"
+                    # 1. VAT ze Sprzedaży (Do oddania)
+                    final['VAT_PRZYCHOD_EUR'] = final['PRZYCHOD_EUR'] - final['PRZYCHOD_NETTO_EUR']
+                                    
+                    # 2. VAT z Paliwa (Do zwrotu)
+                    final['VAT_PALIWO_EUR'] = final['KOSZT_PALIWO_EUR'] - final['KOSZT_PALIWO_NETTO_EUR']
+                                    
+                    # 3. VAT z Kosztów Innych/Subiekta (Do zwrotu)
+                    final['VAT_INNE_EUR'] = final['KOSZT_INNE_EUR'] - final['KOSZT_INNE_NETTO_EUR']
+                                    
+                    # 4. BILANS VAT
+                    final['VAT_BILANS_EUR'] = (final['VAT_PALIWO_EUR'] + final['VAT_INNE_EUR']) - final['VAT_PRZYCHOD_EUR']
+                    
+                    # --- ZMIANA: OBLICZENIE ZYSKU Z NETTO ---
+                    # Zysk liczony z wartości NETTO (Przychód Netto - Koszty Netto)
+                    # Wynagrodzenia zazwyczaj nie mają VAT, więc używamy kwoty brutto jako kosztu netto.
+                    final['ZYSK_EUR'] = final['PRZYCHOD_NETTO_EUR'] - (final['KOSZT_PALIWO_NETTO_EUR'] + final['KOSZT_KIEROWCA_EUR'] + final['KOSZT_INNE_NETTO_EUR'])
+                    
+                    st.session_state['df_rentownosc'] = final.sort_values(by='ZYSK_EUR', ascending=False)
+                    st.session_state['raport_gotowy'] = True
 
     # --- WIDOK RAPORTU ---
     if st.session_state.get('raport_gotowy'):
@@ -2159,12 +2157,11 @@ def render_rentownosc_content(conn, wybrana_firma):
                 st.bar_chart(df_final['PRZYCHOD_EUR'].head(20), color="#76b900")
 
         # 2. Metryki Główne (Finansowe)
-        st.markdown("### Podsumowanie Finansowe")
+        st.markdown("### Podsumowanie Finansowe (NETTO)")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("ZYSK (Brutto)", f"{df_final['ZYSK_EUR'].sum():,.2f} EUR", border=True)
-        m2.metric("Przychody (Brutto)", f"{df_final['PRZYCHOD_EUR'].sum():,.2f} EUR", border=True)
-        m3.metric("Koszty (Paliwo+Kier+Inne)", f"{(df_final['KOSZT_PALIWO_EUR'].sum() + df_final['KOSZT_KIEROWCA_EUR'].sum() + df_final['KOSZT_INNE_EUR'].sum()):,.2f} EUR", border=True)
-        
+        m1.metric("ZYSK (Netto)", f"{df_final['ZYSK_EUR'].sum():,.2f} EUR", border=True)
+        m2.metric("Przychody (Netto)", f"{df_final['PRZYCHOD_NETTO_EUR'].sum():,.2f} EUR", border=True)
+        m3.metric("Koszty (Netto)", f"{(df_final['KOSZT_PALIWO_NETTO_EUR'].sum() + df_final['KOSZT_KIEROWCA_EUR'].sum() + df_final['KOSZT_INNE_NETTO_EUR'].sum()):,.2f} EUR", border=True)
         # Kolorowanie bilansu VAT: Zielony (Plus) = Zwrot, Czerwony (Minus) = Zapłata
         bilans_vat = df_final['VAT_BILANS_EUR'].sum()
         m4.metric("BILANS VAT (Zwrot/Zapłata)", f"{bilans_vat:,.2f} EUR", 
