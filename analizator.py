@@ -170,7 +170,11 @@ def parsuj_dataframe_plac(df):
         "VISLYKH ANDRII", 
         "DZHAVADOV MARUVVAT", 
         "DZHADOV MURUUVAT", 
-        "DULIN CEDRYK"
+        "DULIN CEDRYK",
+        "ANDRUSHENKO SERHII",
+        "MARIN VALERII",
+        "HOLER SIARHEI",
+        "SMITHIUKH SERHII"
     ]
     
     # 2. MAPOWANIE (zamiana pisowni na tę z Webfleet)
