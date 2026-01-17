@@ -2685,7 +2685,8 @@ def render_porownanie_content(conn, wybrana_firma):
             )
 def render_ogolne_content(conn, wybrana_firma):
     st.subheader("Wydatki Pozapojazdowe i Administracyjne")
-    
+    st.info("Ta zakładka pokazuje wszystkie koszty z pliku, które NIE zostały przypisane do aut w raporcie rentowności (np. koszty biurowe, biuro, administracja, zaliczki).")
+
     # 1. Zakres dat
     try:
         min_max = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
@@ -2708,53 +2709,58 @@ def render_ogolne_content(conn, wybrana_firma):
         return
 
     # 3. Przetworzenie danych
-    with st.spinner("Przeszukiwanie pliku pod kątem kosztów administracyjnych..."):
-        # Pobieramy surowe dane z pliku
+    with st.spinner("Przesiewanie kosztów ogólnych..."):
+        # Używamy tej samej funkcji przetwarzającej co w Rentowności, by mieć te same dane
         _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
     
     if df_raw is not None and not df_raw.empty:
-        # --- NOWA LOGIKA: FILTRUJEMY TYLKO KOSZTY I ODRZUCAMY REALNE AUTA ---
+        # KROK 1: Tylko koszty
+        df_costs = df_raw[df_raw['typ'].str.contains('Koszt', case=False, na=False)].copy()
         
-        def czy_to_id_pojazdu(identyfikator):
-            p = str(identyfikator).upper().replace(" ", "").replace("-", "").strip()
+        # KROK 2: Definiujemy, co jest pojazdem operacyjnym (identycznie jak w Rentowności)
+        def jest_pojazdem_operacyjnym(p_clean):
+            p = str(p_clean).upper().strip()
+            # Lista "śmieci" i wykluczeń z kodu Rentowności
+            BAD_LIST = ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER", "DW2JH75", "DW1JJ04"]
             
-            # Wzorzec: 2-3 litery + 4-6 cyfr/liter (np. WPR12345, WGM58A, PTU123456)
-            # Jeśli pasuje idealnie do tablicy -> True (czyli UKRYJEMY w tej zakładce)
-            if re.match(r'^[A-Z]{2,3}[0-9A-Z]{4,6}$', p):
-                # Jeśli to jest jedna z tych tablic, ale chcesz ją widzieć w ogólnych:
-                WYJATKI_KTORE_CHCE_WIDZIEC = ['PTU0002', 'NONE', 'ZALICZKA']
-                if p in WYJATKI_KTORE_CHCE_WIDZIEC:
-                    return False
-                return True # To jest auto operacyjne -> schowaj
-            
-            return False # To nie jest auto (np. HARJU, FREJATRANSPO, LEASING) -> pokaż
+            # Jeśli jest na czarnej liście Rentowności -> NIE jest pojazdem operacyjnym
+            if any(bad in p for bad in BAD_LIST):
+                return False
+                
+            # Jeśli funkcja klasyfikacji uzna, że to auto -> JEST pojazdem operacyjnym
+            return klasyfikuj_wpis(p)
 
-        # Filtrujemy tylko koszty
-        df_ogolne = df_raw[df_raw['typ'].str.contains('Koszt', case=False, na=False)].copy()
+        # KROK 3: Klasyfikujemy każdy wiersz
+        df_costs['czy_operacyjny'] = df_costs['pojazd_clean'].apply(jest_pojazdem_operacyjnym)
         
-        # Odrzucamy wiersze, które pasują do wzorca tablicy rejestracyjnej
-        df_ogolne['czy_auto'] = df_ogolne['pojazd_clean'].apply(czy_to_id_pojazdu)
-        df_final = df_ogolne[df_ogolne['czy_auto'] == False].copy()
-
-        if df_final.empty:
-            st.info("Nie znaleziono pozycji niebędących autami. Spróbuj rozszerzyć zakres dat.")
-            # Debug: Pokaż co w ogóle jest w pliku, żebyś wiedział dlaczego nic nie weszło
-            with st.expander("Debug: Podgląd wszystkich kosztów przed filtracją"):
-                st.write(df_ogolne[['pojazd_clean', 'opis', 'kwota_brutto_eur']])
+        # KROK 4: Zgodnie z Twoją prośbą: wyrzucamy wszystko, co trafiło do rentowności
+        # Zostawiamy tylko czy_operacyjny == False
+        df_ogolne = df_costs[df_costs['czy_operacyjny'] == False].copy()
+        
+        if df_ogolne.empty:
+            st.info("Wszystkie koszty w tym okresie są przypisane do aut operacyjnych w Rentowności.")
             return
 
-        # 4. Wyświetlanie wyników
-        st.metric("Suma Kosztów Ogólnych", f"{df_final['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+        # 4. Podsumowanie
+        st.metric("Suma Kosztów Ogólnych / Admin", f"{df_ogolne['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
 
+        # Tabela wynikowa
+        df_display = df_ogolne[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
+        df_display.columns = ['Data', 'Identyfikator', 'Opis kosztu', 'Kontrahent', 'Netto (EUR)', 'Brutto (EUR)']
+        
         st.dataframe(
-            df_final[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']]
-            .sort_values(by='data', ascending=False)
-            .style.format({'kwota_netto_eur': '{:,.2f} €', 'kwota_brutto_eur': '{:,.2f} €'}),
+            df_display.sort_values(by='Data', ascending=False)
+            .style.format({'Netto (EUR)': '{:,.2f} €', 'Brutto (EUR)': '{:,.2f} €'}),
             use_container_width=True,
             hide_index=True
         )
+
+        # Wykres top kosztów ogólnych
+        st.markdown("### Struktura kosztów ogólnych")
+        chart_data = df_ogolne.groupby('pojazd_clean')['kwota_brutto_eur'].sum().sort_values(ascending=False).head(10)
+        st.bar_chart(chart_data, color="#ff4b4b")
     else:
-        st.error("Nie udało się pobrać danych z pliku.")
+        st.info("Brak danych do wyświetlenia w wybranym okresie.")
         
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
