@@ -2648,84 +2648,69 @@ def render_porownanie_content(conn, wybrana_firma):
                 }
             )         
 def render_koszty_ogolne_content(conn, wybrana_firma):
-    st.subheader("🏢 Analiza Kosztów Ogólnych i Pozapojazdowych")
-    st.info("Tutaj znajdziesz wydatki odfiltrowane z raportu głównego (np. biuro, giełdy, księgowość, serwis ogólny).")
+    st.subheader("🏢 Analiza Wydatków Biurowych i Administracyjnych")
+    st.info("Dane pobierane wyłącznie z pliku analiza.xlsx / fakturownia.csv (wydatki pozapojazdowe).")
 
-    # Zakres dat
+    # 1. Pobieranie zakresu dat
     try:
         min_max = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
-        d_start = min_max.iloc[0, 0]
-        d_stop = min_max.iloc[0, 1]
-        
-        # Zabezpieczenie przed pustą bazą
-        if d_start is None:
-            d_start, d_stop = date.today(), date.today()
+        d_start, d_stop = min_max.iloc[0, 0], min_max.iloc[0, 1]
+        if d_start is None: d_start, d_stop = date.today(), date.today()
     except:
         d_start, d_stop = date.today(), date.today()
 
     with st.container(border=True):
         c1, c2 = st.columns(2)
-        # POPRAWIONE: używamy d_start i d_stop zamiast d_s/d_e
         data_s = c1.date_input("Start", value=d_start, key="ogolne_start")
         data_e = c2.date_input("Stop", value=d_stop, key="ogolne_stop")
 
-    # Pobieranie danych z bazy
-    df_baza_raw = pobierz_dane_z_bazy(conn, data_s, data_e, wybrana_firma)
-    
-    # Pobieramy plik analizy (Subiekt/Fakturownia)
+    # 2. Pobieranie pliku analizy z bazy
     nazwa_p = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
     zapisany_plik = wczytaj_plik_z_bazy(conn, nazwa_p)
     
-    # Inicjalizacja list na dane
-    lista_df = []
-    kurs_eur = pobierz_kurs_eur_pln()
+    if not zapisany_plik:
+        st.warning(f"Brak zapisanego pliku {nazwa_p} w bazie. Wgraj go w zakładce Rentowność.")
+        return
 
-    # 1. Filtrowanie kosztów ogólnych z bazy (Karty paliwowe/Inne)
-    if not df_baza_raw.empty:
-        df_baza_raw['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(df_baza_raw['identyfikator'])
-        maska_og_baza = df_baza_raw['identyfikator_clean'].apply(czy_zakazany_pojazd_global) | (df_baza_raw['identyfikator_clean'] == 'Brak Identyfikatora')
-        df_og_baza = df_baza_raw[maska_og_baza & (df_baza_raw['typ'] != 'WYNAGRODZENIE')].copy()
-        
-        if not df_og_baza.empty:
-            # Przeliczenie na EUR (zakładamy kurs NBP dla PLN)
-            df_og_baza['kwota_netto_eur'] = df_og_baza.apply(
-                lambda row: row['kwota_netto'] * (1.0/kurs_eur if row['waluta'] == 'PLN' else 1.0), axis=1
-            )
-            tmp_b = df_og_baza[['produkt', 'kwota_netto_eur', 'firma']].rename(columns={'produkt': 'Kategoria', 'kwota_netto_eur': 'Netto_EUR'})
-            lista_df.append(tmp_b)
+    # 3. Przetwarzanie danych wyłącznie z pliku
+    _, df_an_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_s, data_e, wybrana_firma)
 
-    # 2. Filtrowanie kosztów ogólnych z pliku (Subiekt/Fakturownia)
-    if zapisany_plik:
-        _, df_an_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_s, data_e, wybrana_firma)
-        if df_an_raw is not None and not df_an_raw.empty:
-            maska_og_an = df_an_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global) | (df_an_raw['pojazd_clean'] == 'Brak Identyfikatora')
-            df_og_analiza = df_an_raw[maska_og_an & (df_an_raw['typ'] == 'Koszt (Subiekt)')].copy()
+    if df_an_raw is not None and not df_an_raw.empty:
+        # Filtrujemy tylko koszty ogólne (te z czarnej listy lub bez pojazdu)
+        maska_ogolne = df_an_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global) | (df_an_raw['pojazd_clean'] == 'Brak Identyfikatora')
+        df_final = df_an_raw[maska_ogolne & (df_an_raw['typ'] == 'Koszt (Subiekt)')].copy()
+
+        if not df_final.empty:
+            # Grupowanie po produktach (Kategorie wydatków biurowych)
+            df_agg = df_final.groupby('produkt')['kwota_netto_eur'].sum().sort_values(ascending=False).reset_index()
+            df_agg.columns = ['Kategoria', 'Suma_Netto_EUR']
+
+            # Wyświetlanie metryki
+            st.metric("Suma Wydatków Administracyjnych (NETTO)", f"{df_agg['Suma_Netto_EUR'].sum():,.2f} EUR", border=True)
+
+            col_l, col_r = st.columns([2, 1])
+            with col_l:
+                st.markdown("##### Struktura wydatków (Wykres)")
+                # Wykres słupkowy kategorii
+                st.bar_chart(df_agg.set_index('Kategoria'), color="#3498db")
             
-            if not df_og_analiza.empty:
-                tmp_a = df_og_analiza[['produkt', 'kwota_netto_eur', 'firma']].rename(columns={'produkt': 'Kategoria', 'kwota_netto_eur': 'Netto_EUR'})
-                lista_df.append(tmp_a)
+            with col_r:
+                st.markdown("##### Zestawienie kwot")
+                st.dataframe(df_agg.style.format({'Suma_Netto_EUR': '{:,.2f} €'}), use_container_width=True, hide_index=True)
 
-    # Wyświetlanie wyników
-    if lista_df:
-        df_final = pd.concat(lista_df)
-        df_agg = df_final.groupby('Kategoria')['Netto_EUR'].sum().sort_values(ascending=False).reset_index()
-        
-        st.metric("Suma Kosztów Ogólnych (NETTO)", f"{df_agg['Netto_EUR'].sum():,.2f} EUR", border=True)
-
-        col_left, col_right = st.columns([2, 1])
-        with col_left:
-            st.markdown("##### Struktura wydatków ogólnych")
-            st.bar_chart(df_agg.set_index('Kategoria'), color="#f39c12")
-        
-        with col_right:
-            st.markdown("##### Tabela kategorii")
-            st.dataframe(df_agg.style.format({'Netto_EUR': '{:,.2f} €'}), use_container_width=True, hide_index=True)
-            
-        st.divider()
-        with st.expander("🔎 Szczegółowa lista dokumentów pozapojazdowych"):
-            st.dataframe(df_final.sort_values(by='Netto_EUR', ascending=False), use_container_width=True, hide_index=True)
+            st.divider()
+            with st.expander("🔎 Lista wszystkich faktur biurowych / administracyjnych"):
+                # Pokazujemy datę, opis (produkt), kontrahenta i kwotę
+                df_details = df_final[['data', 'produkt', 'kontrahent', 'kwota_netto_eur']].sort_values(by='data', ascending=False)
+                st.dataframe(
+                    df_details.style.format({'kwota_netto_eur': '{:,.2f} €'}),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.info("W wybranym okresie plik nie zawiera żadnych kosztów oznaczonych jako ogólne (pozapojazdowe).")
     else:
-        st.warning("Nie znaleziono żadnych kosztów pozapojazdowych dla wybranych dat i firmy.")
+        st.error("Nie udało się przetworzyć danych z pliku.")
 
 
 def main_app():
