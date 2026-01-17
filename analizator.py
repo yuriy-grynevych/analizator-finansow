@@ -1024,7 +1024,15 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
         dane_finalne['kwota_brutto_eur'] = 0.0
 
     return dane_finalne, mapa_kursow
-
+    # USUWAMY KOSZTY OGÓLNE Z RENTOWNOŚCI AUT
+    if not dane_finalne.empty:
+        maska_ogolne = (
+            (dane_finalne['identyfikator_clean'] == 'Brak Pojazdu') | 
+            (dane_finalne['identyfikator_clean'] == 'Brak Identyfikatora') |
+            (dane_finalne['identyfikator_clean'].apply(czy_zakazany_pojazd_global))
+        )
+        # Zostawiamy w rentowności tylko to, co NIE jest kosztem ogólnym
+        dane_finalne = dane_finalne[~maska_ogolne]
 # --- LOGIKA REFAKTUR ---
 def pobierz_dane_do_refaktury(conn, data_start, data_stop):
     # Pobieramy wszystko z bazy w zakresie dat
@@ -2675,19 +2683,21 @@ def render_koszty_ogolne_content(conn, wybrana_firma):
         return
 
     # 3. Przetwarzanie danych
+   # Przetwarzamy plik, aby wyciągnąć wszystko
     _, df_all = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_s, data_e, wybrana_firma)
 
     if df_all is not None and not df_all.empty:
-        # Filtrujemy tylko KOSZTY, które mają 'Brak Pojazdu' lub są na czarnej liście
-        maska_koszt = (df_all['typ'] == 'Koszt (Subiekt)')
+        # TUTAJ WYBIERAMY TYLKO TO, CO NIE JEST AUTEM
+        df_all['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_all['identyfikator'])
+        
         maska_ogolne = (
             (df_all['pojazd_clean'] == 'Brak Pojazdu') | 
             (df_all['pojazd_clean'] == 'Brak Identyfikatora') |
             (df_all['pojazd_clean'].apply(czy_zakazany_pojazd_global))
         )
         
-        df_final = df_all[maska_koszt & maska_ogolne].copy()
-
+        # Wybieramy tylko koszty (zakupy biurowe, ubezpieczenia itp.)
+        df_final = df_all[maska_ogolne & (df_all['typ'] == 'Koszt (Subiekt)')].copy()
         if not df_final.empty:
             # Grupowanie po Kontrahencie (np. PKO, TEAM, Webfleet)
             df_agg = df_final.groupby('kontrahent')['kwota_netto_eur'].sum().sort_values(ascending=False).reset_index()
