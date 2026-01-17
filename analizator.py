@@ -165,8 +165,7 @@ def parsuj_dataframe_plac(df):
     ostatnia_kwota = 0.0
     df = df.astype(str)
     
-    # LISTA WYJĄTKÓW (tych osób NIE odwracamy)
-    # Dodaję różne warianty pisowni, aby kod był odporny na literówki
+    # 1. LISTA WYJĄTKÓW (tych osób NIE odwracamy)
     WYKLUCZENI = [
         "VISLYKH ANDRII", 
         "DZHAVADOV MARUVVAT", 
@@ -174,19 +173,35 @@ def parsuj_dataframe_plac(df):
         "DULIN CEDRYK"
     ]
     
+    # 2. MAPOWANIE (zamiana pisowni na tę z Webfleet)
+    # Format: "NAZWA W EXCELU": "NAZWA W WEBFLEET"
+    MAPOWANIE_NAZWISK = {
+        "IGOR RUTKOVSKYI": "IGOR RUTKOWSKYI",
+        "RUTKOVSKYI IGOR": "IGOR RUTKOWSKYI",
+        # Tutaj możesz dopisać kolejne, np.:
+        # "YURY TSIKHANOVICH": "YURI TSIKHANOVICH"
+    }
+    
     def przetworz_nazwisko(tekst, czy_nowy_format):
         tekst_clean = tekst.upper().strip()
         
-        # 1. Jeśli osoba jest na liście wykluczonych - zwracamy bez zmian
+        # Najpierw sprawdzamy mapowanie bezpośrednie (zanim cokolwiek zmienimy)
+        if tekst_clean in MAPOWANIE_NAZWISK:
+            return MAPOWANIE_NAZWISK[tekst_clean]
+        
+        # Jeśli osoba jest na liście wykluczonych - zwracamy bez zmian
         if any(w in tekst_clean for w in WYKLUCZENI):
             return tekst_clean
         
-        # 2. Jeśli to nowy format (np. grudzień) i nie jest wykluczony - odwracamy
+        # Jeśli to nowy format (np. grudzień) - odwracamy
         if czy_nowy_format:
             czesci = tekst_clean.split()
             if len(czesci) >= 2:
-                # Zamiana "KOWALSKI JAN" -> "JAN KOWALSKI"
-                return f"{czesci[-1]} {' '.join(czesci[:-1])}"
+                tekst_odwrocony = f"{czesci[-1]} {' '.join(czesci[:-1])}"
+                # Sprawdzamy mapowanie ponownie po odwróceniu
+                if tekst_odwrocony in MAPOWANIE_NAZWISK:
+                    return MAPOWANIE_NAZWISK[tekst_odwrocony]
+                return tekst_odwrocony
         
         return tekst_clean
 
@@ -207,7 +222,6 @@ def parsuj_dataframe_plac(df):
         clean_col0 = col0.replace(".", "").strip()
         if clean_col0.isdigit() and col1 and col1_u != "NAN" and len(col1) > 2:
             if not any(k in col1_u for k in ["NAZWISKO", "STAWKA", "ILOŚĆ", "KWOTA", "DOPŁATA", "INFO"]):
-                # Tutaj stosujemy odwracanie z listą wyjątków
                 nowy_kierowca = przetworz_nazwisko(col1, czy_nowy_format=True)
         
         # 2. DETEKCJA NAZWISKA - Stary format (np. listopad i wcześniej)
@@ -215,7 +229,6 @@ def parsuj_dataframe_plac(df):
             if not nowy_kierowca:
                 kandydaci = [c for c in [col0, col1, col2] if c and c.upper() != "NAN" and "ILOSC" not in c.upper() and "DNI" not in c.upper()]
                 if kandydaci:
-                    # W starym formacie zazwyczaj imię było pierwsze, więc nie odwracamy
                     nowy_kierowca = przetworz_nazwisko(kandydaci[0], czy_nowy_format=False)
 
         if nowy_kierowca:
