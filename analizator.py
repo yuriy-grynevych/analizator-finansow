@@ -1438,22 +1438,30 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
 def to_excel_extended(df_summary, df_subiekt_raw, df_fuel_raw):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # --- ARKUSZ PODSUMOWANIE ---
+        # --- ARKUSZ PODSUMOWANIE (LOGIKA NETTO) ---
         summary_to_write = df_summary.reset_index().rename(columns={'index': 'Pojazd'})
         summary_to_write.insert(0, 'Lp.', range(1, 1 + len(summary_to_write)))
         
-        # Uporządkowanie kolumn w Excelu (jeśli istnieją)
+        # Upewniamy się, że zysk w Excelu to Netto (na wypadek zmian w locie)
+        summary_to_write['ZYSK_NETTO_EUR'] = (
+            summary_to_write['PRZYCHOD_NETTO_EUR'] - 
+            (summary_to_write['KOSZT_PALIWO_NETTO_EUR'] + 
+             summary_to_write['KOSZT_KIEROWCA_EUR'] + 
+             summary_to_write['KOSZT_INNE_NETTO_EUR'])
+        )
+
+        # Uporządkowanie kolumn w Excelu - priorytet dla wartości NETTO
         cols_order = [
             'Lp.', 'Pojazd', 'Kontrahent', 
-            'PRZYCHOD_EUR', 'PRZYCHOD_NETTO_EUR', 'VAT_PRZYCHOD_EUR',
-            'KOSZT_PALIWO_EUR', 'KOSZT_PALIWO_NETTO_EUR', 'VAT_PALIWO_EUR',
-            'KOSZT_INNE_EUR', 'KOSZT_INNE_NETTO_EUR', 'VAT_INNE_EUR',
+            'PRZYCHOD_NETTO_EUR', 'VAT_PRZYCHOD_EUR', 'PRZYCHOD_EUR',
+            'KOSZT_PALIWO_NETTO_EUR', 'VAT_PALIWO_EUR', 'KOSZT_PALIWO_EUR',
+            'KOSZT_INNE_NETTO_EUR', 'VAT_INNE_EUR', 'KOSZT_INNE_EUR',
             'KOSZT_KIEROWCA_EUR', 
-            'VAT_BILANS_EUR', 'ZYSK_EUR'
+            'VAT_BILANS_EUR', 'ZYSK_NETTO_EUR'
         ]
+        
         # Wybieramy tylko te, które faktycznie są w DataFrame
         cols_existing = [c for c in cols_order if c in summary_to_write.columns]
-        # Dodajemy resztę, jeśli jakieś są (np. specyficzne dla debugowania)
         cols_rest = [c for c in summary_to_write.columns if c not in cols_existing]
         
         summary_to_write = summary_to_write[cols_existing + cols_rest]
