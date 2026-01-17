@@ -2687,11 +2687,11 @@ def render_ogolne_content(conn, wybrana_firma):
     st.subheader("Wydatki Pozapojazdowe i Administracyjne")
     st.info("Poniżej znajdują się koszty z pliku analizy, które nie zostały przypisane do konkretnych pojazdów operacyjnych (tzw. koszty ogólne, biurowe, zaliczki).")
 
-    # 1. Zakres dat (pobierany z bazy dla wygody)
+    # 1. Zakres dat
     try:
         min_max = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
-        domyslny_start = min_max.iloc[0, 0] if not min_max.empty else date.today()
-        domyslny_stop = min_max.iloc[0, 1] if not min_max.empty else date.today()
+        domyslny_start = min_max.iloc[0, 0] if not min_max.empty and min_max.iloc[0, 0] is not None else date.today()
+        domyslny_stop = min_max.iloc[0, 1] if not min_max.empty and min_max.iloc[0, 1] is not None else date.today()
     except:
         domyslny_start, domyslny_stop = date.today(), date.today()
 
@@ -2700,7 +2700,7 @@ def render_ogolne_content(conn, wybrana_firma):
         data_start = c1.date_input("Data Start", value=domyslny_start, key="ogolne_start")
         data_stop = c2.date_input("Data Stop", value=domyslny_stop, key="ogolne_stop")
 
-    # 2. Pobranie pliku z bazy (tak samo jak w rentowności)
+    # 2. Pobranie pliku z bazy
     nazwa_pliku = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
     zapisany_plik = wczytaj_plik_z_bazy(conn, nazwa_pliku)
 
@@ -2710,25 +2710,25 @@ def render_ogolne_content(conn, wybrana_firma):
 
     # 3. Przetworzenie danych
     with st.spinner("Filtrowanie kosztów administracyjnych..."):
-        # Pobieramy surowe dane z pliku
-       _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
+        _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
     
-    if df_raw is not None:
-        # KLUCZ: Wyświetlamy tylko to, co klasyfikator uzna za NIE-POJAZD
+    if df_raw is not None and not df_raw.empty:
+        # Klasyfikacja: Wyświetlamy tylko to, co NIE jest pojazdem
         df_raw['czy_pojazd'] = df_raw['pojazd_clean'].apply(klasyfikuj_wpis)
         
-        # Filtrujemy tylko koszty administracyjne
-        df_admin = df_raw[(df_raw['czy_pojazd'] == False) & (df_raw['typ'].str.contains('Koszt'))]
+        # Filtrujemy tylko koszty administracyjne (nie-pojazdy i typ zawiera 'Koszt')
+        df_admin = df_raw[(df_raw['czy_pojazd'] == False) & (df_raw['typ'].str.contains('Koszt', case=False, na=False))].copy()
         
-        # Wyświetlamy statystyki
-        st.metric("Suma Administracja/Ogólne", f"{df_admin['kwota_brutto_eur'].sum():,.2f} EUR")
-        st.dataframe(df_admin[['data', 'pojazd_clean', 'opis', 'kwota_brutto_eur']])
+        if df_admin.empty:
+            st.info("Nie znaleziono kosztów administracyjnych w wybranym okresie.")
+            return
 
-        
-        
-        # Formatowanie tabeli
-        df_display = df_ogolne[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
-        df_display.columns = ['Data', 'Oryg. Identyfikator', 'Opis kosztu', 'Kontrahent', 'Netto (EUR)', 'Brutto (EUR)']
+        # Statystyki
+        st.metric("Suma Administracja/Ogólne", f"{df_admin['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
+
+        # Formatowanie tabeli do wyświetlenia
+        df_display = df_admin[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
+        df_display.columns = ['Data', 'Kategoria/Id', 'Opis kosztu', 'Kontrahent', 'Netto (EUR)', 'Brutto (EUR)']
         df_display = df_display.sort_values(by='Data', ascending=False)
         
         st.dataframe(
@@ -2736,15 +2736,16 @@ def render_ogolne_content(conn, wybrana_firma):
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Data": st.column_config.DateColumn("Data"),
-                "Oryg. Identyfikator": st.column_config.TextColumn("Kategoria/Id")
+                "Data": st.column_config.DateColumn("Data")
             }
         )
 
         # Wykres kategorii
         st.markdown("### Struktura kosztów wg opisu")
-        chart_data = df_ogolne.groupby('opis')['kwota_brutto_eur'].sum().sort_values(ascending=False).head(10)
+        chart_data = df_admin.groupby('opis')['kwota_brutto_eur'].sum().sort_values(ascending=False).head(10)
         st.bar_chart(chart_data, color="#ff4b4b")
+    else:
+        st.info("Brak danych do wyświetlenia dla wybranych dat.")
         
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
