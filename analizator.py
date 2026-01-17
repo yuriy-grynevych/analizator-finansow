@@ -2647,7 +2647,74 @@ def render_porownanie_content(conn, wybrana_firma):
                     "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
                 }
             )
+def render_ogolne_content(conn, wybrana_firma):
+    st.subheader("Wydatki Pozapojazdowe i Ogólne")
+    st.info("Sekcja obejmuje koszty administracyjne, biurowe oraz inne wydatki nieprzypisane do konkretnych pojazdów.")
 
+    try:
+        # Zakres dat
+        min_max_date = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
+        domyslny_start = min_max_date.iloc[0, 0] if not min_max_date.empty else date.today()
+        domyslny_stop = min_max_date.iloc[0, 1] if not min_max_date.empty else date.today()
+
+        with st.container(border=True):
+            col1, col2 = st.columns(2)
+            d_start = col1.date_input("Data Start", value=domyslny_start, key="ogolne_start")
+            d_stop = col2.date_input("Data Stop", value=domyslny_stop, key="ogolne_stop")
+
+        # Pobranie danych
+        df_raw = pobierz_dane_z_bazy(conn, d_start, d_stop, wybrana_firma)
+        if df_raw.empty:
+            st.warning("Brak danych w wybranym okresie.")
+            return
+
+        # Przygotowanie danych (kursy walut)
+        df_calc, _ = przygotuj_dane_paliwowe(df_raw, wybrana_firma)
+        
+        # FILTR: Wybieramy tylko to, co NIE jest pojazdem
+        # Czyli identyfikatory typu "Brak Identyfikatora", "BIURO", lub te, które nie przeszły walidacji pojazdu
+        maska_ogolne = (df_calc['identyfikator_clean'].isin(['Brak Identyfikatora', 'BIURO', 'Brak Pojazdu'])) | \
+                       (~df_calc['identyfikator_clean'].str.contains(r'[0-9]', na=False)) # Uproszczony filtr na brak cyfr w rejestracji
+
+        df_ogolne = df_calc[maska_ogolne].copy()
+
+        if df_ogolne.empty:
+            st.info("Nie znaleziono wydatków ogólnych w tym okresie.")
+        else:
+            # Metryki
+            total_brutto = df_ogolne['kwota_brutto_eur'].sum()
+            total_netto = df_ogolne['kwota_netto_eur'].sum()
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Suma Brutto", f"{total_brutto:,.2f} EUR", border=True)
+            m2.metric("Suma Netto", f"{total_netto:,.2f} EUR", border=True)
+            m3.metric("Liczba wpisów", len(df_ogolne), border=True)
+
+            # Wykres kategorii
+            st.markdown("### Wydatki wg Kategorii")
+            kat_chart = df_ogolne.groupby('produkt')['kwota_brutto_eur'].sum().sort_values(ascending=False)
+            st.bar_chart(kat_chart, color="#6272a4")
+
+            # Tabela szczegółowa
+            st.markdown("### Lista transakcji ogólnych")
+            show_cols = ['data_transakcji', 'identyfikator', 'produkt', 'kontrahent', 'kwota_brutto_eur', 'waluta', 'zrodlo']
+            df_display = df_ogolne[show_cols].sort_values(by='data_transakcji', ascending=False)
+            
+            st.dataframe(
+                df_display,
+                column_config={
+                    "data_transakcji": st.column_config.DateColumn("Data"),
+                    "kwota_brutto_eur": st.column_config.NumberColumn("Kwota (EUR)", format="%.2f €"),
+                    "identyfikator": "Oryg. Opis",
+                    "produkt": "Kategoria/Produkt"
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+
+    except Exception as e:
+        st.error(f"Błąd podczas ładowania wydatków ogólnych: {e}")
+        
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
     if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
@@ -2701,6 +2768,12 @@ def main_app():
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         st.divider()
         
+        ogolne_type = "primary" if st.session_state.active_view == 'Ogolne' and not is_admin else "secondary"
+        if st.button("Wydatki Ogólne", type=ogolne_type, use_container_width=True):
+            st.session_state.active_view = 'Ogolne'
+            st.session_state.show_admin = False
+            st.rerun()
+            
         admin_type = "primary" if is_admin else "secondary"
         if st.button("⚙️ Panel Administratora", type=admin_type, use_container_width=True):
             st.session_state.show_admin = True
@@ -2727,7 +2800,8 @@ def main_app():
             render_refaktury_content(conn, firma)
         elif st.session_state.active_view == 'Porównanie':  
             render_porownanie_content(conn, firma)
-
+        elif st.session_state.active_view == 'Ogolne':
+            render_ogolne_content(conn, firma)
 def check_password():
     try:
         prawidlowe_haslo = st.secrets["ADMIN_PASSWORD"]
