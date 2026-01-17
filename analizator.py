@@ -1024,15 +1024,7 @@ def przygotuj_dane_paliwowe(dane_z_bazy, firma_kontekst=None):
         dane_finalne['kwota_brutto_eur'] = 0.0
 
     return dane_finalne, mapa_kursow
-    # USUWAMY KOSZTY OGÓLNE Z RENTOWNOŚCI AUT
-    if not dane_finalne.empty:
-        maska_ogolne = (
-            (dane_finalne['identyfikator_clean'] == 'Brak Pojazdu') | 
-            (dane_finalne['identyfikator_clean'] == 'Brak Identyfikatora') |
-            (dane_finalne['identyfikator_clean'].apply(czy_zakazany_pojazd_global))
-        )
-        # Zostawiamy w rentowności tylko to, co NIE jest kosztem ogólnym
-        dane_finalne = dane_finalne[~maska_ogolne]
+
 # --- LOGIKA REFAKTUR ---
 def pobierz_dane_do_refaktury(conn, data_start, data_stop):
     # Pobieramy wszystko z bazy w zakresie dat
@@ -1339,8 +1331,7 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
             pojazdy_do_zapisu = []
             if lista_aktualnych_pojazdow:
                 pojazdy_do_zapisu = lista_aktualnych_pojazdow
-            elif aktualny_kontrahent and aktualny_kontrahent != "nan":
-                # Teraz pozwalamy na każdy typ (Przychód i KOSZT), jeśli jest kontrahent
+            elif etykieta_do_uzycia in ETYKIETY_PRZYCHODOW and aktualny_kontrahent and aktualny_kontrahent != "nan":
                 pojazdy_do_zapisu = [aktualny_kontrahent]
             else:
                 continue
@@ -1367,7 +1358,6 @@ def przetworz_plik_analizy(przeslany_plik_bytes, data_start, data_stop, wybrana_
                         'data': aktualna_data, 
                         'pojazd_oryg': pojazd, 
                         'opis': opis_transakcji,
-                        'produkt': etykieta_do_uzycia, # DODAJ TĘ LINIĘ
                         'typ': typ_transakcji, 
                         'zrodlo': 'Subiekt',
                         'kwota_brutto_eur': podz_kwota_brutto,
@@ -2656,84 +2646,7 @@ def render_porownanie_content(conn, wybrana_firma):
                     "ZYSK_B": st.column_config.NumberColumn("Zysk B", format="%.2f EUR"),
                     "Różnica": st.column_config.NumberColumn("Zmiana", format="%.2f EUR")
                 }
-            )         
-def render_koszty_ogolne_content(conn, wybrana_firma):
-    st.subheader("🏢 Analiza Wydatków Biurowych i Administracyjnych")
-    st.info("System analizuje teraz wydatki z pliku, które nie są przypisane do konkretnych ciężarówek.")
-
-    # 1. Zakres dat
-    try:
-        min_max = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
-        d_start, d_stop = min_max.iloc[0, 0], min_max.iloc[0, 1]
-        if d_start is None: d_start, d_stop = date.today(), date.today()
-    except:
-        d_start, d_stop = date.today(), date.today()
-
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        data_s = c1.date_input("Start", value=d_start, key="ogolne_start")
-        data_e = c2.date_input("Stop", value=d_stop, key="ogolne_stop")
-
-    # 2. Pobieranie pliku
-    nazwa_p = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
-    zapisany_plik = wczytaj_plik_z_bazy(conn, nazwa_p)
-    
-    if not zapisany_plik:
-        st.warning(f"Brak pliku {nazwa_p} w bazie. Wgraj go najpierw.")
-        return
-
-    # 3. Przetwarzanie danych
-   # Przetwarzamy plik, aby wyciągnąć wszystko
-    _, df_all = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_s, data_e, wybrana_firma)
-
-    if df_all is not None and not df_all.empty:
-        # TUTAJ WYBIERAMY TYLKO TO, CO NIE JEST AUTEM
-        df_all['pojazd_clean'] = bezpieczne_czyszczenie_klucza(df_all['identyfikator'])
-        
-        maska_ogolne = (
-            (df_all['pojazd_clean'] == 'Brak Pojazdu') | 
-            (df_all['pojazd_clean'] == 'Brak Identyfikatora') |
-            (df_all['pojazd_clean'].apply(czy_zakazany_pojazd_global))
-        )
-        
-        # Wybieramy tylko koszty (zakupy biurowe, ubezpieczenia itp.)
-        df_final = df_all[maska_ogolne & (df_all['typ'] == 'Koszt (Subiekt)')].copy()
-        if not df_final.empty:
-            # Grupowanie po Kontrahencie (np. PKO, TEAM, Webfleet)
-            df_agg = df_final.groupby('kontrahent')['kwota_netto_eur'].sum().sort_values(ascending=False).reset_index()
-            df_agg.columns = ['Dostawca / Firma', 'Suma Netto (EUR)']
-
-            st.metric("Suma Kosztów Ogólnych (NETTO)", f"{df_agg['Suma Netto (EUR)'].sum():,.2f} EUR", border=True)
-
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.markdown("##### Wydatki wg Firmy")
-                st.bar_chart(df_agg.set_index('Dostawca / Firma'), color="#e67e22")
-            
-            with col2:
-                st.markdown("##### Zestawienie")
-                st.dataframe(df_agg.style.format({'Suma Netto (EUR)': '{:,.2f} €'}), use_container_width=True, hide_index=True)
-
-            st.divider()
-            with st.expander("🔎 Lista wszystkich faktur kosztowych (Biuro / Administracja)"):
-                # Wyświetlamy najważniejsze kolumny dla biura
-                show_cols = ['data', 'kontrahent', 'produkt', 'kwota_netto_eur', 'waluta_org', 'kwota_org']
-                # Sprawdzamy czy kolumny istnieją (zabezpieczenie)
-                existing = [c for c in show_cols if c in df_final.columns]
-                st.dataframe(
-                    df_final[existing].sort_values(by='data', ascending=False),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "data": "Data", "kontrahent": "Kontrahent", "produkt": "Rodzaj",
-                        "kwota_netto_eur": st.column_config.NumberColumn("Suma EUR", format="%.2f €"),
-                        "kwota_org": "Kwota oryg.", "waluta_org": "Waluta"
-                    }
-                )
-        else:
-            st.info("W tym okresie wszystkie koszty w pliku są przypisane do konkretnych aut. Brak wydatków ogólnych.")
-    else:
-        st.error("Błąd odczytu danych z pliku.")
+            )
 
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
@@ -2784,13 +2697,7 @@ def main_app():
             st.session_state.active_view = 'Porównanie'
             st.session_state.show_admin = False
             st.rerun()
-        # NOWY PRZYCISK:
-        gen_type = "primary" if st.session_state.active_view == 'Koszty Ogólne' and not is_admin else "secondary"
-        if st.button("Koszty Ogólne", type=gen_type, use_container_width=True):
-            st.session_state.active_view = 'Koszty Ogólne'
-            st.session_state.show_admin = False
-            st.rerun()
-            
+
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         st.divider()
         
@@ -2820,8 +2727,7 @@ def main_app():
             render_refaktury_content(conn, firma)
         elif st.session_state.active_view == 'Porównanie':  
             render_porownanie_content(conn, firma)
-        elif st.session_state.active_view == 'Koszty Ogólne':
-            render_koszty_ogolne_content(conn, firma)
+
 def check_password():
     try:
         prawidlowe_haslo = st.secrets["ADMIN_PASSWORD"]
