@@ -1553,7 +1553,34 @@ def to_excel_contractors(df_analiza_raw):
             }).sort_values(by='Data')
             formatted.to_excel(writer, sheet_name=safe_name, index=False)
     return output.getvalue()
-
+def klasyfikuj_wpis(pojazd_clean):
+    """
+    Zwraca True, jeśli wpis jest realnym pojazdem operacyjnym.
+    Zwraca False dla kosztów ogólnych, administracyjnych i śmieci.
+    """
+    p = str(pojazd_clean).upper().strip()
+    
+    # Lista fraz, które DEFINITYWNIE oznaczają koszt ogólny/biurowy
+    ADMIN_KEYWORDS = [
+        'ZALICZKA', 'KACPER', 'BIURO', 'KSIĘGOWOŚĆ', 'PROWIZJA', 
+        'OPŁATA BANKOWA', 'INTERCARS', 'SANTANDER', 'LEASING', 
+        'UBEZPIECZENIE', 'WARTA', 'PZU', 'POCZTA', 'TELEFON'
+    ]
+    
+    # 1. Sprawdź słowa kluczowe administracji
+    if any(k in p for k in ADMIN_KEYWORDS):
+        return False
+    
+    # 2. Sprawdź czy pasuje do wzorca tablicy rejestracyjnej (np. WPR, WGM, PTU)
+    # Prosty regex dla polskich tablic: 2-3 litery + reszta znaków
+    if re.match(r'^[A-Z]{2,3}[0-9A-Z]{4,6}$', p.replace("-", "").replace(" ", "")):
+        # Dodatkowe wykluczenie znanych "śmieciowych" identyfikatorów pasujących do wzorca
+        if p in ['PTU0002', 'NONE']: 
+            return False
+        return True
+    
+    return False
+    
 def render_admin_content(conn, wybrana_firma):
     st.subheader("Zarządzanie Danymi")
     
@@ -2148,7 +2175,16 @@ def render_rentownosc_content(conn, wybrana_firma):
                     
                     st.session_state['df_rentownosc'] = final.sort_values(by='ZYSK_EUR', ascending=False)
                     st.session_state['raport_gotowy'] = True
-
+                    # Dodajemy kolumnę pomocniczą do filtrowania
+                    final['czy_pojazd'] = final.index.map(klasyfikuj_wpis)
+                    
+                    # Rozdzielamy dane
+                    df_rentownosc_pojazdy = final[final['czy_pojazd'] == True].drop(columns=['czy_pojazd'])
+                    df_koszty_ogolne_do_bilansu = final[final['czy_pojazd'] == False].drop(columns=['czy_pojazd'])
+                    
+                    # Zapisujemy do session_state tylko POJAZDY dla głównej tabeli
+                    st.session_state['df_rentownosc'] = df_rentownosc_pojazdy.sort_values(by='ZYSK_EUR', ascending=False)
+                    st.session_state['df_koszty_ogolne_suma'] = df_koszty_ogolne_do_bilansu # Zachowujemy resztę do metryk
     # --- WIDOK RAPORTU ---
     if st.session_state.get('raport_gotowy'):
         st.markdown("---")
@@ -2675,41 +2711,20 @@ def render_ogolne_content(conn, wybrana_firma):
     # 3. Przetworzenie danych
     with st.spinner("Filtrowanie kosztów administracyjnych..."):
         # Pobieramy surowe dane z pliku
-        _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
-
-        if df_raw is None or df_raw.empty:
-            st.warning("Brak danych w wybranym zakresie dat.")
-            return
-
-        # --- LOGIKA ODWRÓCONEGO FILTRA (To co usuwamy w Rentowności) ---
-        bad_keywords = ["PTU0002", "OSOBOWY", "NONE", "ZALICZKA", "KACPER", "DW2JH75", "DW1JJ04", "BRAK IDENTYFIKATORA"]
+       _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
+    
+    if df_raw is not None:
+        # KLUCZ: Wyświetlamy tylko to, co klasyfikator uzna za NIE-POJAZD
+        df_raw['czy_pojazd'] = df_raw['pojazd_clean'].apply(klasyfikuj_wpis)
         
-        # Maska 1: Słowa kluczowe (bad_keywords)
-        mask_bad = df_raw['pojazd_clean'].astype(str).str.upper().apply(lambda x: any(k in x for k in bad_keywords))
+        # Filtrujemy tylko koszty administracyjne
+        df_admin = df_raw[(df_raw['czy_pojazd'] == False) & (df_raw['typ'].str.contains('Koszt'))]
         
-        # Maska 2: Zakazane pojazdy z globalnej listy
-        mask_zakazane = df_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global)
+        # Wyświetlamy statystyki
+        st.metric("Suma Administracja/Ogólne", f"{df_admin['kwota_brutto_eur'].sum():,.2f} EUR")
+        st.dataframe(df_admin[['data', 'pojazd_clean', 'opis', 'kwota_brutto_eur']])
+
         
-        # Maska 3: Tylko koszty (nie przychody)
-        mask_koszt = df_raw['typ'].str.contains('Koszt', case=False, na=False)
-
-        # Łączymy: To co jest "złe" LUB "zakazane", ale jest kosztem
-        df_ogolne = df_raw[(mask_bad | mask_zakazane) & mask_koszt].copy()
-
-        if df_ogolne.empty:
-            st.success("Wszystkie koszty z pliku są przypisane do konkretnych pojazdów operacyjnych.")
-            return
-
-        # 4. Wyświetlanie wyników
-        m1, m2, m3 = st.columns(3)
-        suma_brutto = df_ogolne['kwota_brutto_eur'].sum()
-        suma_netto = df_ogolne['kwota_netto_eur'].sum()
-        
-        m1.metric("Suma Kosztów Ogólnych (Brutto)", f"{suma_brutto:,.2f} EUR", border=True)
-        m2.metric("Suma Kosztów Ogólnych (Netto)", f"{suma_netto:,.2f} EUR", border=True)
-        m3.metric("Liczba dokumentów", len(df_ogolne), border=True)
-
-        st.markdown("### Szczegółowa lista wydatków pozapojazdowych")
         
         # Formatowanie tabeli
         df_display = df_ogolne[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
