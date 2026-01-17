@@ -2685,7 +2685,7 @@ def render_porownanie_content(conn, wybrana_firma):
             )
 def render_ogolne_content(conn, wybrana_firma):
     st.subheader("Wydatki Pozapojazdowe i Administracyjne")
-    st.info("Ta sekcja analizuje plik przychodów pod kątem kosztów, które nie są bezpośrednio związane z eksploatacją pojazdów (administracja, biuro, leasingi, ubezpieczenia).")
+    st.info("Ta sekcja pokazuje WSZYSTKIE koszty z pliku, które NIE są przypisane do konkretnych numerów rejestracyjnych pojazdów.")
 
     # 1. Zakres dat
     try:
@@ -2700,92 +2700,67 @@ def render_ogolne_content(conn, wybrana_firma):
         data_start = c1.date_input("Data Start", value=domyslny_start, key="ogolne_start")
         data_stop = c2.date_input("Data Stop", value=domyslny_stop, key="ogolne_stop")
 
-    # 2. Pobranie pliku z bazy (Analiza/Fakturownia)
+    # 2. Pobranie pliku z bazy
     nazwa_pliku = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
     zapisany_plik = wczytaj_plik_z_bazy(conn, nazwa_pliku)
 
     if not zapisany_plik:
-        st.warning(f"Brak pliku {nazwa_pliku} w bazie. Wgraj go najpierw w zakładce Rentowność.")
+        st.warning(f"Brak pliku {nazwa_pliku} w bazie. Wgraj go w zakładce Rentowność.")
         return
 
-    # 3. Przetworzenie danych z nową klasyfikacją
-    with st.spinner("Analizuję koszty administracyjne..."):
+    # 3. Przetworzenie danych
+    with st.spinner("Filtrowanie kosztów..."):
         _, df_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_start, data_stop, wybrana_firma)
     
     if df_raw is not None and not df_raw.empty:
-        # --- NOWA LOGIKA KLASYFIKACJI DLA WYDATKÓW OGÓLNYCH ---
-        def czy_koszt_administracyjny(row):
-            p = str(row['pojazd_clean']).upper().strip()
-            opis = str(row['opis']).upper()
-            typ = str(row['typ'])
+        
+        # --- NOWA LOGIKA: WYKLUCZAMY POJAZDY, ZOSTWIAMY RESZTĘ ---
+        def czy_to_na_pewno_pojazd(identyfikator):
+            p = str(identyfikator).upper().replace(" ", "").replace("-", "").strip()
             
-            # Interesują nas tylko koszty
-            if 'KOSZT' not in typ.upper():
-                return False
-                
-            # Słowa kluczowe, które DEFINITYWNIE oznaczają administrację (nawet jeśli przypisane do auta)
-            KEYWORDS_ADMIN = [
-                'LEASING', 'UBEZPIECZENIE', 'WARTA', 'PZU', 'LINK4', 
-                'KSIĘGOWOŚĆ', 'BIURO', 'TELEFON', 'INTERNET', 'PROWIZJA', 
-                'OPŁATA BANKOWA', 'ZALICZKA', 'KACPER', 'POCZTA', 'KURIER',
-                'ART. BIUROWE', 'PROGRAM', 'MANDAT', 'OBSŁUGA PRAWNA'
-            ]
+            # Wzorzec tablicy rejestracyjnej (2-3 litery + 4-6 znaków)
+            # Jeśli pasuje do tego wzorca, uznamy to za pojazd i UKRYJEMY w tej zakładce
+            if re.match(r'^[A-Z]{2,3}[0-9A-Z]{4,6}$', p):
+                # Wyjątki - jeśli coś wygląda jak tablica, ale wiesz, że to koszt ogólny
+                # możesz to tutaj dopisać, żeby jednak się pojawiło w ogólnych
+                EXCEPTIONS = ['PTU0002', 'NONE'] 
+                if p in EXCEPTIONS:
+                    return False # To nie jest pojazd operacyjny
+                return True # To jest pojazd -> zostanie usunięty z widoku "Ogólne"
             
-            # Jeśli opis zawiera słowo kluczowe administracji -> True
-            if any(k in opis for k in KEYWORDS_ADMIN):
-                return True
-                
-            # Jeśli pole pojazdu zawiera słowo kluczowe administracji -> True
-            if any(k in p for k in KEYWORDS_ADMIN):
-                return True
-            
-            # Jeśli nazwa w polu pojazdu NIE pasuje do wzorca rejestracji -> True (np. "BIURO", "TRANS")
-            if not re.match(r'^[A-Z]{2,3}[0-9A-Z]{4,6}$', p.replace("-", "").replace(" ", "")):
-                return True
-                
-            # Specyficzne wykluczenia dla pojazdów operacyjnych
-            # (Jeśli to jest rejestracja i nie ma w opisie słów admin -> to jest to koszt auta, nie ogólny)
-            return False
+            return False # To nie jest pojazd (np. "BIURO", "KACPER", "ZALICZKA")
 
-        # Aplikujemy nową klasyfikację
-        df_raw['jest_ogolny'] = df_raw.apply(czy_koszt_administracyjny, axis=1)
+        # Filtrujemy koszty (ignorujemy przychody)
+        df_koszty = df_raw[df_raw['typ'].str.contains('Koszt', case=False, na=False)].copy()
         
-        # Filtrujemy tylko to, co uznaliśmy za koszt ogólny
-        df_admin = df_raw[df_raw['jest_ogolny'] == True].copy()
+        # Odrzucamy wszystko, co system rozpoznał jako pojazd
+        df_koszty['is_vehicle'] = df_koszty['pojazd_clean'].apply(czy_to_na_pewno_pojazd)
+        df_ogolne = df_koszty[df_koszty['is_vehicle'] == False].copy()
         
-        if df_admin.empty:
-            st.info("Nie znaleziono kosztów administracyjnych/ogólnych w tym okresie.")
+        if df_ogolne.empty:
+            st.info("Nie znaleziono żadnych kosztów pozapojazdowych w tym okresie.")
             return
 
-        # 4. Statystyki i Wyświetlanie
-        col_m1, col_m2 = st.columns(2)
-        suma_eur = df_admin['kwota_brutto_eur'].sum()
-        col_m1.metric("Suma Kosztów Ogólnych", f"{suma_eur:,.2f} EUR", border=True)
-        col_m2.metric("Liczba pozycji", len(df_admin), border=True)
+        # 4. Podsumowanie i Tabela
+        st.metric("Suma Kosztów Ogólnych (Brutto)", f"{df_ogolne['kwota_brutto_eur'].sum():,.2f} EUR", border=True)
 
-        st.markdown("### 📋 Lista wydatków administracyjnych")
-        df_display = df_admin[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
-        df_display.columns = ['Data', 'Źródło/Id', 'Opis kosztu', 'Kontrahent', 'Netto (EUR)', 'Brutto (EUR)']
+        df_display = df_ogolne[['data', 'pojazd_clean', 'opis', 'kontrahent', 'kwota_netto_eur', 'kwota_brutto_eur']].copy()
+        df_display.columns = ['Data', 'Kategoria/Id', 'Opis kosztu', 'Kontrahent', 'Netto (EUR)', 'Brutto (EUR)']
         df_display = df_display.sort_values(by='Data', ascending=False)
         
         st.dataframe(
             df_display.style.format({'Netto (EUR)': '{:,.2f} €', 'Brutto (EUR)': '{:,.2f} €'}),
             use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Data": st.column_config.DateColumn("Data"),
-                "Opis kosztu": st.column_config.TextColumn("Opis", width="large")
-            }
+            hide_index=True
         )
 
-        # 5. Wykres struktury
-        st.markdown("### 📊 Podział kosztów wg kategorii")
-        # Próba zgrupowania po "Opisie" lub "Identyfikatorze"
-        chart_data = df_admin.groupby('pojazd_clean')['kwota_brutto_eur'].sum().sort_values(ascending=False).head(10)
-        st.bar_chart(chart_data, color="#ff4b4b")
-
+        # Wykres
+        st.markdown("### Top 10 kosztów ogólnych")
+        chart = df_ogolne.groupby('pojazd_clean')['kwota_brutto_eur'].sum().sort_values(ascending=False).head(10)
+        st.bar_chart(chart, color="#ff4b4b")
     else:
-        st.info("Brak danych w pliku analizy dla wybranych dat.")
+        st.info("Brak danych do wyświetlenia.")
+        
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
     if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
