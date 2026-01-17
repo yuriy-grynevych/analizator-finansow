@@ -2651,66 +2651,70 @@ def render_koszty_ogolne_content(conn, wybrana_firma):
     st.subheader("🏢 Analiza Kosztów Ogólnych i Pozapojazdowych")
     st.info("Tutaj znajdziesz wydatki odfiltrowane z raportu głównego (np. biuro, giełdy, księgowość, serwis ogólny).")
 
-    # Zakres dat (pobieramy domyślny z bazy tak jak w innych zakładkach)
+    # Zakres dat
     try:
         min_max = conn.query(f"SELECT MIN(data_transakcji::date), MAX(data_transakcji::date) FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI}")
-        d_start, d_stop = min_max.iloc[0, 0], min_max.iloc[0, 1]
+        d_start = min_max.iloc[0, 0]
+        d_stop = min_max.iloc[0, 1]
+        
+        # Zabezpieczenie przed pustą bazą
+        if d_start is None:
+            d_start, d_stop = date.today(), date.today()
     except:
         d_start, d_stop = date.today(), date.today()
 
     with st.container(border=True):
         c1, c2 = st.columns(2)
-        data_s = c1.date_input("Start", value=d_s if 'gen_start' not in st.session_state else st.session_state.gen_start, key="ogolne_start")
-        data_e = c2.date_input("Stop", value=d_e if 'gen_stop' not in st.session_state else st.session_state.gen_stop, key="ogolne_stop")
+        # POPRAWIONE: używamy d_start i d_stop zamiast d_s/d_e
+        data_s = c1.date_input("Start", value=d_start, key="ogolne_start")
+        data_e = c2.date_input("Stop", value=d_stop, key="ogolne_stop")
 
-    # Pobieranie danych
+    # Pobieranie danych z bazy
     df_baza_raw = pobierz_dane_z_bazy(conn, data_s, data_e, wybrana_firma)
     
     # Pobieramy plik analizy (Subiekt/Fakturownia)
     nazwa_p = "fakturownia.csv" if wybrana_firma == "UNIX-TRANS" else "analiza.xlsx"
     zapisany_plik = wczytaj_plik_z_bazy(conn, nazwa_p)
     
-    if df_baza_raw.empty and not zapisany_plik:
-        st.warning("Brak danych w bazie i brak wgranego pliku analizy.")
-        return
+    # Inicjalizacja list na dane
+    lista_df = []
+    kurs_eur = pobierz_kurs_eur_pln()
 
-    # Logika filtrowania kosztów ogólnych
-    # 1. Z kart paliwowych (Baza)
-    df_baza_raw['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(df_baza_raw['identyfikator'])
-    maska_og_baza = df_baza_raw['identyfikator_clean'].apply(czy_zakazany_pojazd_global) | (df_baza_raw['identyfikator_clean'] == 'Brak Identyfikatora')
-    df_og_baza = df_baza_raw[maska_og_baza & (df_baza_raw['typ'] != 'WYNAGRODZENIE')].copy()
+    # 1. Filtrowanie kosztów ogólnych z bazy (Karty paliwowe/Inne)
+    if not df_baza_raw.empty:
+        df_baza_raw['identyfikator_clean'] = bezpieczne_czyszczenie_klucza(df_baza_raw['identyfikator'])
+        maska_og_baza = df_baza_raw['identyfikator_clean'].apply(czy_zakazany_pojazd_global) | (df_baza_raw['identyfikator_clean'] == 'Brak Identyfikatora')
+        df_og_baza = df_baza_raw[maska_og_baza & (df_baza_raw['typ'] != 'WYNAGRODZENIE')].copy()
+        
+        if not df_og_baza.empty:
+            # Przeliczenie na EUR (zakładamy kurs NBP dla PLN)
+            df_og_baza['kwota_netto_eur'] = df_og_baza.apply(
+                lambda row: row['kwota_netto'] * (1.0/kurs_eur if row['waluta'] == 'PLN' else 1.0), axis=1
+            )
+            tmp_b = df_og_baza[['produkt', 'kwota_netto_eur', 'firma']].rename(columns={'produkt': 'Kategoria', 'kwota_netto_eur': 'Netto_EUR'})
+            lista_df.append(tmp_b)
 
-    # 2. Z Subiekta/Fakturowni
-    df_og_analiza = pd.DataFrame()
+    # 2. Filtrowanie kosztów ogólnych z pliku (Subiekt/Fakturownia)
     if zapisany_plik:
         _, df_an_raw = przetworz_plik_analizy(io.BytesIO(zapisany_plik), data_s, data_e, wybrana_firma)
-        if df_an_raw is not None:
+        if df_an_raw is not None and not df_an_raw.empty:
             maska_og_an = df_an_raw['pojazd_clean'].apply(czy_zakazany_pojazd_global) | (df_an_raw['pojazd_clean'] == 'Brak Identyfikatora')
             df_og_analiza = df_an_raw[maska_og_an & (df_an_raw['typ'] == 'Koszt (Subiekt)')].copy()
+            
+            if not df_og_analiza.empty:
+                tmp_a = df_og_analiza[['produkt', 'kwota_netto_eur', 'firma']].rename(columns={'produkt': 'Kategoria', 'kwota_netto_eur': 'Netto_EUR'})
+                lista_df.append(tmp_a)
 
-    # Konsolidacja danych (Netto)
-    kurs_eur = pobierz_kurs_eur_pln()
-    lista_df = []
-    
-    if not df_og_baza.empty:
-        df_og_baza['kwota_netto_eur'] = pd.to_numeric(df_og_baza['kwota_netto'], errors='coerce') * (1.0/kurs_eur if any(df_og_baza['waluta'] == 'PLN') else 1.0)
-        tmp = df_og_baza[['produkt', 'kwota_netto_eur', 'firma']].rename(columns={'produkt': 'Kategoria', 'kwota_netto_eur': 'Netto_EUR'})
-        lista_df.append(tmp)
-
-    if not df_og_analiza.empty:
-        tmp = df_og_analiza[['produkt', 'kwota_netto_eur', 'firma']].rename(columns={'produkt': 'Kategoria', 'kwota_netto_eur': 'Netto_EUR'})
-        lista_df.append(tmp)
-
+    # Wyświetlanie wyników
     if lista_df:
         df_final = pd.concat(lista_df)
         df_agg = df_final.groupby('Kategoria')['Netto_EUR'].sum().sort_values(ascending=False).reset_index()
         
-        # Metryka sumaryczna
         st.metric("Suma Kosztów Ogólnych (NETTO)", f"{df_agg['Netto_EUR'].sum():,.2f} EUR", border=True)
 
         col_left, col_right = st.columns([2, 1])
         with col_left:
-            st.markdown("##### Struktura wydatków")
+            st.markdown("##### Struktura wydatków ogólnych")
             st.bar_chart(df_agg.set_index('Kategoria'), color="#f39c12")
         
         with col_right:
@@ -2718,10 +2722,11 @@ def render_koszty_ogolne_content(conn, wybrana_firma):
             st.dataframe(df_agg.style.format({'Netto_EUR': '{:,.2f} €'}), use_container_width=True, hide_index=True)
             
         st.divider()
-        with st.expander("🔎 Zobacz listę wszystkich dokumentów kosztowych"):
-            st.dataframe(df_final.sort_values(by='Netto_EUR', ascending=False), use_container_width=True)
+        with st.expander("🔎 Szczegółowa lista dokumentów pozapojazdowych"):
+            st.dataframe(df_final.sort_values(by='Netto_EUR', ascending=False), use_container_width=True, hide_index=True)
     else:
-        st.info("Nie znaleziono żadnych kosztów pozapojazdowych w wybranym okresie.")
+        st.warning("Nie znaleziono żadnych kosztów pozapojazdowych dla wybranych dat i firmy.")
+
 
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
