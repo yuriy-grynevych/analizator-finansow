@@ -165,15 +165,8 @@ def parsuj_dataframe_plac(df):
     ostatnia_kwota = 0.0
     df = df.astype(str)
     
-    def odwroc_nazwisko(tekst):
-        # Funkcja zamienia "KOWALSKI JAN" na "JAN KOWALSKI"
-        czesci = tekst.strip().split()
-        if len(czesci) >= 2:
-            # Bierze ostatni element i przesuwa na początek (obsługuje też nazwiska dwuczłonowe)
-            return f"{czesci[-1]} {' '.join(czesci[:-1])}"
-        return tekst
-
     for idx, row in df.iterrows():
+        # Pobieramy pierwsze 3 kolumny
         col0 = str(row.iloc[0]).strip() if len(row) > 0 else ""
         col1 = str(row.iloc[1]).strip() if len(row) > 1 else ""
         col2 = str(row.iloc[2]).strip() if len(row) > 2 else ""
@@ -186,21 +179,23 @@ def parsuj_dataframe_plac(df):
         
         nowy_kierowca = None
         
-        # 1. DETEKCJA NAZWISKA - Format blokowy (np. 12.2025)
+        # 1. DETEKCJA NAZWISKA - Nowy format (np. grudzień 12.2025)
+        # Jeśli col0 to liczba (L.p.), to w col1 jest nazwisko
         clean_col0 = col0.replace(".", "").strip()
         if clean_col0.isdigit() and col1 and col1_u != "NAN" and len(col1) > 2:
+            # Sprawdzamy czy to nie jest nagłówek
             if not any(k in col1_u for k in ["NAZWISKO", "STAWKA", "ILOŚĆ", "KWOTA", "DOPŁATA", "INFO"]):
-                # TUTAJ NASTĘPUJE ODWRÓCENIE: format z tabeli (NAZWISKO IMIĘ) -> format Webfleet (IMIĘ NAZWISKO)
-                nowy_kierowca = odwroc_nazwisko(col1_u)
+                # Zapisujemy dokładnie tak, jak jest w Excelu (np. "BILENKO YURII")
+                nowy_kierowca = col1_u.strip()
         
         # 2. DETEKCJA NAZWISKA - Stary format (nazwisko obok "ILOSC DNI")
         if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza or "DNI JAZDY" in tekst_wiersza:
             if not nowy_kierowca:
                 kandydaci = [c for c in [col0, col1, col2] if c and c.upper() != "NAN" and "ILOSC" not in c.upper() and "DNI" not in c.upper()]
                 if kandydaci:
-                    # W starym formacie zazwyczaj jest już "IMIĘ NAZWISKO", ale dla pewności normalizujemy do Upper Case
                     nowy_kierowca = kandydaci[0].upper().strip()
 
+        # Przełączanie na nowego kierowcę i zapisywanie poprzedniego
         if nowy_kierowca:
             if aktualny_kierowca and ostatnia_kwota > 0:
                 wyniki.append({'kierowca': aktualny_kierowca, 'kwota_total': ostatnia_kwota})
@@ -209,7 +204,7 @@ def parsuj_dataframe_plac(df):
             ostatnia_kwota = 0.0
             continue
 
-        # 3. SZUKANIE KWOTY
+        # 3. SZUKANIE KWOTY (KWOTA, DO WYPŁATY, RAZEM)
         SŁOWA_KLUCZOWE = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
         if any(s in tekst_wiersza for s in SŁOWA_KLUCZOWE):
             if aktualny_kierowca:
@@ -220,11 +215,13 @@ def parsuj_dataframe_plac(df):
                     try:
                         v = float(val_str)
                         if v > 0:
+                            # Pobieramy ostatnią znalezioną kwotę (PLN)
                             ostatnia_kwota = v
                             break 
                     except:
                         continue
                         
+    # Zapisanie ostatniego kierowcy
     if aktualny_kierowca and ostatnia_kwota > 0:
         wyniki.append({'kierowca': aktualny_kierowca, 'kwota_total': ostatnia_kwota})
                     
