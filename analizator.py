@@ -165,8 +165,32 @@ def parsuj_dataframe_plac(df):
     ostatnia_kwota = 0.0
     df = df.astype(str)
     
+    # LISTA WYJĄTKÓW (tych osób NIE odwracamy)
+    # Dodaję różne warianty pisowni, aby kod był odporny na literówki
+    WYKLUCZENI = [
+        "VISLYKH ANDRII", 
+        "DZHAVADOV MARUVVAT", 
+        "DZHADOV MURUUVAT", 
+        "DULIN CEDRYK"
+    ]
+    
+    def przetworz_nazwisko(tekst, czy_nowy_format):
+        tekst_clean = tekst.upper().strip()
+        
+        # 1. Jeśli osoba jest na liście wykluczonych - zwracamy bez zmian
+        if any(w in tekst_clean for w in WYKLUCZENI):
+            return tekst_clean
+        
+        # 2. Jeśli to nowy format (np. grudzień) i nie jest wykluczony - odwracamy
+        if czy_nowy_format:
+            czesci = tekst_clean.split()
+            if len(czesci) >= 2:
+                # Zamiana "KOWALSKI JAN" -> "JAN KOWALSKI"
+                return f"{czesci[-1]} {' '.join(czesci[:-1])}"
+        
+        return tekst_clean
+
     for idx, row in df.iterrows():
-        # Pobieramy pierwsze 3 kolumny
         col0 = str(row.iloc[0]).strip() if len(row) > 0 else ""
         col1 = str(row.iloc[1]).strip() if len(row) > 1 else ""
         col2 = str(row.iloc[2]).strip() if len(row) > 2 else ""
@@ -179,23 +203,21 @@ def parsuj_dataframe_plac(df):
         
         nowy_kierowca = None
         
-        # 1. DETEKCJA NAZWISKA - Nowy format (np. grudzień 12.2025)
-        # Jeśli col0 to liczba (L.p.), to w col1 jest nazwisko
+        # 1. DETEKCJA NAZWISKA - Nowy format (indeks liczbowy, np. 12.2025)
         clean_col0 = col0.replace(".", "").strip()
         if clean_col0.isdigit() and col1 and col1_u != "NAN" and len(col1) > 2:
-            # Sprawdzamy czy to nie jest nagłówek
             if not any(k in col1_u for k in ["NAZWISKO", "STAWKA", "ILOŚĆ", "KWOTA", "DOPŁATA", "INFO"]):
-                # Zapisujemy dokładnie tak, jak jest w Excelu (np. "BILENKO YURII")
-                nowy_kierowca = col1_u.strip()
+                # Tutaj stosujemy odwracanie z listą wyjątków
+                nowy_kierowca = przetworz_nazwisko(col1, czy_nowy_format=True)
         
-        # 2. DETEKCJA NAZWISKA - Stary format (nazwisko obok "ILOSC DNI")
+        # 2. DETEKCJA NAZWISKA - Stary format (np. listopad i wcześniej)
         if "ILOSC DNI" in tekst_wiersza or "ILOŚĆ DNI" in tekst_wiersza or "DNI JAZDY" in tekst_wiersza:
             if not nowy_kierowca:
                 kandydaci = [c for c in [col0, col1, col2] if c and c.upper() != "NAN" and "ILOSC" not in c.upper() and "DNI" not in c.upper()]
                 if kandydaci:
-                    nowy_kierowca = kandydaci[0].upper().strip()
+                    # W starym formacie zazwyczaj imię było pierwsze, więc nie odwracamy
+                    nowy_kierowca = przetworz_nazwisko(kandydaci[0], czy_nowy_format=False)
 
-        # Przełączanie na nowego kierowcę i zapisywanie poprzedniego
         if nowy_kierowca:
             if aktualny_kierowca and ostatnia_kwota > 0:
                 wyniki.append({'kierowca': aktualny_kierowca, 'kwota_total': ostatnia_kwota})
@@ -204,7 +226,7 @@ def parsuj_dataframe_plac(df):
             ostatnia_kwota = 0.0
             continue
 
-        # 3. SZUKANIE KWOTY (KWOTA, DO WYPŁATY, RAZEM)
+        # 3. SZUKANIE KWOTY
         SŁOWA_KLUCZOWE = ["KWOTA", "DO WYPŁATY", "SUMA", "RAZEM"]
         if any(s in tekst_wiersza for s in SŁOWA_KLUCZOWE):
             if aktualny_kierowca:
@@ -215,13 +237,11 @@ def parsuj_dataframe_plac(df):
                     try:
                         v = float(val_str)
                         if v > 0:
-                            # Pobieramy ostatnią znalezioną kwotę (PLN)
                             ostatnia_kwota = v
                             break 
                     except:
                         continue
                         
-    # Zapisanie ostatniego kierowcy
     if aktualny_kierowca and ostatnia_kwota > 0:
         wyniki.append({'kierowca': aktualny_kierowca, 'kwota_total': ostatnia_kwota})
                     
