@@ -10,7 +10,16 @@ import io
 import os
 import json
 import calendar
+import pyodbc
 
+# --- PARAMETRY POŁĄCZENIA NEXO ---
+# Wklej to pod importami
+NEXO_CONFIG = {
+    "server": "100.73.159.40",
+    "database": "Nexo_Holier",
+    "user": "sa",
+    "password": ""
+}
 # --- USTAWIENIA STRONY ---
 icon_image = "⛟"
 
@@ -1637,6 +1646,20 @@ def klasyfikuj_wpis(pojazd_clean):
     return False
     
 def render_admin_content(conn, wybrana_firma):
+    with st.expander("📥 Synchronizacja z bazą NEXO Pro (Biuro)", expanded=True):
+    st.write(f"Połączenie z serwerem: `{NEXO_CONFIG['server']}`")
+    c1, c2, c3 = st.columns([1, 1, 1])
+    d_nexo_s = c1.date_input("Data od", value=date.today().replace(day=1), key="n_s")
+    d_nexo_e = c2.date_input("Data do", value=date.today(), key="n_e")
+    
+    if c3.button("Pobierz Dokumenty", type="primary", use_container_width=True):
+        count = synchronizuj_nexo_z_baza(d_nexo_s, d_nexo_e, wybrana_firma, conn)
+        if count > 0:
+            st.success(f"Pomyślnie dodano {count} nowych dokumentów z Nexo!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.info("Baza jest aktualna. Nie znaleziono nowych dokumentów.")
     st.subheader("Zarządzanie Danymi")
     
     # 1. PRZYCISK DIAGNOSTYKI
@@ -2825,7 +2848,80 @@ def render_ogolne_content(conn, wybrana_firma):
         st.bar_chart(chart_data, color="#ff4b4b")
     else:
         st.info("Brak danych do wyświetlenia w wybranym okresie.")
-        
+def pobierz_dane_z_nexo_direct(start_date, end_date):
+    """Łączy się z SQL Server Nexo i pobiera surowe dokumenty."""
+    conn_str = (
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={NEXO_CONFIG['server']};"
+        f"DATABASE={NEXO_CONFIG['database']};"
+        f"UID={NEXO_CONFIG['user']};"
+        f"PWD={NEXO_CONFIG['password']};"
+        "TrustServerCertificate=yes;"
+    )
+    
+    # Zapytanie oparte na Twoich tabelach: Dokumenty, Podmioty, Waluty
+    query = """
+    SELECT 
+        d.DataWydaniaWystawienia as data_transakcji,
+        d.NumerWyswietlany as numer_doc,
+        p.NazwaFull as kontrahent,
+        d.Wartosc_Netto as kwota_netto,
+        d.Wartosc_Brutto as kwota_brutto,
+        w.Symbol as waluta,
+        d.Uwagi as uwagi,
+        d.Symbol as symbol_dok
+    FROM [dbo].[ModelDanychContainer_Dokumenty] d
+    JOIN [dbo].[ModelDanychContainer_Podmioty] p ON d.PodmiotId = p.Id
+    JOIN [dbo].[ModelDanychContainer_Waluty] w ON d.Waluta_Id = w.Id
+    WHERE d.DataWydaniaWystawienia BETWEEN ? AND ?
+      AND d.Symbol IN ('FS', 'FZ', 'KFS', 'KFZ', 'PA')
+    """
+    try:
+        conn = pyodbc.connect(conn_str)
+        df = pd.read_sql(query, conn, params=[start_date, end_date])
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"Błąd połączenia z Nexo: {e}")
+        return pd.DataFrame()
+
+def synchronizuj_nexo_z_baza(start_date, end_date, firma_tag, conn):
+    """Pobiera z Nexo i zapisuje do lokalnej bazy, unikając duplikatów."""
+    raw_df = pobierz_dane_z_nexo_direct(start_date, end_date)
+    if raw_df.empty:
+        return 0
+
+    dodane = 0
+    with conn.session as s:
+        for _, row in raw_df.iterrows():
+            # Unikalny identyfikator dokumentu (typ + numer + data + firma)
+            ident_wpisu = f"{row['symbol_dok']}: {row['numer_doc']}"
+            
+            # SPRAWDZANIE DUPLIKATU: Szukamy czy taki wpis już jest
+            exists = s.execute(text(f"""
+                SELECT 1 FROM {NAZWA_SCHEMATU}.{NAZWA_TABELI} 
+                WHERE produkt = :prod AND data_transakcji = :dt AND firma = :f
+            """), {"prod": ident_wpisu, "dt": row['data_transakcji'], "f": firma_tag}).fetchone()
+
+            if not exists:
+                # Wyciąganie rejestracji z uwag Nexo (Twoja logika)
+                match = re.search(r'\b[A-Z]{2,3}[\s-]?[0-9A-Z]{4,5}\b', str(row['uwagi']).upper())
+                pojazd = match.group(0).replace(" ", "").replace("-", "") if match else "Brak Pojazdu"
+                
+                typ_fin = 'PRZYCHÓD' if row['symbol_dok'] in ['FS', 'KFS', 'PA'] else 'KOSZT'
+                
+                s.execute(text(f"""
+                    INSERT INTO {NAZWA_SCHEMATU}.{NAZWA_TABELI} 
+                    (data_transakcji, identyfikator, kwota_netto, kwota_brutto, waluta, ilosc, produkt, typ, zrodlo, kraj, firma, kontrahent)
+                    VALUES (:dt, :ident, :netto, :brutto, :wal, 1.0, :prod, :typ, 'NEXO_DIRECT', 'PL', :f, :kontr)
+                """), {
+                    "dt": row['data_transakcji'], "ident": pojazd, "netto": row['kwota_netto'],
+                    "brutto": row['kwota_brutto'], "wal": row['waluta'], "prod": ident_wpisu,
+                    "typ": typ_fin, "f": firma_tag, "kontr": row['kontrahent']
+                })
+                dodane += 1
+        s.commit()
+    return dodane
 def main_app():
     if 'active_company' not in st.session_state: st.session_state.active_company = FIRMY[0]
     if 'active_view' not in st.session_state: st.session_state.active_view = 'Raport'
