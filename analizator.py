@@ -15,7 +15,7 @@ import pyodbc
 # --- PARAMETRY POŁĄCZENIA NEXO ---
 # Wklej to pod importami
 NEXO_CONFIG = {
-    "server": "100.73.159.40",
+    "server": "100.73.159.40\\INSERTNEXO",
     "database": "Nexo_Holier",
     "user": "sa",
     "password": ""
