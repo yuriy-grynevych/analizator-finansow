@@ -15,7 +15,8 @@ import pyodbc
 # --- PARAMETRY POŁĄCZENIA NEXO ---
 # Wklej to pod importami
 NEXO_CONFIG = {
-    "server": "100.73.159.40\\INSERTNEXO",
+    "server": "100.73.159.40",
+    "port": "1433",
     "database": "Nexo_Holier",
     "user": "sa",
     "password": ""
@@ -2854,6 +2855,7 @@ def pobierz_dane_z_nexo_direct(start_date, end_date):
     conn_str = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
         f"SERVER={NEXO_CONFIG['server']};"
+        f"PORT={NEXO_CONFIG['port']};"
         f"DATABASE={NEXO_CONFIG['database']};"
         f"UID={NEXO_CONFIG['user']};"
         f"PWD={NEXO_CONFIG['password']};"
