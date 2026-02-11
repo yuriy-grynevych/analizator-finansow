@@ -1646,21 +1646,22 @@ def klasyfikuj_wpis(pojazd_clean):
     return False
     
 def render_admin_content(conn, wybrana_firma):
-    with st.expander("📥 Synchronizacja z bazą NEXO Pro (Biuro)", expanded=True):
-    st.write(f"Połączenie z serwerem: `{NEXO_CONFIG['server']}`")
-    c1, c2, c3 = st.columns([1, 1, 1])
-    d_nexo_s = c1.date_input("Data od", value=date.today().replace(day=1), key="n_s")
-    d_nexo_e = c2.date_input("Data do", value=date.today(), key="n_e")
-    
-    if c3.button("Pobierz Dokumenty", type="primary", use_container_width=True):
-        count = synchronizuj_nexo_z_baza(d_nexo_s, d_nexo_e, wybrana_firma, conn)
-        if count > 0:
-            st.success(f"Pomyślnie dodano {count} nowych dokumentów z Nexo!")
-            time.sleep(1)
-            st.rerun()
-        else:
-            st.info("Baza jest aktualna. Nie znaleziono nowych dokumentów.")
     st.subheader("Zarządzanie Danymi")
+    with st.expander("📥 Synchronizacja z bazą NEXO Pro (Biuro)", expanded=True):
+        st.write(f"Połączenie z serwerem: `{NEXO_CONFIG['server']}`")
+        c1, c2, c3 = st.columns([1, 1, 1])
+        d_nexo_s = c1.date_input("Data od", value=date.today().replace(day=1), key="n_s")
+        d_nexo_e = c2.date_input("Data do", value=date.today(), key="n_e")
+        
+        if c3.button("Pobierz Dokumenty", type="primary", use_container_width=True):
+            count = synchronizuj_nexo_z_baza(d_nexo_s, d_nexo_e, wybrana_firma, conn)
+            if count > 0:
+                st.success(f"Pomyślnie dodano {count} nowych dokumentów z Nexo!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.info("Baza jest aktualna. Nie znaleziono nowych dokumentów.")
+        
     
     # 1. PRZYCISK DIAGNOSTYKI
     if st.button("🧪 GŁĘBOKA DIAGNOSTYKA (Trasy vs Dziennik)"):
